@@ -80,6 +80,8 @@ const HOVER_LIFT = -HAND.screenHalfH + (CARD_H * HAND.hoverScale) / 2 + 0.3 - HA
 
 const OPP_HAND = { distance: 30, baseY: 9.9, radius: 40, fitAngle: 22, maxDelta: 3.0, scale: 0.6 };
 const STACK_ANCHOR = new THREE.Vector3(10.2, 2.4, -24);
+/** Your commander gets its own screen slot left of the hand, like Arena's Brawl command zone. */
+const COMMAND_ANCHOR = new THREE.Vector3(-12.6, -3.5, -26);
 
 export interface Seat {
   player: PlayerState;
@@ -247,7 +249,20 @@ export function computeLayout(
     const pileScale = seat.local ? 0.7 : 0.55;
     pile(p.zones.Graveyard, seat.piles.graveyard, pileScale, true);
     pile(p.zones.Exile, seat.piles.exile, pileScale, true);
-    pile(p.zones.Command, seat.piles.command, seat.local ? 0.85 : 0.7, true, 0.9);
+    if (seat.local) {
+      p.zones.Command.forEach((id, i) => {
+        out.set(id, {
+          space: 'rig',
+          pos: COMMAND_ANCHOR.clone().add(new THREE.Vector3(i * 1.4, i * 0.25, i * 0.05)),
+          rot: new THREE.Euler(0, 0.12, 0.04, 'YXZ'),
+          scale: 0.95,
+          faceUp: true,
+          order: i,
+        });
+      });
+    } else {
+      pile(p.zones.Command, seat.piles.command, 0.7, true, 0.9);
+    }
 
     // ---- hands ----
     if (seat.local) {

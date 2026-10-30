@@ -1,5 +1,5 @@
 import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, Selection } from '../protocol';
-import { cardZoomUrl } from '../scene/textures';
+import { cardImageUrl, cardZoomUrl } from '../scene/textures';
 
 const PHASES: [string, string][] = [
   ['UNTAP', 'Untap'],
@@ -313,6 +313,50 @@ export class Hud {
     }
     this.browser.querySelector('.browser-title')!.textContent = title;
     this.browser.querySelectorAll<HTMLElement>('.thumb').forEach((el) => el.classList.toggle('picked', chosen.has(Number(el.dataset.id))));
+  }
+
+  // ---- opponent cast reveal ------------------------------------------------------------------------
+
+  /**
+   * An opponent's spell shown big before play moves on. Resolves after `ms` (held while hovered);
+   * a click or Space ends it early.
+   */
+  revealCast(card: CardState, caption: string, ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const el = h('div', 'cast-reveal');
+      const img = h('img');
+      const fallback = h('div', 'thumb-fallback', `${card.name ?? ''}\n${card.typeLine ?? ''}\n\n${card.text ?? ''}`);
+      el.append(h('div', 'cast-caption', caption), img);
+      cardImageUrl(card).then((url) => (url ? (img.src = url) : el.append(fallback)));
+      this.root.append(el);
+      let hovered = false;
+      let elapsed = 0;
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        clearInterval(timer);
+        window.removeEventListener('keydown', onKey, true);
+        el.classList.add('out');
+        setTimeout(() => el.remove(), 220);
+        resolve();
+      };
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === ' ' || e.key === 'Enter' || e.key === 'Escape') {
+          e.preventDefault();
+          e.stopImmediatePropagation(); // don't also press the prompt's OK
+          finish();
+        }
+      };
+      const timer = window.setInterval(() => {
+        if (!hovered) elapsed += 100;
+        if (elapsed >= ms) finish();
+      }, 100);
+      el.onmouseenter = () => (hovered = true);
+      el.onmouseleave = () => (hovered = false);
+      el.onclick = finish;
+      window.addEventListener('keydown', onKey, true);
+    });
   }
 
   // ---- toasts -------------------------------------------------------------------------------------

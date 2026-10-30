@@ -58,6 +58,8 @@ export class Table {
   handOrder: number[] = [];
   /** >1 when the update queue is backed up and animations should hurry. */
   timeScale = 1;
+  /** Set by the app: shows an opponent's spell and resolves when the player has seen it. */
+  onOpponentCast: ((card: CardState, who: string) => Promise<void>) | null = null;
 
   private readonly fx: Fx;
   private readonly arrows: Arrows;
@@ -450,6 +452,12 @@ export class Table {
           if (item?.source != null && item.ability) {
             const src = this.cards.get(item.source);
             if (src) jobs.push(this.pulse(src));
+          }
+          // an opponent's spell holds the table so the player can read it
+          if (item?.source != null && !item.ability && item.controller !== this.localId && this.onOpponentCast) {
+            const card = s.cards[item.source];
+            const who = s.players.find((p) => p.id === item.controller)?.name ?? 'Opponent';
+            if (card?.visible) jobs.push(this.onOpponentCast(card, who));
           }
           break;
         }

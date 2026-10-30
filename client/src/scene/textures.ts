@@ -148,6 +148,12 @@ export async function cardFaceTexture(card: CardState): Promise<THREE.Texture> {
   return drawnFace(card);
 }
 
+/** The image the 3D card already uses (so it's in the browser cache and shows instantly). */
+export async function cardImageUrl(card: CardState): Promise<string | null> {
+  const r = await resolveCard(card);
+  return r?.normal ?? null;
+}
+
 export async function cardZoomUrl(card: CardState): Promise<string | null> {
   const r = await resolveCard(card);
   return r?.large ?? null;
