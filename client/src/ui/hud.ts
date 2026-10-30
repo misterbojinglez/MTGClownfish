@@ -432,6 +432,7 @@ export class Hud {
     const cardOf = (o: ChoiceOption): CardState | undefined => (o.card != null ? state?.cards[o.card] ?? o.cardData : undefined);
     const hasCards = options.some((o) => cardOf(o)?.visible);
     const list = h('div', hasCards ? 'choice-cards' : 'choice-list');
+    if (hasCards && n > 8) list.classList.add('many');
     const items: HTMLElement[] = [];
     const confirm = h('button', 'main-btn wide', reveal ? 'OK' : 'Confirm');
 
@@ -467,6 +468,10 @@ export class Hud {
           refresh();
           // single picks with no minimum ambiguity resolve immediately
           if (max === 1 && min === 1 && picked.length === 1 && !hasCards) done([...picked]);
+        };
+        // double-clicking a card takes it and confirms, when that alone is a complete answer
+        el.ondblclick = () => {
+          if (max === 1 && picked.length === 1 && picked[0] === i) done([i]);
         };
       }
       items.push(el);

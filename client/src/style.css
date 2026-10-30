@@ -596,7 +596,7 @@ button {
 .modal-panel {
   max-width: min(1100px, 92vw);
   max-height: 86vh;
-  overflow: auto;
+  overflow: hidden;
   padding: 22px 26px;
   border-radius: 16px;
   background: linear-gradient(180deg, rgba(30, 25, 44, 0.97), rgba(12, 10, 18, 0.97));
@@ -621,6 +621,10 @@ button {
   font-size: 13px;
 }
 
+.modal-panel > * {
+  flex-shrink: 0;
+}
+
 .modal-buttons {
   display: flex;
   gap: 12px;
@@ -639,11 +643,28 @@ button {
   text-align: center;
 }
 
+.modal-panel > .choice-cards,
+.modal-panel > .choice-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .choice-cards {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   justify-content: center;
+  padding: 8px 10px;
+}
+
+.choice-cards .thumb {
+  flex: 0 0 auto;
+}
+
+/* big searches (a library full of basics) get smaller thumbnails so more fit without scrolling */
+.choice-cards.many .thumb {
+  width: 122px;
 }
 
 .choice-list {
