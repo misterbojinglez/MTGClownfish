@@ -1,4 +1,4 @@
-import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, Selection } from '../protocol';
+import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, ResolvingSource, Selection } from '../protocol';
 import { cardImageUrl, cardZoomUrl } from '../scene/textures';
 import { sfx } from '../audio';
 
@@ -38,6 +38,8 @@ export class Hud {
   private readonly root = document.getElementById('hud')!;
   private readonly promptBox = h('div', 'prompt');
   private readonly promptText = h('div', 'prompt-text');
+  private readonly promptSource = h('div', 'prompt-source');
+  private promptSourceKey = '';
   private readonly okBtn = h('button', 'main-btn');
   private readonly cancelBtn = h('button', 'sub-btn');
   private readonly phaseBar = h('div', 'phase-bar');
@@ -54,7 +56,7 @@ export class Hud {
   constructor() {
     const actions = h('div', 'actions');
     actions.append(this.cancelBtn, this.okBtn);
-    this.promptBox.append(this.promptText, actions);
+    this.promptBox.append(this.promptSource, this.promptText, actions);
     const phaseWrap = h('div', 'phase-wrap');
     phaseWrap.append(this.turnLabel, this.phaseBar);
     for (const key of PHASE_GROUPS) {
@@ -168,8 +170,13 @@ export class Hud {
 
   // ---- prompt -------------------------------------------------------------------------------------
 
-  setPrompt(prompt: Prompt, sel: Selection, waiting: boolean): void {
-    let msg = prompt.message ?? '';
+  setPrompt(prompt: Prompt, sel: Selection, waiting: boolean, state: GameState | null = null): void {
+    const key = prompt.source ? JSON.stringify(prompt.source) : '';
+    if (key !== this.promptSourceKey) {
+      this.promptSourceKey = key;
+      this.promptSource.replaceChildren(...(prompt.source ? [this.sourceHeader(prompt.source, state)] : []));
+    }
+    let msg = tidyMessage(prompt.message ?? '');
     if (sel.cards.length && sel.max > 0) {
       const picked = sel.chosen.length;
       msg += sel.max > 1 ? `\n(${picked}/${sel.max} selected)` : '';
@@ -186,6 +193,27 @@ export class Hud {
     this.cancelBtn.style.visibility = cancel?.enabled && !waiting ? 'visible' : 'hidden';
     this.cancelBtn.disabled = !cancel?.enabled || waiting;
     this.promptBox.classList.toggle('waiting', waiting);
+  }
+
+  /** "Preordain · Spell" with its art and rules text: what is asking the current question. Hover for the card. */
+  private sourceHeader(src: ResolvingSource, state: GameState | null): HTMLElement {
+    const el = h('div', 'source-header');
+    const card = src.card != null ? state?.cards[src.card] : undefined;
+    const art = h('div', 'source-art');
+    if (card) void cardImageUrl(card).then((url) => { if (url) art.style.backgroundImage = `url("${url}")`; });
+    const body = h('div', 'source-body');
+    const kind = src.trigger ? 'Triggered ability' : src.ability ? 'Ability' : 'Spell';
+    const who = src.controller != null ? state?.players.find((p) => p.id === src.controller)?.name : undefined;
+    body.append(h('div', 'source-name', src.name ?? 'Effect'), h('div', 'source-kind', who ? `${kind} · ${who}` : kind));
+    // the stack text repeats the name ("Preordain - Scry 2…"); keep just the effect
+    const text = effectText(src.text ?? '', src.name ?? '');
+    if (text) body.append(h('div', 'source-text', text));
+    el.append(art, body);
+    if (card) {
+      el.onmouseenter = () => this.showZoom(card, 'right');
+      el.onmouseleave = () => this.showZoom(null);
+    }
+    return el;
   }
 
   setPhase(state: GameState, localId: number): void {
@@ -397,7 +425,8 @@ export class Hud {
       const modal = h('div', 'modal');
       const panel = h('div', 'modal-panel');
       modal.append(panel);
-      const title = h('div', 'modal-title', req.message ?? '');
+      if (req.source) panel.append(this.sourceHeader(req.source, state));
+      const title = h('div', 'modal-title', tidyMessage(req.message ?? ''));
       panel.append(title);
       if (req.caption && req.caption !== req.message) panel.append(h('div', 'modal-sub', req.caption));
       const done = (value: unknown) => {
@@ -583,4 +612,27 @@ export class Hud {
     el.onmouseleave = () => this.showZoom(null);
     return el;
   }
+}
+
+/** Forge tags card names with their object ids ("Island (70)"); players don't need those. */
+function tidyMessage(text: string): string {
+  return text.replace(/ \(\d+\)/g, '').trim();
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Forge's stack text for display: drop the "Opt (6) - " prefix, and turn its third-person phrasing for
+ * the local player ("You scries 1. You draw a card.") into plain imperatives ("Scry 1. Draw a card.").
+ */
+function effectText(raw: string, name: string): string {
+  let t = tidyMessage(raw).replace(new RegExp(`^${escapeRe(name)}\\s*-\\s*`), '');
+  t = t.replace(/(^|[.!?]\s+)You (\w+)/g, (m, lead: string, verb: string) => {
+    if (/^(may|can|must|might|control|have)$/i.test(verb)) return m;
+    const base = /(ch|sh|ss|x)es$/.test(verb) ? verb.slice(0, -2) : /ies$/.test(verb) && verb !== 'dies' ? verb.slice(0, -3) + 'y' : /[^s]s$/.test(verb) ? verb.slice(0, -1) : verb;
+    return lead + base.charAt(0).toUpperCase() + base.slice(1);
+  });
+  return t;
 }

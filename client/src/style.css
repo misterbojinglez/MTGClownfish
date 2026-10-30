@@ -897,3 +897,62 @@ button {
   font-weight: 700;
   text-align: center;
 }
+
+/* ---- what is asking: the resolving spell or ability above a prompt or dialog ---- */
+
+.prompt-source:empty {
+  display: none;
+}
+
+.source-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  max-width: 420px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(40, 32, 22, 0.95), rgba(18, 14, 12, 0.95));
+  border: 1px solid rgba(214, 178, 94, 0.55);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  text-align: left;
+}
+
+.source-art {
+  flex: 0 0 auto;
+  width: 54px;
+  height: 75px;
+  border-radius: 5px;
+  background: #1b1622 center / cover no-repeat;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+.source-body {
+  min-width: 0;
+}
+
+.source-name {
+  font-family: Cinzel, Georgia, serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--gold);
+}
+
+.source-kind {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.source-text {
+  font-size: 13px;
+  line-height: 1.35;
+  margin-top: 6px;
+  white-space: pre-line;
+}
+
+.modal-panel > .source-header {
+  align-self: stretch;
+  max-width: none;
+}

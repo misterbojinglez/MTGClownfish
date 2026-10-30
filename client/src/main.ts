@@ -43,7 +43,7 @@ async function drain(): Promise<void> {
 
 function refreshPrompt(): void {
   if (!table.state) return;
-  hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0);
+  hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0, table.state);
   hud.setPhase(table.state, table.localId);
   refreshBrowser();
 }

@@ -160,9 +160,45 @@ public class SocketGuiGame extends AbstractGuiGame {
         pendingEvents.clear();
         msg.add("events", events);
         msg.add("state", state);
-        msg.add("prompt", prompt.deepCopy());
+        final JsonObject promptOut = prompt.deepCopy();
+        promptOut.add("source", resolvingSource());
+        msg.add("prompt", promptOut);
         msg.add("selection", Serializer.selection(getSelection()));
         session.send(msg);
+    }
+
+    /** A request to the player, tagged with the spell or ability that's asking (if one is resolving). */
+    private JsonElement ask(final String kind, final JsonObject req) {
+        req.add("source", resolvingSource());
+        return session.request(kind, req);
+    }
+
+    /**
+     * The spell or ability currently resolving, so prompts can say what is asking: a bare "Put Island on
+     * top or bottom?" means little without "Preordain: Scry 2, then draw a card".
+     */
+    private JsonObject resolvingSource() {
+        try {
+            final forge.game.Game game = getGameView().getGame();
+            if (game == null || !game.getStack().isResolving() || game.getStack().isEmpty()) {
+                return null;
+            }
+            final forge.game.spellability.SpellAbility sa = game.getStack().peekAbility();
+            if (sa == null) {
+                return null;
+            }
+            final Card host = sa.getHostCard();
+            final JsonObject o = new JsonObject();
+            o.addProperty("card", host == null ? null : host.getId());
+            o.addProperty("name", host == null ? null : host.getName());
+            o.addProperty("text", game.getStack().peek().getStackDescription());
+            o.addProperty("ability", !sa.isSpell());
+            o.addProperty("trigger", sa.isTrigger());
+            o.addProperty("controller", sa.getActivatingPlayer() == null ? null : sa.getActivatingPlayer().getId());
+            return o;
+        } catch (RuntimeException e) {
+            return null; // the stack is changing under us; the prompt just goes without a source
+        }
     }
 
     public void resetForNewGame() {
@@ -340,7 +376,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         req.addProperty("card", card == null ? null : card.getId());
         req.add("options", options(choices, display));
         final List<T> out = new ArrayList<>();
-        for (final int i : indices(session.request("choose", req))) {
+        for (final int i : indices(ask("choose", req))) {
             if (i >= 0 && i < choices.size()) {
                 out.add(choices.get(i));
             }
@@ -362,7 +398,7 @@ public class SocketGuiGame extends AbstractGuiGame {
             final JsonObject req = new JsonObject();
             req.addProperty("message", message);
             req.add("options", options(choices, display));
-            session.request("reveal", req);
+            ask("reveal", req);
             return new ArrayList<>();
         }
         return pick(message, min, max, choices, display, null);
@@ -377,7 +413,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         req.addProperty("maxRemaining", remainingObjectsMax);
         req.add("options", options(sourceChoices, null));
         final List<T> ordered = new ArrayList<>();
-        for (final int i : indices(session.request("order", req))) {
+        for (final int i : indices(ask("order", req))) {
             if (i >= 0 && i < sourceChoices.size()) {
                 ordered.add(sourceChoices.get(i));
             }
@@ -442,7 +478,7 @@ public class SocketGuiGame extends AbstractGuiGame {
             opts.add(o);
         }
         req.add("options", opts);
-        final JsonElement answer = session.request("distribute", req);
+        final JsonElement answer = ask("distribute", req);
         final Map<Object, Integer> out = new LinkedHashMap<>();
         if (answer != null && answer.isJsonArray() && answer.getAsJsonArray().size() == keys.size()) {
             for (int i = 0; i < keys.size(); i++) {
@@ -488,7 +524,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         opts.add(yes);
         opts.add(no);
         req.add("buttons", opts);
-        final JsonElement answer = session.request("confirm", req);
+        final JsonElement answer = ask("confirm", req);
         return answer != null && answer.isJsonPrimitive() && answer.getAsInt() == 0;
     }
 
@@ -511,7 +547,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         final JsonArray opts = new JsonArray();
         options.forEach(opts::add);
         req.add("buttons", opts);
-        final JsonElement answer = session.request("confirm", req);
+        final JsonElement answer = ask("confirm", req);
         return answer != null && answer.isJsonPrimitive() ? answer.getAsInt() : defaultOption;
     }
 
@@ -525,7 +561,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         req.addProperty("message", message);
         req.addProperty("initial", initialInput);
         req.addProperty("numeric", isNumeric);
-        final JsonElement answer = session.request("input", req);
+        final JsonElement answer = ask("input", req);
         return answer == null || answer.isJsonNull() ? null : answer.getAsString();
     }
 

@@ -95,6 +95,17 @@ export interface Button {
   focus?: boolean;
 }
 
+/** The spell or ability resolving while the engine asks something, so the question has context. */
+export interface ResolvingSource {
+  card: number | null;
+  name: string | null;
+  /** the stack text, e.g. "Preordain - Scry 2, then draw a card." */
+  text: string | null;
+  ability: boolean;
+  trigger: boolean;
+  controller: number | null;
+}
+
 export interface Prompt {
   message: string;
   card?: number | null;
@@ -102,6 +113,7 @@ export interface Prompt {
   cancel?: Button;
   /** Forge input class behind this prompt, e.g. InputPassPriority, InputPayManaOfCostPayment */
   input?: string | null;
+  source?: ResolvingSource | null;
 }
 
 export interface Selection {
@@ -159,6 +171,7 @@ export interface RequestMsg {
   buttons?: string[];
   initial?: string | null;
   numeric?: boolean;
+  source?: ResolvingSource | null;
 }
 
 export type ServerMsg =
