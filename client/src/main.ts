@@ -212,4 +212,4 @@ bridge.connect();
 hud.menu(startGame);
 
 // dev-only hook so the headless driver (scratch tooling) can read state and act like a player
-if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, sfx, autoPayArmed: () => performance.now() < autoPayUntil };
+if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, sfx, queue: () => ({ pending: queue.length, draining }), autoPayArmed: () => performance.now() < autoPayUntil };

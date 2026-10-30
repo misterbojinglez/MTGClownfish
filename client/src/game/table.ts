@@ -157,8 +157,12 @@ export class Table {
         // A card between zones (cast but not yet on the stack, etc.) stays where it is until it lands;
         // only a card that really went to its library or out of the game leaves the table.
         const zone = cards[id]?.zone;
-        if (zone && IN_TRANSIT_ZONES.has(zone)) continue;
-        tasks.push(this.vanish(obj, prev, snapshots.get(id)));
+        // ...except tokens: one reported anywhere but the battlefield or stack has ceased to exist (it died,
+        // was exiled or bounced) and will never be listed again
+        const tokenGone = cards[id]?.token && zone !== 'Battlefield' && zone !== 'Stack';
+        if (zone && IN_TRANSIT_ZONES.has(zone) && !tokenGone) continue;
+        const snap = snapshots.get(id);
+        tasks.push(tokenGone ? deathsGo.then(() => this.vanish(obj, prev, snap)) : this.vanish(obj, prev, snap));
         continue;
       }
       if (deaths.has(id)) {
@@ -402,11 +406,14 @@ export class Table {
     const owner = obj.state.owner;
     const lib = owner != null ? libraryAnchor(s, this.localId, owner) : null;
     const wasOnField = snap?.zone === 'Battlefield';
-    if (wasOnField && obj.state.token) {
-      const pos = new THREE.Vector3().setFromMatrixPosition(snap!.world);
-      this.fx.death(pos, obj.root.scale.x);
-      sfx.death(this.panOf(pos));
-      await this.dissolve(obj, 0.55, '#ff8a3a');
+    if (obj.state.token) {
+      // tokens never go home: burn away on the battlefield, or just fade from wherever they ended up
+      if (wasOnField) {
+        const pos = new THREE.Vector3().setFromMatrixPosition(snap!.world);
+        this.fx.death(pos, obj.root.scale.x);
+        sfx.death(this.panOf(pos));
+      }
+      await this.dissolve(obj, wasOnField ? 0.55 : 0.3, '#ff8a3a');
       obj.dispose();
       return;
     }
@@ -433,7 +440,12 @@ export class Table {
     await this.dissolve(obj, 0.65, '#ff7a2a');
     const p = this.layout.get(obj.id);
     this.flying.delete(obj.id);
-    if (!p) return;
+    if (!p) {
+      // nowhere to go (a token that ceased to exist): it's gone
+      this.cards.delete(obj.id);
+      obj.dispose();
+      return;
+    }
     this.settle(obj, p, 0);
     obj.setDissolve(0);
     gsap.fromTo(obj.root.scale, { x: 0.01, y: 0.01, z: 0.01 }, { x: p.scale, y: p.scale, z: p.scale, duration: 0.25, ease: 'back.out(2)' });
