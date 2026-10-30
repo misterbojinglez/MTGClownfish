@@ -252,6 +252,8 @@ export class Arrows {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      // the ribbon lies flat; whichever way its triangles wind, it must be visible from above
+      side: THREE.DoubleSide,
       uniforms: { uTime: { value: 0 } },
       vertexShader: /* glsl */ `
         attribute vec3 color; varying vec2 vUv; varying vec3 vColor;

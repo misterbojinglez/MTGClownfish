@@ -66,6 +66,15 @@ public class SocketGuiGame extends AbstractGuiGame {
         if (getGameView() == null) {
             return;
         }
+        // Forge refreshes its combat view only between steps; attackers and blockers being declared right
+        // now live on the game's Combat, so pull them into the view before every snapshot
+        try {
+            if (getGameView().getGame() != null) {
+                getGameView().getGame().updateCombatForView();
+            }
+        } catch (RuntimeException ignored) {
+            // combat mid-change on another thread; the next snapshot catches up
+        }
         final JsonObject state;
         try {
             state = Serializer.game(getGameView(), this::mayView);

@@ -624,13 +624,14 @@ export class Table {
     for (const [id, obj] of this.cards) {
       const c = obj.state;
       let h: Highlight = 'none';
+      // what a card is doing in combat outranks "you could click this"
       if (chosen.has(id)) h = 'chosen';
       else if (selectable.has(id)) h = 'selectable';
-      else if (autoPay.has(id)) h = 'autoPay';
-      else if (actionable.has(id)) h = 'playable';
-      else if (targeted.has(id)) h = 'target';
       else if (c.attacking) h = 'attacking';
       else if (c.blocking) h = 'blocking';
+      else if (targeted.has(id)) h = 'target';
+      else if (autoPay.has(id)) h = 'autoPay';
+      else if (actionable.has(id)) h = 'playable';
       obj.setHighlight(h);
     }
   }
@@ -647,7 +648,7 @@ export class Table {
       if (to && a.blockers.length === 0) arrows.push({ from, to, color: '#ff4a3a' });
       for (const b of a.blockers) {
         const bw = this.layoutWorld(b);
-        if (bw) arrows.push({ from: bw, to: from, color: '#c9d4ff' });
+        if (bw) arrows.push({ from: bw, to: from, color: '#7fc4ff' });
       }
     }
     const top = s.stack[0];

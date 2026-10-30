@@ -65,7 +65,7 @@ const HIGHLIGHT_COLORS: Record<Highlight, THREE.Color> = {
   selectable: new THREE.Color('#ffd34a').multiplyScalar(1.4),
   chosen: new THREE.Color('#ff9a2e').multiplyScalar(1.8),
   attacking: new THREE.Color('#ff4a3a').multiplyScalar(1.5),
-  blocking: new THREE.Color('#d9d9ff').multiplyScalar(1.2),
+  blocking: new THREE.Color('#7fc4ff').multiplyScalar(1.7),
   target: new THREE.Color('#ff5a5a').multiplyScalar(1.6),
 };
 

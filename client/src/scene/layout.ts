@@ -218,7 +218,8 @@ export function computeLayout(
         col.ids.forEach((id, i) => {
           const c = cards[id];
           const off = Math.min(i, 3) * 0.32 * scale * squeeze;
-          const attackPush = c.attacking ? (seat.local ? -1.4 : 1.4) : 0;
+          // attackers step toward the opponent; blockers step out to meet them
+          const attackPush = c.attacking || c.blocking ? (seat.local ? -1.4 : 1.4) : 0;
           const local = new THREE.Vector3(x + (col.width * scale * squeeze) / 2 + off, 0.02 + i * 0.012, zMid + attackPush - off * 0.35);
           const world = seatToWorld(seat, local);
           const rot = flat.clone();

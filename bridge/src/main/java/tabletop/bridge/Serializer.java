@@ -238,9 +238,14 @@ public final class Serializer {
             final JsonObject a = new JsonObject();
             a.addProperty("attacker", attacker.getId());
             a.add("defender", ref(combat.getDefender(attacker)));
+            // while blocks are being declared they're only "planned"; show those too
             final JsonArray blockers = new JsonArray();
-            if (combat.getBlockers(attacker) != null) {
-                combat.getBlockers(attacker).forEach(b -> blockers.add(b.getId()));
+            var list = combat.getBlockers(attacker);
+            if (list == null || list.isEmpty()) {
+                list = combat.getPlannedBlockers(attacker);
+            }
+            if (list != null) {
+                list.forEach(b -> blockers.add(b.getId()));
             }
             a.add("blockers", blockers);
             attacks.add(a);
