@@ -80,7 +80,7 @@ const PIP: Record<string, string> = { W: '#f3ead0', U: '#4f9fe6', B: '#8d7f8f', 
 function pips(colors: string[]): HTMLElement {
   const el = h('div', 'pips');
   for (const c of colors.length ? colors : ['C']) {
-    const p = h('span', 'pip');
+    const p = h('span', 'deck-pip');
     p.style.background = PIP[c] ?? '#b9b2a6';
     p.title = c;
     el.append(p);
