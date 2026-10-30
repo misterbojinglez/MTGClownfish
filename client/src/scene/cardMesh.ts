@@ -125,6 +125,7 @@ export class CardObject {
   private badgeKey = '';
   private glowStrength = 0;
   private time = Math.random() * 10;
+  private hurtT = 0;
 
   constructor(state: CardState) {
     this.id = state.id;
@@ -268,8 +269,18 @@ export class CardObject {
     this.badge.visible = v === 0 && this.badge.visible;
   }
 
+  /** Flush the card red for a moment (it was just dealt damage). */
+  hurt(): void {
+    this.hurtT = 1;
+  }
+
   tick(dt: number): void {
     this.time += dt;
+    if (this.hurtT > 0) {
+      this.hurtT = Math.max(0, this.hurtT - dt * 1.6);
+      const k = this.hurtT * this.hurtT;
+      this.frontMat.emissive.setRGB(1 + k * 1.6, 1 - k * 0.6, 1 - k * 0.65);
+    }
     const target = this.highlight === 'none' && !this.hovered ? 0 : 1;
     this.glowStrength += (target - this.glowStrength) * Math.min(1, dt * 10);
     const color = this.highlight === 'none' ? HOVER_COLOR : HIGHLIGHT_COLORS[this.highlight];

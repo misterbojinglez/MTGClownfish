@@ -8,6 +8,8 @@ import forge.deck.CardPool;
 import forge.game.GameEntityView;
 import forge.game.card.CardView;
 import forge.game.event.GameEvent;
+import forge.game.event.GameEventCardDamaged;
+import forge.game.event.GameEventPlayerDamaged;
 import forge.game.phase.PhaseType;
 import forge.game.player.DelayedReveal;
 import forge.game.player.IHasIcon;
@@ -52,8 +54,32 @@ public class SocketGuiGame extends AbstractGuiGame {
     public void onGameEvent(final GameEvent event) {
         synchronized (snapshotLock) {
             pendingEvents.add(Serializer.event(event));
+            // Forge reports each creature's damage separately; hold damage until the next other event so a
+            // whole combat damage step (attackers and blockers striking at once) reaches the client together
+            if (event instanceof GameEventCardDamaged || event instanceof GameEventPlayerDamaged) {
+                scheduleFallbackFlush();
+                return;
+            }
             flushLocked();
         }
+    }
+
+    private final java.util.concurrent.ScheduledExecutorService flushTimer =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                final Thread t = new Thread(r, "bridge-flush-timer");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** If nothing follows the held damage, send it anyway after a moment. */
+    private void scheduleFallbackFlush() {
+        flushTimer.schedule(() -> {
+            synchronized (snapshotLock) {
+                if (!pendingEvents.isEmpty()) {
+                    flushLocked();
+                }
+            }
+        }, 150, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     private void flush() {

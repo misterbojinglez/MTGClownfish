@@ -384,6 +384,20 @@ button {
   text-shadow: 0 2px 0 #000, 0 0 18px currentColor;
 }
 
+.float-text.big {
+  font-size: 58px;
+  text-shadow: 0 3px 0 #000, 0 0 26px currentColor, 0 0 4px #000;
+}
+
+/* the local player was hit: the screen edges flash red */
+.hurt-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none !important;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(200, 20, 10, 0.55) 100%);
+  opacity: 0;
+}
+
 .float-text.damage {
   color: #ff5a46;
 }

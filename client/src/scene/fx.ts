@@ -189,6 +189,19 @@ export class Fx {
     this.flash(pos, color, 1.5 + power * 0.25, 0.22);
   }
 
+  /** A flat ring racing outward across the table from an impact. */
+  shockwave(pos: THREE.Vector3, color: string, size = 1): void {
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2.2), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.82, 1, 48), mat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pos.x, 0.08, pos.z);
+    ring.scale.setScalar(0.6);
+    this.stage.scene.add(ring);
+    const end = 3 + size * 2.4;
+    gsap.to(ring.scale, { x: end, y: end, z: end, duration: 0.55, ease: 'power2.out' });
+    gsap.to(mat, { opacity: 0, duration: 0.55, ease: 'power1.in', onComplete: () => { ring.removeFromParent(); ring.geometry.dispose(); mat.dispose(); } });
+  }
+
   /** A trail sample behind a moving card or bolt. */
   trail(pos: THREE.Vector3, color: string, size = 0.35): void {
     this.particles.emit({
@@ -320,13 +333,13 @@ export class Arrows {
 }
 
 /** Damage / life numbers that pop at a screen position and drift up. */
-export function floatText(x: number, y: number, text: string, kind: 'damage' | 'heal' | 'info'): void {
+export function floatText(x: number, y: number, text: string, kind: 'damage' | 'heal' | 'info', big = false): void {
   const el = document.createElement('div');
-  el.className = `float-text ${kind}`;
+  el.className = `float-text ${kind}${big ? ' big' : ''}`;
   el.textContent = text;
   el.style.left = `${x}px`;
   el.style.top = `${y}px`;
   document.getElementById('hud')!.appendChild(el);
   gsap.fromTo(el, { scale: 0.4, opacity: 0 }, { scale: 1.15, opacity: 1, duration: 0.18, ease: 'back.out(3)' });
-  gsap.to(el, { y: -70, opacity: 0, duration: 1.1, delay: 0.35, ease: 'power1.in', onComplete: () => el.remove() });
+  gsap.to(el, { y: big ? -90 : -70, opacity: 0, duration: big ? 1.3 : 1.1, delay: big ? 0.9 : 0.35, ease: 'power1.in', onComplete: () => el.remove() });
 }

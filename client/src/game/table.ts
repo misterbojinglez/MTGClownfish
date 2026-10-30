@@ -59,6 +59,9 @@ export class Table {
   handOrder: number[] = [];
   /** >1 when the update queue is backed up and animations should hurry. */
   timeScale = 1;
+  private hitStopToken = 0;
+  /** life shown on a plate ahead of the engine: set when a blow lands, cleared once the engine's total moves */
+  private lifeShown = new Map<number, { value: number; base: number; at: number }>();
   /** Set by the app: shows an opponent's spell and resolves when the player has seen it. */
   onOpponentCast: ((card: CardState, who: string) => Promise<void>) | null = null;
 
@@ -106,6 +109,18 @@ export class Table {
     if (prev) this.stateSounds(prev, msg.state.cards);
     const state: GameState = { ...msg.state, cards };
     this.state = state;
+    for (const [pid, shown] of this.lifeShown) {
+      const life = state.players.find((p) => p.id === pid)?.life;
+      if (life !== shown.base) this.lifeShown.delete(pid);
+    }
+    // players about to take combat damage keep showing their old total until each blow visibly lands
+    for (const e of msg.events) {
+      const pid = e.event === 'PlayerDamaged' && e.combat ? (e.target as Ref)?.player : undefined;
+      if (pid == null || this.lifeShown.has(pid)) continue;
+      const before = prev?.players.find((p) => p.id === pid)?.life;
+      const base = state.players.find((p) => p.id === pid)?.life;
+      if (before != null && base != null) this.lifeShown.set(pid, { value: before, base, at: performance.now() });
+    }
     this.prompt = msg.prompt;
     this.selection = msg.selection;
 
@@ -131,6 +146,11 @@ export class Table {
     const tasks: Promise<void>[] = [];
     const deaths = new Set<number>();
     for (const e of msg.events) this.collectDeaths(e, snapshots, deaths);
+    // with combat damage in this update, creatures die only after every blow has landed and been seen,
+    // and a creature that trades still gets to make its strike
+    const combatDamage = msg.events.some((e) => (e.event === 'PlayerDamaged' && e.combat) || e.event === 'CardDamaged');
+    let releaseDeaths: () => void = () => {};
+    const deathsGo = combatDamage ? new Promise<void>((r) => (releaseDeaths = r)) : Promise.resolve();
 
     for (const [id, obj] of this.cards) {
       if (!visibleIds.has(id)) {
@@ -142,7 +162,8 @@ export class Table {
         continue;
       }
       if (deaths.has(id)) {
-        tasks.push(this.dieThenPlace(obj, snapshots.get(id)!));
+        const snap = snapshots.get(id)!;
+        tasks.push(deathsGo.then(() => this.dieThenPlace(obj, snap)));
         continue;
       }
       const target = this.layout.get(id);
@@ -154,7 +175,7 @@ export class Table {
       else if (!this.flying.has(id)) this.settle(obj, target, before ? 0.28 : 0);
     }
 
-    tasks.push(this.playEvents(msg.events, snapshots));
+    tasks.push(this.playEvents(msg.events, snapshots).finally(releaseDeaths));
     this.refreshHighlights();
     this.refreshArrows();
     await Promise.all(tasks);
@@ -489,10 +510,25 @@ export class Table {
     await Promise.all(jobs);
   }
 
-  /** Attackers lunge at what they hit, all at once, then recoil. */
+  /**
+   * Combat damage, staged so each blow registers: attackers wind up, then strike one engagement at a
+   * time (an attacker and its blocker clash together), with a hit-stop and shockwave on every contact.
+   * Combat is never rushed to clear the animation backlog.
+   */
   private async combat(hits: GameEvent[]): Promise<void> {
+    const ts = Math.min(this.timeScale, 1.15);
+    const slots = new Map<string, number>();
     const strikes: Promise<void>[] = [];
     const struck = new Set<number>();
+    const lunging: CardObject[] = [];
+    for (const e of hits) {
+      const srcId = (e.source as Ref)?.card;
+      const src = srcId != null ? this.cards.get(srcId) : undefined;
+      if (src && srcId != null && !struck.has(srcId) && !this.flying.has(srcId)) lunging.push(src);
+    }
+    // wind-up: everyone about to strike rears back together
+    await Promise.all(lunging.map((o) => this.windUp(o, ts)));
+
     for (const e of hits) {
       const srcId = (e.source as Ref)?.card;
       const amount = e.amount as number;
@@ -501,29 +537,103 @@ export class Table {
       const src = srcId != null ? this.cards.get(srcId) : undefined;
       const targetPos = targetCard != null ? this.cardWorld(targetCard) : targetPlayer != null ? this.playerWorld(targetPlayer) : null;
       if (!targetPos) continue;
+      // one slot per engagement: attacker↔blocker pairs share a slot, each unblocked attacker gets its own
+      const key = targetCard != null && srcId != null ? [srcId, targetCard].sort().join('-') : `p${srcId}`;
+      if (!slots.has(key)) slots.set(key, slots.size);
+      const delay = (slots.get(key)! * 0.42) / ts;
       const onHit = () => {
-        this.fx.impact(targetPos, targetPlayer != null ? '#ff5a3a' : '#ffb35a', Math.min(8, amount));
+        const heavy = Math.min(1, amount / 6);
+        this.fx.impact(targetPos, targetPlayer != null ? '#ff5a3a' : '#ffb35a', Math.min(10, amount * 1.3));
+        this.fx.shockwave(targetPos, targetPlayer != null ? '#ff6a3a' : '#ffc36a', heavy);
         sfx.hit(amount, targetPlayer != null, this.panOf(targetPos));
+        this.hitStop(0.1 + heavy * 0.12);
+        if (amount >= 4) this.stage.punch(heavy);
         if (targetPlayer != null) {
-          this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage');
-          this.stage.addShake(Math.min(1, 0.15 + amount * 0.06));
+          this.showLifeLoss(targetPlayer, amount);
+          this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage', true);
+          this.stage.addShake(Math.min(1.1, 0.25 + amount * 0.08));
+          if (targetPlayer === this.localId) this.hurtFlash(heavy);
         } else if (targetCard != null) {
-          this.floatAtCard(targetCard, `−${amount}`);
+          this.floatAtCard(targetCard, `−${amount}`, true);
           const t = this.cards.get(targetCard);
-          if (t) this.wobble(t);
+          if (t) {
+            t.hurt();
+            this.wobble(t);
+          }
+          this.stage.addShake(Math.min(0.6, 0.1 + amount * 0.05));
         }
       };
       if (src && srcId != null && !struck.has(srcId) && !this.flying.has(srcId)) {
         struck.add(srcId);
-        strikes.push(this.lunge(src, targetPos, src.state.power ?? amount, onHit));
+        strikes.push(this.wait(delay).then(() => this.lunge(src, targetPos, src.state.power ?? amount, onHit, ts)));
       } else {
-        onHit();
+        strikes.push(this.wait(delay + 0.3 / ts).then(onHit));
       }
     }
     await Promise.all(strikes);
+    // let the damage sink in before anything dies
+    await this.wait(0.55 / ts);
   }
 
-  private lunge(obj: CardObject, target: THREE.Vector3, power: number, onHit: () => void): Promise<void> {
+  private showLifeLoss(pid: number, amount: number): void {
+    const shown = this.lifeShown.get(pid);
+    if (shown) {
+      shown.value -= amount;
+      shown.at = performance.now();
+    }
+  }
+
+  /** The state as the plates should show it: life totals already reflect blows that have visibly landed. */
+  shownState(): GameState | null {
+    const s = this.state;
+    if (!s || this.lifeShown.size === 0) return s;
+    const now = performance.now();
+    return {
+      ...s,
+      players: s.players.map((p) => {
+        const shown = this.lifeShown.get(p.id);
+        // safety: never hold a guess for long if the engine's total somehow doesn't move
+        if (!shown || now - shown.at > 6000) return p;
+        return { ...p, life: shown.value };
+      }),
+    };
+  }
+
+  private wait(seconds: number): Promise<void> {
+    return new Promise((r) => (seconds > 0 ? gsap.delayedCall(seconds, r) : r()));
+  }
+
+  /**
+   * A moment of slow motion on contact: everything animated drops to a crawl and eases back.
+   * Runs on wall-clock time; a tween would itself be slowed by the time scale it is restoring.
+   */
+  private hitStop(seconds: number): void {
+    const tl = gsap.globalTimeline;
+    const t0 = performance.now();
+    this.hitStopToken = t0;
+    const tick = () => {
+      if (this.hitStopToken !== t0) return void gsap.ticker.remove(tick);
+      const k = Math.min(1, (performance.now() - t0) / (seconds * 1000));
+      tl.timeScale(0.12 + 0.88 * k * k);
+      if (k >= 1) gsap.ticker.remove(tick);
+    };
+    gsap.ticker.add(tick);
+  }
+
+  private hurtFlash(strength: number): void {
+    const el = document.createElement('div');
+    el.className = 'hurt-vignette';
+    document.getElementById('hud')!.appendChild(el);
+    gsap.timeline({ onComplete: () => el.remove() }).to(el, { opacity: 0.6 + strength * 0.4, duration: 0.08 }).to(el, { opacity: 0, duration: 0.7, ease: 'power1.in' });
+  }
+
+  private windUp(obj: CardObject, ts: number): Promise<void> {
+    return new Promise((resolve) => {
+      gsap.to(obj.body.position, { z: 1.1, duration: 0.32 / ts, ease: 'power2.out', onComplete: resolve });
+    });
+  }
+
+  private lunge(obj: CardObject, target: THREE.Vector3, power: number, onHit: () => void, ts = this.timeScale): Promise<void> {
     const { strike, ret } = strikeTiming(power);
     const body = obj.body;
     const origin = obj.root.getWorldPosition(new THREE.Vector3());
@@ -535,9 +645,11 @@ export class Table {
     return new Promise((resolve) => {
       gsap
         .timeline({ onComplete: resolve })
-        .to(body.position, { x: -local.x * 0.08, y: -local.y * 0.08, z: 0.8, duration: 0.12 / this.timeScale, ease: 'power2.out' })
-        .to(body.position, { x: local.x, y: local.y, z: 1.2, duration: strike / this.timeScale, ease: 'power3.in', onComplete: onHit })
-        .to(body.position, { x: 0, y: 0, z: 0, duration: ret / this.timeScale, ease: 'power2.out' });
+        .to(body.position, { x: -local.x * 0.1, y: -local.y * 0.1, z: 1.4, duration: 0.16 / ts, ease: 'power2.out' })
+        .to(body.position, { x: local.x, y: local.y, z: 1.2, duration: (strike * 1.15) / ts, ease: 'power3.in', onComplete: onHit })
+        // hold at contact, then drift back
+        .to(body.position, { x: local.x * 0.92, y: local.y * 0.92, duration: 0.14 / ts, ease: 'power1.out' })
+        .to(body.position, { x: 0, y: 0, z: 0, duration: (ret * 1.2) / ts, ease: 'power2.inOut' });
     });
   }
 
@@ -614,18 +726,18 @@ export class Table {
     return { x: (v.x * 0.5 + 0.5) * window.innerWidth, y: (-v.y * 0.5 + 0.5) * window.innerHeight };
   }
 
-  private floatAtPlayer(pid: number, text: string, kind: 'damage' | 'heal'): void {
+  private floatAtPlayer(pid: number, text: string, kind: 'damage' | 'heal', big = false): void {
     const w = this.playerWorld(pid);
     if (!w) return;
     const s = this.toScreen(w);
-    floatText(s.x, s.y - 40, text, kind);
+    floatText(s.x, s.y - 40, text, kind, big);
   }
 
-  private floatAtCard(id: number, text: string): void {
+  private floatAtCard(id: number, text: string, big = false): void {
     const w = this.cardWorld(id);
     if (!w) return;
     const s = this.toScreen(w);
-    floatText(s.x, s.y, text, 'damage');
+    floatText(s.x, s.y, text, 'damage', big);
   }
 
   private banner(text: string): void {

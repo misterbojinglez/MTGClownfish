@@ -205,7 +205,7 @@ stage.onTick(() => {
     const w = table.playerWorld(p.id);
     if (w) screen.set(p.id, table.toScreen(new THREE.Vector3(w.x, w.y, w.z)));
   }
-  hud.updatePlayers(s, table.localId, screen, table.targetablePlayers());
+  hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers());
 });
 
 bridge.connect();

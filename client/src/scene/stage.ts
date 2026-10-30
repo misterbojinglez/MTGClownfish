@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import gsap from 'gsap';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -61,6 +62,18 @@ export class Stage {
   onTick(fn: (dt: number, t: number) => void): () => void {
     this.tickers.add(fn);
     return () => this.tickers.delete(fn);
+  }
+
+  /** A quick zoom toward the table and back, for heavy hits; strength ~0–1. */
+  punch(strength: number): void {
+    const cam = this.camera;
+    const peak = 1 + 0.05 * Math.min(1, strength);
+    const st = { z: cam.zoom };
+    const apply = () => {
+      cam.zoom = st.z;
+      cam.updateProjectionMatrix();
+    };
+    gsap.timeline().to(st, { z: peak, duration: 0.08, ease: 'power2.out', onUpdate: apply }).to(st, { z: 1, duration: 0.45, ease: 'power2.inOut', onUpdate: apply });
   }
 
   /** A short camera jolt for heavy hits; strength ~0.2–1. */
