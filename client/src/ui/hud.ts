@@ -516,8 +516,8 @@ export class Hud {
             if (picked.length < max) picked.push(i);
           }
           refresh();
-          // single picks with no minimum ambiguity resolve immediately
-          if (max === 1 && min === 1 && picked.length === 1 && !hasCards) done([...picked]);
+          // a single pick from a text list (which ability, which mode) resolves on the click
+          if (max === 1 && picked.length === 1 && !hasCards) done([...picked]);
         };
         // double-clicking a card takes it and confirms, when that alone is a complete answer
         el.ondblclick = () => {

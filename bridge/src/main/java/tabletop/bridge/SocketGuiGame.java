@@ -167,6 +167,33 @@ public class SocketGuiGame extends AbstractGuiGame {
         session.send(msg);
     }
 
+    /** Why a land in hand can't be played right now, or null if it can (or isn't a land). */
+    private String landPlayBlocked(final CardView view) {
+        try {
+            if (view == null || !view.getCurrentState().isLand()) {
+                return null;
+            }
+            final forge.game.Game game = getGameView().getGame();
+            final Card land = game == null ? null : game.findById(view.getId());
+            if (land == null) {
+                return null;
+            }
+            final forge.game.player.Player p = land.getController();
+            if (!game.getPhaseHandler().isPlayerTurn(p)) {
+                return "Lands can only be played on your own turn.";
+            }
+            if (p.getLandsPlayedThisTurn() >= p.getMaxLandPlays() && !p.getMaxLandPlaysInfinite()) {
+                return "You've already played a land this turn.";
+            }
+            if (!p.canCastSorcery()) {
+                return "Lands can only be played in a main phase while the stack is empty.";
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     /** A request to the player, tagged with the spell or ability that's asking (if one is resolving). */
     private JsonElement ask(final String kind, final JsonObject req) {
         req.add("source", resolvingSource());
@@ -430,6 +457,13 @@ public class SocketGuiGame extends AbstractGuiGame {
             return null;
         }
         if (abilities.size() == 1) {
+            // A land that can't be played right now offers only its other ability (cycling, channel...);
+            // say why instead of silently starting that
+            final String blocked = landPlayBlocked(hostCard);
+            final String only = abilities.get(0).getDescription();
+            if (blocked != null && only != null && !only.startsWith("Play land")) {
+                return ask(blocked + "\n\nUse " + only + " instead?", hostCard, "Yes", "No") ? abilities.get(0) : null;
+            }
             return abilities.get(0);
         }
         final List<SpellAbilityView> chosen = pick("Choose an ability", 0, 1, abilities, null, hostCard);
