@@ -33,15 +33,21 @@ export class Input {
   private pick(e: PointerEvent): number | null {
     this.ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
     this.ray.setFromCamera(this.ndc, this.stage.camera);
+    // 1. the popped-up hand card itself (it's wider than its slot)
+    const hovered = this.hovered != null ? this.table.cards.get(this.hovered) : undefined;
+    if (hovered && this.table.isLocalHand(hovered.id) && this.ray.intersectObjects(hovered.meshes, false).length) return hovered.id;
+    // 2. hand slots, which never move under the pointer
+    const hand = this.ray.intersectObjects(this.table.handZoneMeshes(), false);
+    if (hand.length) return hand[0].object.userData.cardId as number;
+    // 3. the stack and the table, nearest first
     const hits = this.ray.intersectObjects(this.table.pickables(), false);
-    // hand and stack cards sit in front of the table; prefer whatever is nearest the camera
     return hits.length ? (hits[0].object.userData.cardId as number) : null;
   }
 
   private onMove(e: PointerEvent): void {
     if (this.drag) {
       const dy = this.drag.startY - e.clientY;
-      if (Math.abs(dy) > 8 || Math.abs(e.clientX - this.drag.startX) > 8) this.drag.moved = true;
+      if (Math.hypot(dy, e.clientX - this.drag.startX) > 24) this.drag.moved = true;
       const obj = this.table.cards.get(this.drag.id);
       if (obj && this.drag.moved) {
         obj.body.position.y = Math.max(0, dy / 40);

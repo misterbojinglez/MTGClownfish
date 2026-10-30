@@ -38,7 +38,7 @@ function shapeGeometry(w: number, h: number, r: number): THREE.ShapeGeometry {
 const FACE_GEO = shapeGeometry(CARD_W, CARD_H, RADIUS);
 const EDGE_GEO = new THREE.ExtrudeGeometry(cardShape(CARD_W, CARD_H, RADIUS), { depth: 0.01, bevelEnabled: false, curveSegments: 6 });
 EDGE_GEO.translate(0, 0, -0.005);
-const GLOW_GEO = new THREE.PlaneGeometry(CARD_W * 1.42, CARD_H * 1.32);
+const GLOW_GEO = new THREE.PlaneGeometry(CARD_W * 1.3, CARD_H * 1.21);
 
 let glowTex: THREE.Texture | null = null;
 function glowTexture(): THREE.Texture {
@@ -47,10 +47,10 @@ function glowTexture(): THREE.Texture {
   c.width = 256;
   c.height = 340;
   const g = c.getContext('2d')!;
-  g.filter = 'blur(14px)';
+  g.filter = 'blur(7px)';
   g.strokeStyle = '#fff';
-  g.lineWidth = 22;
-  roundRect(g, 44, 44, 168, 252, 18);
+  g.lineWidth = 12;
+  roundRect(g, 30, 30, 196, 280, 14);
   g.stroke();
   glowTex = new THREE.CanvasTexture(c);
   return glowTex;
@@ -60,14 +60,17 @@ export type Highlight = 'none' | 'playable' | 'autoPay' | 'selectable' | 'chosen
 
 const HIGHLIGHT_COLORS: Record<Highlight, THREE.Color> = {
   none: new THREE.Color(0, 0, 0),
-  playable: new THREE.Color('#3aa6ff').multiplyScalar(2.2),
-  autoPay: new THREE.Color('#7fd0ff').multiplyScalar(2.6),
-  selectable: new THREE.Color('#ffd34a').multiplyScalar(2.0),
-  chosen: new THREE.Color('#ff9a2e').multiplyScalar(2.6),
-  attacking: new THREE.Color('#ff4a3a').multiplyScalar(2.2),
-  blocking: new THREE.Color('#d9d9ff').multiplyScalar(1.8),
-  target: new THREE.Color('#ff5a5a').multiplyScalar(2.4),
+  playable: new THREE.Color('#3aa6ff').multiplyScalar(1.5),
+  autoPay: new THREE.Color('#7fd0ff').multiplyScalar(1.7),
+  selectable: new THREE.Color('#ffd34a').multiplyScalar(1.4),
+  chosen: new THREE.Color('#ff9a2e').multiplyScalar(1.8),
+  attacking: new THREE.Color('#ff4a3a').multiplyScalar(1.5),
+  blocking: new THREE.Color('#d9d9ff').multiplyScalar(1.2),
+  target: new THREE.Color('#ff5a5a').multiplyScalar(1.6),
 };
+
+/** Plain hover (nothing to do with the card) is a soft neutral rim, so blue always means playable. */
+const HOVER_COLOR = new THREE.Color('#fff4dc').multiplyScalar(0.7);
 
 /** Shared GLSL that eats the card away along noise with a glowing rim (death, exile). */
 function addDissolve(mat: THREE.MeshStandardMaterial, uniforms: { uDissolve: { value: number }; uEdge: { value: THREE.Color } }): void {
@@ -126,8 +129,8 @@ export class CardObject {
     this.id = state.id;
     this.state = state;
 
-    this.frontMat = new THREE.MeshStandardMaterial({ map: cardBackTexture(), roughness: 0.48, metalness: 0.05 });
-    this.backMat = new THREE.MeshStandardMaterial({ map: cardBackTexture(), roughness: 0.55, metalness: 0.05 });
+    this.frontMat = new THREE.MeshStandardMaterial({ map: cardBackTexture(), emissiveMap: cardBackTexture(), emissive: 0xffffff, roughness: 0.6, metalness: 0 });
+    this.backMat = new THREE.MeshStandardMaterial({ map: cardBackTexture(), emissiveMap: cardBackTexture(), emissive: 0xffffff, roughness: 0.6, metalness: 0 });
     addDissolve(this.frontMat, this.dissolve);
     addDissolve(this.backMat, this.dissolve);
 
@@ -178,12 +181,14 @@ export class CardObject {
       this.faceKey = key;
       if (key === 'back') {
         this.frontMat.map = cardBackTexture();
+        this.frontMat.emissiveMap = cardBackTexture();
         this.frontMat.needsUpdate = true;
       } else {
         const want = key;
         cardFaceTexture(state).then((tex) => {
           if (this.faceKey !== want) return;
           this.frontMat.map = tex;
+          this.frontMat.emissiveMap = tex;
           this.frontMat.needsUpdate = true;
         });
       }
@@ -234,8 +239,19 @@ export class CardObject {
     this.badgeTex.needsUpdate = true;
   }
 
-  setShadow(on: boolean): void {
-    for (const m of [this.front, this.back, this.edge]) m.castShadow = on;
+  /**
+   * Table cards take the scene's light and shadow; hand and stack cards (screen space) show the
+   * printed card at its true colours, untouched by lighting or tone mapping.
+   */
+  setSpace(onTable: boolean): void {
+    for (const m of [this.front, this.back, this.edge]) m.castShadow = onTable;
+    for (const mat of [this.frontMat, this.backMat]) {
+      mat.color.setScalar(onTable ? 0.62 : 0);
+      mat.emissiveIntensity = onTable ? 0.42 : 1;
+      if (mat.toneMapped === onTable) continue;
+      mat.toneMapped = onTable;
+      mat.needsUpdate = true;
+    }
   }
 
   setHighlight(h: Highlight): void {
@@ -253,7 +269,7 @@ export class CardObject {
     this.time += dt;
     const target = this.highlight === 'none' && !this.hovered ? 0 : 1;
     this.glowStrength += (target - this.glowStrength) * Math.min(1, dt * 10);
-    const color = this.highlight === 'none' ? HIGHLIGHT_COLORS.playable.clone().multiplyScalar(0.55) : HIGHLIGHT_COLORS[this.highlight];
+    const color = this.highlight === 'none' ? HOVER_COLOR : HIGHLIGHT_COLORS[this.highlight];
     const pulse = 0.78 + 0.22 * Math.sin(this.time * 4.2);
     this.glowMat.color.copy(color).multiplyScalar(this.glowStrength * pulse);
     this.glow.visible = this.glowStrength > 0.01;

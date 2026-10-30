@@ -70,9 +70,13 @@ export const HAND = {
   maxDelta: 3.6,
   scale: 0.98,
   overlapTilt: -7,
-  hoverLift: 3.1,
-  hoverScale: 1.55,
+  hoverScale: 1.5,
+  /** half the visible height at the hand's distance (34° FOV): the popped card stops just inside the screen */
+  screenHalfH: Math.tan(THREE.MathUtils.degToRad(17)) * 26,
 };
+
+/** How far a hovered hand card rises: enough to show the whole card, no further. */
+const HOVER_LIFT = -HAND.screenHalfH + (CARD_H * HAND.hoverScale) / 2 + 0.3 - HAND.baseY;
 
 const OPP_HAND = { distance: 30, baseY: 9.9, radius: 40, fitAngle: 22, maxDelta: 3.0, scale: 0.6 };
 const STACK_ANCHOR = new THREE.Vector3(10.2, 2.4, -24);
@@ -294,8 +298,8 @@ function layoutLocalHand(ids: number[], hovered: number | null, out: Map<number,
     const a = THREE.MathUtils.degToRad(deg);
     const isHover = i === hi;
     const x = Math.sin(a) * HAND.radius;
-    const y = HAND.baseY + (Math.cos(a) - 1) * HAND.radius + (isHover ? HAND.hoverLift : 0);
-    const z = -HAND.distance + i * 0.02 + (isHover ? 1.5 : 0);
+    const y = HAND.baseY + (Math.cos(a) - 1) * HAND.radius + (isHover ? HOVER_LIFT : 0);
+    const z = -HAND.distance + i * 0.02 + (isHover ? 0.6 : 0);
     out.set(id, {
       space: 'rig',
       pos: new THREE.Vector3(x, y, z),

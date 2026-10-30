@@ -61,6 +61,10 @@ export class Table {
   private readonly libraries = new Map<number, THREE.Mesh>();
   private readonly flying = new Set<number>();
   private layout = new Map<number, Placement>();
+  /** Invisible, unmoving click targets for hand cards at their resting slots. */
+  private readonly handZones = new Map<number, THREE.Mesh>();
+  private readonly zoneGeo = new THREE.PlaneGeometry(CARD_W, CARD_H * 2);
+  private readonly zoneMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
 
   constructor(private readonly stage: Stage) {
     this.fx = new Fx(stage);
@@ -114,6 +118,7 @@ export class Table {
 
     this.layout = computeLayout(state, this.localId, { hoveredHand: this.hoveredHand, handOrder: this.handOrder });
     this.updateLibraries(state);
+    this.updateHandZones();
 
     const tasks: Promise<void>[] = [];
     const deaths = new Set<number>();
@@ -145,11 +150,50 @@ export class Table {
   /** Re-place everything without animation pacing (hover, selection changes). */
   relayout(duration = 0.18): void {
     if (!this.state) return;
+    this.updateHandZones();
     this.layout = computeLayout(this.state, this.localId, { hoveredHand: this.hoveredHand, handOrder: this.handOrder });
     for (const [id, obj] of this.cards) {
       const t = this.layout.get(id);
       if (t && !this.flying.has(id)) this.settle(obj, t, duration);
     }
+  }
+
+  /**
+   * Hand hit zones sit where each card rests (as if nothing were hovered) and reach up over the popped-up
+   * card, so a hovered card never slides out from under the pointer and clicks land on the card you aimed at.
+   */
+  private updateHandZones(): void {
+    const me = this.state?.players.find((p) => p.id === this.localId);
+    const hand = new Set(me?.zones.Hand ?? []);
+    for (const [id, zone] of this.handZones) {
+      if (!hand.has(id)) {
+        zone.removeFromParent();
+        this.handZones.delete(id);
+      }
+    }
+    if (!this.state || hand.size === 0) return;
+    const rest = computeLayout(this.state, this.localId, { hoveredHand: null, handOrder: this.handOrder });
+    for (const id of hand) {
+      const p = rest.get(id);
+      if (!p) continue;
+      let zone = this.handZones.get(id);
+      if (!zone) {
+        zone = new THREE.Mesh(this.zoneGeo, this.zoneMat);
+        zone.userData.cardId = id;
+        this.stage.cameraRig.add(zone);
+        this.handZones.set(id, zone);
+      }
+      zone.position.copy(p.pos);
+      zone.rotation.copy(p.rot);
+      zone.scale.setScalar(p.scale);
+      // shift up half a card so the zone covers the resting card and the space it pops into
+      zone.translateY((CARD_H / 2) * p.scale);
+      zone.position.z += 0.001 * p.order;
+    }
+  }
+
+  handZoneMeshes(): THREE.Object3D[] {
+    return [...this.handZones.values()];
   }
 
   private visibleCardIds(state: GameState): Set<number> {
@@ -178,7 +222,7 @@ export class Table {
 
   /** Tween a card to its placement within its current space (reflow, tap, hover). */
   private settle(obj: CardObject, p: Placement, duration: number): void {
-    obj.setShadow(p.space === 'table');
+    obj.setSpace(p.space === 'table');
     const parent = this.parentFor(p.space);
     if (obj.root.parent !== parent) parent.attach(obj.root);
     const root = obj.root;
@@ -241,7 +285,7 @@ export class Table {
         },
         onComplete: () => {
           this.flying.delete(obj.id);
-          obj.setShadow(p.space === 'table');
+          obj.setSpace(p.space === 'table');
           this.parentFor(p.space).attach(root);
           root.position.copy(p.pos);
           root.quaternion.setFromEuler(p.rot);
@@ -586,9 +630,10 @@ export class Table {
   }
 
   /** Hit-test helpers for input. */
+  /** Everything clickable except local hand cards, which are hit through their zones. */
   pickables(): THREE.Object3D[] {
     const out: THREE.Object3D[] = [];
-    for (const c of this.cards.values()) out.push(...c.meshes);
+    for (const c of this.cards.values()) if (!this.handZones.has(c.id)) out.push(...c.meshes);
     return out;
   }
 
