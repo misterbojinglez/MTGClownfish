@@ -91,7 +91,8 @@ public final class BridgeMain {
         final JsonArray deckNames = new JsonArray();
         RegisteredPlayer human = null;
         for (int i = 0; i < playerCount; i++) {
-            final Deck deck = commander ? DeckgenUtil.getRandomCommanderPreconDeck() : DeckgenUtil.getRandomPreconDeck();
+            final Deck deck = i == 0 && msg.has("deck") ? deckFromList(msg.get("deck").getAsString())
+                    : commander ? DeckgenUtil.getRandomCommanderPreconDeck() : DeckgenUtil.getRandomPreconDeck();
             final RegisteredPlayer rp = commander ? RegisteredPlayer.forCommander(deck) : new RegisteredPlayer(deck);
             if (i == 0) {
                 rp.setPlayer(GamePlayerUtil.getGuiPlayer("You", 0, 0, false));
@@ -121,6 +122,26 @@ public final class BridgeMain {
         rules.setAppliedVariants(EnumSet.of(gameType));
         rules.setGamesPerMatch(1);
         match.startMatch(rules, EnumSet.of(gameType), players, human, gui);
+    }
+
+    /** A plain "4 Forest" per line deck list (an optional "Commander:" line names the commander). */
+    private static Deck deckFromList(final String list) {
+        final Deck deck = new Deck("Custom");
+        for (final String raw : list.split("\\r?\\n")) {
+            final String line = raw.trim();
+            if (line.isEmpty()) { continue; }
+            if (line.toLowerCase().startsWith("commander:")) {
+                deck.getOrCreate(forge.deck.DeckSection.Commander).add(line.substring(10).trim(), 1);
+                continue;
+            }
+            final java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(\\d+)x?\\s+(.+)$").matcher(line);
+            if (m.matches()) {
+                deck.getMain().add(m.group(2), Integer.parseInt(m.group(1)));
+            } else {
+                deck.getMain().add(line, 1);
+            }
+        }
+        return deck;
     }
 
     /** A click from the client. Button 3 means right-click, which Forge reads as "undo this declaration". */

@@ -43,8 +43,9 @@ export class Bridge {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
   }
 
-  start(format: 'constructed' | 'commander', players: number): void {
-    this.send({ type: 'start', format, players });
+  /** deck: optional "4 Forest" per line list for the local player (others get precons) */
+  start(format: 'constructed' | 'commander', players: number, deck?: string): void {
+    this.send({ type: 'start', format, players, ...(deck ? { deck } : {}) });
   }
 
   act(a: Action): void {

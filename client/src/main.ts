@@ -43,6 +43,20 @@ function refreshPrompt(): void {
   if (!table.state) return;
   hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0);
   hud.setPhase(table.state, table.localId);
+  refreshBrowser();
+}
+
+/** Selectable cards that aren't on the table (library search etc.) get the browser overlay. */
+function refreshBrowser(): void {
+  const s = table.state!;
+  const offTable = table.selection.cards.filter((id) => !table.cards.has(id) && s.cards[id]);
+  const chosen = new Set(table.selection.chosen.map((r) => r?.card).filter((x): x is number => x != null));
+  hud.setBrowser(
+    offTable.length ? offTable.map((id) => s.cards[id]) : null,
+    chosen,
+    table.prompt.message ?? '',
+    (id) => bridge.act({ action: 'card', id }),
+  );
 }
 
 async function handle(msg: ServerMsg): Promise<void> {

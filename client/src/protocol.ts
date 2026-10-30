@@ -130,6 +130,8 @@ export interface UpdateMsg {
 export interface ChoiceOption {
   label: string;
   card?: number;
+  /** the card's details when it comes from a zone the client doesn't track (library, hidden hand) */
+  cardData?: CardState;
   ability?: number;
   player?: number;
   entity?: number;

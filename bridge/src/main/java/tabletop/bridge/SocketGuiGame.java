@@ -75,6 +75,13 @@ public class SocketGuiGame extends AbstractGuiGame {
         }
         // only cards whose JSON changed travel; the client keeps the rest
         final JsonObject allCards = state.remove("cards").getAsJsonObject();
+        // cards offered for selection from hidden zones (searching a library, looking at a hand) must reach
+        // the client too, or it has nothing to show the player
+        for (final CardView cv : getSelection().cards()) {
+            if (cv != null && !allCards.has(String.valueOf(cv.getId()))) {
+                allCards.add(String.valueOf(cv.getId()), Serializer.card(cv, mayView(cv)));
+            }
+        }
         final JsonObject changed = new JsonObject();
         for (final Map.Entry<String, JsonElement> e : allCards.entrySet()) {
             final String json = e.getValue().toString();
@@ -247,6 +254,8 @@ public class SocketGuiGame extends AbstractGuiGame {
         String label = display != null ? display.apply(item) : null;
         if (item instanceof CardView c) {
             o.addProperty("card", c.getId());
+            // full details, because choices often come from zones the client never sees (library, hands)
+            o.add("cardData", Serializer.card(c, true));
             if (label == null) { label = c.getName(); }
         } else if (item instanceof SpellAbilityView sa) {
             o.addProperty("ability", sa.getId());

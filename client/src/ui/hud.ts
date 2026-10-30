@@ -277,6 +277,44 @@ export class Hud {
     });
   }
 
+  // ---- card browser -------------------------------------------------------------------------------
+
+  private browser: HTMLDivElement | null = null;
+  private browserKey = '';
+
+  /**
+   * Arena-style browser for selections over cards that aren't on the table (searching a library,
+   * looking at a hand). Clicking a card toggles it through the normal card action; the prompt's
+   * OK / Cancel buttons finish the selection.
+   */
+  setBrowser(cards: CardState[] | null, chosen: Set<number>, title: string, onPick: (id: number) => void): void {
+    if (!cards || cards.length === 0) {
+      this.browser?.remove();
+      this.browser = null;
+      this.browserKey = '';
+      return;
+    }
+    const key = cards.map((c) => c.id).join(',');
+    if (!this.browser || key !== this.browserKey) {
+      this.browser?.remove();
+      this.browserKey = key;
+      const ov = h('div', 'browser');
+      const head = h('div', 'browser-title');
+      const row = h('div', cards.length > 8 ? 'browser-cards many' : 'browser-cards');
+      for (const c of cards) {
+        const thumb = this.cardThumb(c);
+        thumb.dataset.id = String(c.id);
+        thumb.onclick = () => onPick(c.id);
+        row.append(thumb);
+      }
+      ov.append(head, row);
+      this.root.append(ov);
+      this.browser = ov;
+    }
+    this.browser.querySelector('.browser-title')!.textContent = title;
+    this.browser.querySelectorAll<HTMLElement>('.thumb').forEach((el) => el.classList.toggle('picked', chosen.has(Number(el.dataset.id))));
+  }
+
   // ---- toasts -------------------------------------------------------------------------------------
 
   toast(text: string, kind = ''): void {
@@ -304,7 +342,7 @@ export class Hud {
 
       if (req.kind === 'confirm') {
         const row = h('div', 'modal-buttons');
-        if (req.card != null && state?.cards[req.card]) panel.insertBefore(this.cardThumb(state.cards[req.card]), row);
+        if (req.card != null && state?.cards[req.card]) panel.append(this.cardThumb(state.cards[req.card]));
         (req.buttons ?? ['Yes', 'No']).forEach((label, i) => {
           const b = h('button', i === 0 ? 'main-btn wide' : 'sub-btn wide', label);
           b.onclick = () => done(i);
@@ -342,7 +380,8 @@ export class Hud {
       if (minRem <= 0 && maxRem <= 0) min = max = n;
     }
     const picked: number[] = [];
-    const hasCards = options.some((o) => o.card != null && state?.cards[o.card]?.visible);
+    const cardOf = (o: ChoiceOption): CardState | undefined => (o.card != null ? state?.cards[o.card] ?? o.cardData : undefined);
+    const hasCards = options.some((o) => cardOf(o)?.visible);
     const list = h('div', hasCards ? 'choice-cards' : 'choice-list');
     const items: HTMLElement[] = [];
     const confirm = h('button', 'main-btn wide', reveal ? 'OK' : 'Confirm');
@@ -359,7 +398,7 @@ export class Hud {
     };
 
     options.forEach((o: ChoiceOption, i) => {
-      const card = o.card != null ? state?.cards[o.card] : undefined;
+      const card = cardOf(o);
       let el: HTMLElement;
       if (hasCards && card?.visible) {
         el = this.cardThumb(card);
