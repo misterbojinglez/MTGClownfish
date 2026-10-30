@@ -956,3 +956,364 @@ button {
   align-self: stretch;
   max-width: none;
 }
+
+/* ---- game setup & deck picker ---- */
+
+.overlay.setup {
+  gap: 22px;
+}
+
+.setup-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.setup-head h2 {
+  font-family: Cinzel, Georgia, serif;
+  font-size: 34px;
+  margin: 0;
+  color: #ffe2a0;
+  letter-spacing: 0.05em;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--gold-dim);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.seg button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 16px;
+  font-weight: 600;
+}
+
+.seg button.on {
+  background: rgba(214, 178, 94, 0.22);
+  color: var(--text);
+}
+
+.seats {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(620px, 92vw);
+}
+
+.seat-row {
+  display: grid;
+  grid-template-columns: 44px 110px 1fr;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(20, 16, 30, 0.7);
+  border: 1px solid rgba(214, 178, 94, 0.18);
+}
+
+.seat-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: Cinzel, Georgia, serif;
+  font-weight: 700;
+  font-size: 20px;
+  background: radial-gradient(circle at 35% 30%, hsl(var(--hue), 55%, 52%), hsl(var(--hue), 50%, 18%));
+  border: 2px solid var(--gold);
+}
+
+.seat-who {
+  text-align: left;
+}
+
+.seat-name {
+  font-weight: 700;
+}
+
+.seat-role {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.deck-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid rgba(214, 178, 94, 0.3);
+  background: linear-gradient(180deg, rgba(42, 35, 64, 0.85), rgba(16, 13, 24, 0.92));
+  color: var(--text);
+  text-align: left;
+  transition: border-color 0.15s, transform 0.12s;
+}
+
+.deck-tile:hover {
+  border-color: var(--gold);
+  transform: translateY(-1px);
+}
+
+.deck-tile.current {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold), 0 0 18px rgba(214, 178, 94, 0.35);
+}
+
+.deck-art {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 60px;
+  border-radius: 8px;
+  background: #1d1828 center / cover no-repeat;
+  display: grid;
+  place-items: center;
+  font-family: Cinzel, Georgia, serif;
+  font-size: 26px;
+  color: var(--gold);
+}
+
+.deck-art.random {
+  background: radial-gradient(circle, #3a2f5c, #120f1c);
+}
+
+.deck-art.plus {
+  background: transparent;
+  border: 1px dashed var(--gold-dim);
+}
+
+.deck-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.deck-name {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deck-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pips {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.pip {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+}
+
+.setup-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.deck-picker {
+  width: min(860px, 92vw);
+}
+
+.deck-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px;
+  width: 100%;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 0 1 auto !important;
+  padding: 2px;
+}
+
+.deck-cell {
+  position: relative;
+}
+
+.deck-x {
+  position: absolute;
+  top: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--gold-dim);
+  background: rgba(10, 8, 14, 0.85);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.deck-x {
+  right: 34px;
+}
+
+.deck-x.del {
+  right: 6px;
+}
+
+.deck-cell:hover .deck-x {
+  opacity: 1;
+}
+
+.deck-x:hover {
+  color: var(--text);
+  border-color: var(--gold);
+}
+
+.deck-paste {
+  width: min(720px, 92vw);
+  align-items: stretch !important;
+}
+
+.paste-hint {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: left;
+  line-height: 1.45;
+}
+
+.paste-hint code {
+  color: var(--text);
+}
+
+.paste-name,
+.paste-area,
+.cmd-pick select {
+  font: inherit;
+  color: var(--text);
+  background: #0d0b12;
+  border: 1px solid var(--gold-dim);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+
+.paste-area {
+  height: 38vh;
+  min-height: 160px;
+  resize: vertical;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  flex-shrink: 1 !important;
+}
+
+.paste-name:focus,
+.paste-area:focus {
+  outline: none;
+  border-color: var(--gold);
+}
+
+.cmd-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.cmd-pick:empty,
+.paste-report:empty {
+  display: none;
+}
+
+.paste-report {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.paste-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.paste-checking,
+.paste-note {
+  color: var(--muted);
+}
+
+.paste-warn {
+  color: #ffc46a;
+}
+
+.paste-bad {
+  color: var(--red);
+}
+
+/* ---- camera view bar (multiplayer) ---- */
+
+.view-bar {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  display: none;
+  gap: 6px;
+  align-items: center;
+  z-index: 3;
+}
+
+.view-bar.show {
+  display: flex;
+}
+
+.view-btn {
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 15px;
+  border: 1px solid var(--gold-dim);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.view-btn:hover {
+  color: var(--text);
+  border-color: var(--gold);
+}
+
+.view-btn.on {
+  color: #1b1405;
+  background: linear-gradient(180deg, #f0cf7c, #c49a3f);
+  border-color: #f0cf7c;
+}
+
+.view-btn.auto {
+  margin-left: 8px;
+}
+
+.view-btn.auto.on {
+  color: #e9f5ff;
+  background: linear-gradient(180deg, #3aa6ff, #1a5fb0);
+  border-color: #9fd4ff;
+}
+
+.plate.edge {
+  opacity: 0.82;
+  transform: translate(-50%, -50%) scale(0.86);
+}

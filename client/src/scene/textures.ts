@@ -9,6 +9,7 @@ import type { CardState } from '../protocol';
 interface Resolved {
   normal: string;
   large: string;
+  art: string;
 }
 
 const resolved = new Map<string, Resolved | null>();
@@ -29,7 +30,7 @@ function pickImages(card: any, faceName: string | undefined): Resolved | null {
   const faces: any[] = card.card_faces ?? [];
   const face = faces.find((f) => f.name === faceName && f.image_uris) ?? null;
   const uris = face?.image_uris ?? card.image_uris ?? faces[0]?.image_uris;
-  return uris ? { normal: uris.normal, large: uris.large ?? uris.normal } : null;
+  return uris ? { normal: uris.normal, large: uris.large ?? uris.normal, art: uris.art_crop ?? uris.normal } : null;
 }
 
 async function flush(): Promise<void> {
@@ -152,6 +153,12 @@ export async function cardFaceTexture(card: CardState): Promise<THREE.Texture> {
 export async function cardImageUrl(card: CardState): Promise<string | null> {
   const r = await resolveCard(card);
   return r?.normal ?? null;
+}
+
+/** Just the illustration, for deck tiles. */
+export async function cardArtUrl(card: CardState): Promise<string | null> {
+  const r = await resolveCard(card);
+  return r?.art ?? null;
 }
 
 export async function cardZoomUrl(card: CardState): Promise<string | null> {

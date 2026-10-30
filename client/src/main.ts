@@ -5,18 +5,21 @@ import type { RequestMsg, ServerMsg, UpdateMsg } from './protocol';
 import { Stage } from './scene/stage';
 import { Table } from './game/table';
 import { Input } from './game/input';
+import { CameraDirector } from './game/camera';
 import { Hud } from './ui/hud';
 import { sfx } from './audio';
+import { DeckSetup, type GameSetup } from './ui/decks';
 
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement);
 const table = new Table(stage);
 const hud = new Hud();
+const director = new CameraDirector(stage);
 table.onOpponentCast = (card, who) => hud.revealCast(card, `${who} casts ${card.name}`, 2200);
 // ?bridge=7778 points the client at another bridge instance (used for automated testing)
 const bridgePort = new URLSearchParams(location.search).get('bridge') ?? '7777';
 const bridge = new Bridge(`ws://127.0.0.1:${bridgePort}`);
 
-let lastFormat: { format: 'constructed' | 'commander'; players: number } = { format: 'constructed', players: 2 };
+let lastSetup: GameSetup = { format: 'constructed', players: 2, decks: [] };
 let gameOverShown = false;
 
 // Every server message runs in arrival order; updates await their animations so the
@@ -68,6 +71,7 @@ async function handle(msg: ServerMsg): Promise<void> {
       break;
     case 'gameStarted':
       table.reset();
+      director.reset();
       hud.resetPlayers();
       table.localId = msg.you[0];
       gameOverShown = false;
@@ -117,7 +121,10 @@ function maybeAutoPay(msg: UpdateMsg): void {
 
 async function applyUpdate(msg: UpdateMsg): Promise<void> {
   maybeAutoPay(msg);
-  await table.apply(msg);
+  const animating = table.apply(msg);
+  // the camera turns toward what's about to happen while it animates
+  director.update(table.state!, table.localId, msg.events, msg.selection);
+  await animating;
   refreshPrompt();
   if (msg.state.gameOver) showGameOver();
 }
@@ -135,13 +142,23 @@ function showGameOver(): void {
   const me = s.players.find((p) => p.id === table.localId);
   const won = !!me && s.winner === me.name;
   setTimeout(() => (won ? sfx.victory() : sfx.defeat()), 700);
-  setTimeout(() => hud.gameOver(won, s.winner, () => startGame(lastFormat.format, lastFormat.players)), 900);
+  setTimeout(() => hud.gameOver(won, s.winner, () => startGame(lastSetup)), 900);
 }
 
-function startGame(format: 'constructed' | 'commander', players: number): void {
-  lastFormat = { format, players };
+function startGame(setup: GameSetup): void {
+  lastSetup = setup;
   hud.loading('Starting game…');
-  bridge.start(format, players);
+  bridge.start(setup.format, setup.players, undefined, setup.decks);
+}
+
+const deckSetup = new DeckSetup(document.getElementById('hud')!, bridge);
+
+function showMenu(): void {
+  hud.menu(async (format, players, title) => {
+    const setup = await deckSetup.open(format, players, title);
+    if (setup) startGame(setup);
+    else showMenu();
+  });
 }
 
 bridge.onMessage((msg) => {
@@ -154,7 +171,11 @@ bridge.onStatus((connected) => hud.setConnection(connected));
 hud.bind({
   ok: () => bridge.act({ action: 'ok' }),
   cancel: () => bridge.act({ action: 'cancel' }),
-  player: (id) => bridge.act({ action: 'player', id }),
+  // a plate click picks that player when the engine is asking for one; otherwise it looks at their side
+  player: (id) => {
+    if (director.multiplayer && !table.targetablePlayers().has(id)) director.focusPlayer(id);
+    else bridge.act({ action: 'player', id });
+  },
   passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
   concede: () => bridge.act({ action: 'concede' }),
 });
@@ -208,8 +229,50 @@ stage.onTick(() => {
   hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers());
 });
 
+// ---- camera views (multiplayer) ----
+function refreshViewBar(): void {
+  if (!director.multiplayer || !table.state) return hud.viewBar(null, viewHandlers);
+  const names = new Map(table.state.players.map((p) => [p.id, p.name]));
+  const showing = director.isShowing('table') ? 'table' : director.seats.find((f) => director.isShowing(f.playerId))?.playerId ?? null;
+  hud.viewBar({ seats: director.seats.map((f) => ({ id: f.playerId, name: names.get(f.playerId) ?? '?', local: f.local })), showing, auto: director.auto }, viewHandlers);
+}
+const viewHandlers = {
+  table: () => director.showTable(),
+  seat: (id: number) => director.focusPlayer(id),
+  auto: (on: boolean) => director.setAuto(on),
+};
+director.onChange = refreshViewBar;
+
+window.addEventListener('keydown', (e) => {
+  if (!director.multiplayer || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.querySelector('.modal') || (e.target as HTMLElement).closest?.('input, textarea, select')) return;
+  if (e.key === '0' || e.key === '`') director.showTable();
+  else if (/^[1-4]$/.test(e.key)) {
+    const seat = director.seats[Number(e.key) - 1];
+    if (seat) director.focusPlayer(seat.playerId);
+  } else if (e.key === 'c' || e.key === 'C') director.setAuto(!director.auto);
+});
+
+// wheel in over a player's side to look at it, wheel out for the whole table
+let wheelAt = 0;
+stage.renderer.domElement.addEventListener(
+  'wheel',
+  (e) => {
+    if (!director.multiplayer) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now - wheelAt < 450 || Math.abs(e.deltaY) < 4) return;
+    wheelAt = now;
+    if (e.deltaY > 0) return director.showTable();
+    const hit = input.tablePoint(e.clientX, e.clientY);
+    const pid = hit ? table.playerAt(hit) : null;
+    if (pid != null) director.focusPlayer(pid);
+  },
+  { passive: false },
+);
+
 bridge.connect();
-hud.menu(startGame);
+showMenu();
 
 // dev-only hook so the headless driver (scratch tooling) can read state and act like a player
-if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, sfx, queue: () => ({ pending: queue.length, draining }), autoPayArmed: () => performance.now() < autoPayUntil };
+if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, sfx, director, queue: () => ({ pending: queue.length, draining }), autoPayArmed: () => performance.now() < autoPayUntil };

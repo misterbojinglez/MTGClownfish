@@ -112,6 +112,14 @@ export class Input {
     if (play) this.handlers.clickCard(d.id, 1);
   }
 
+  /** Where the cursor meets the table top. */
+  tablePoint(clientX: number, clientY: number): THREE.Vector3 | null {
+    this.ndc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+    this.ray.setFromCamera(this.ndc, this.stage.camera);
+    const hit = new THREE.Vector3();
+    return this.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit) ? hit : null;
+  }
+
   /** The point under the cursor at a given distance in front of the camera, in camera space. */
   private pointOnPlane(clientX: number, clientY: number, depth: number): THREE.Vector3 {
     const cam = this.stage.camera;

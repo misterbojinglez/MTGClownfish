@@ -176,13 +176,42 @@ export interface RequestMsg {
   source?: ResolvingSource | null;
 }
 
+/** The engine's reading of a pasted deck list. */
+export interface DeckInfo {
+  type: 'deckInfo';
+  id: number;
+  ok: boolean;
+  /** a commander list that doesn't say which card leads it */
+  needsCommander: boolean;
+  name?: string;
+  /** main deck size (commanders not included) */
+  count?: number;
+  commanders?: string[];
+  colors?: string[];
+  face?: { name: string; set: string; cn: string };
+  unknown: string[];
+  warnings: string[];
+  /** legendary cards in the main deck that could be its commander */
+  candidates: string[];
+  /** why the deck isn't format-legal (it can still be played) */
+  problem?: string;
+}
+
+/** One seat's deck when starting a game: a pasted list, or null for a random precon. */
+export interface SeatDeckSpec {
+  list: string;
+  name?: string;
+  commanders?: string[];
+}
+
 export type ServerMsg =
   | UpdateMsg
   | RequestMsg
   | { type: 'starting'; format: string; decks: string[] }
   | { type: 'gameStarted'; you: number[] }
   | { type: 'notice'; kind: string; text: string | null }
-  | { type: 'pong' };
+  | { type: 'pong' }
+  | DeckInfo;
 
 export type Action =
   | { action: 'ok' | 'cancel' | 'alphaStrike' | 'undo' | 'concede' }

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
-import { avatarAnchor, computeLayout, libraryAnchor, seatsFor, type Placement } from '../scene/layout';
+import { avatarAnchor, computeLayout, libraryAnchor, seatAt, seatRotation, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx } from '../scene/fx';
 import { sfx } from '../audio';
 import type { Stage } from '../scene/stage';
@@ -342,6 +342,12 @@ export class Table {
         duration,
         ease: EASE[key] ?? 'power2.inOut',
         onUpdate: () => {
+          // a card headed for the screen (hand, stack) chases its slot if the camera is moving
+          if (p.space === 'rig') {
+            this.targetWorld(p).decompose(end, endQuat, endScaleV);
+            curve.v2.copy(end);
+            curve.v1.copy(startPos).lerp(end, 0.5).setY(Math.max(startPos.y, end.y) + lift);
+          }
           root.position.copy(curve.getPoint(Math.min(1, st.t)));
           root.quaternion.slerpQuaternions(startQuat, endQuat, Math.min(1, st.t));
           root.scale.setScalar(startScale + (endScaleV.x - startScale) * st.t);
@@ -783,8 +789,7 @@ export class Table {
       mesh.visible = p.zones.LibraryCount > 0;
       mesh.scale.set(scale, height, scale);
       mesh.position.set(anchor.x, height / 2, anchor.z);
-      const seatRot = state.players.length > 2 ? Math.atan2(anchor.x, anchor.z) : 0;
-      mesh.rotation.y = state.players.length > 2 ? seatRot : 0;
+      mesh.rotation.y = seatRotation(state, this.localId, p.id)?.rotY ?? 0;
     }
   }
 
@@ -876,19 +881,7 @@ export class Table {
 
   /** Whose side of the table a point on it belongs to. */
   playerAt(point: THREE.Vector3): number | null {
-    if (!this.state) return null;
-    const seats = seatsFor(this.state, this.localId);
-    if (seats.length === 2) return (point.z < -1.25 ? seats[1] : seats[0]).player.id;
-    let best: number | null = null;
-    let bestDot = -Infinity;
-    for (const seat of seats) {
-      const dot = point.x * Math.sin(seat.rotY) + point.z * Math.cos(seat.rotY);
-      if (dot > bestDot) {
-        bestDot = dot;
-        best = seat.player.id;
-      }
-    }
-    return best;
+    return this.state ? seatAt(this.state, this.localId, point) : null;
   }
 
   targetablePlayers(): Set<number> {

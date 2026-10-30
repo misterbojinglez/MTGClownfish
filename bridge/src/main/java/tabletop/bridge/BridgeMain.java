@@ -71,6 +71,7 @@ public final class BridgeMain {
         final String type = msg.has("type") ? msg.get("type").getAsString() : "";
         switch (type) {
             case "start" -> new Thread(() -> startGame(msg), "bridge-start").start();
+            case "validateDeck" -> new Thread(() -> validateDeck(msg), "bridge-deck").start();
             case "action" -> FThreads.invokeInEdtLater(() -> handleAction(msg));
             case "ping" -> {
                 final JsonObject pong = new JsonObject();
@@ -94,9 +95,17 @@ public final class BridgeMain {
         final List<RegisteredPlayer> players = new ArrayList<>();
         final JsonArray deckNames = new JsonArray();
         RegisteredPlayer human = null;
+        final JsonArray seatDecks = msg.has("decks") && msg.get("decks").isJsonArray() ? msg.getAsJsonArray("decks") : new JsonArray();
         for (int i = 0; i < playerCount; i++) {
-            final Deck deck = i == 0 && msg.has("deck") ? deckFromList(msg.get("deck").getAsString())
-                    : commander ? DeckgenUtil.getRandomCommanderPreconDeck() : DeckgenUtil.getRandomPreconDeck();
+            Deck deck = null;
+            if (i < seatDecks.size() && seatDecks.get(i).isJsonObject()) {
+                deck = pastedDeck(seatDecks.get(i).getAsJsonObject(), commander, i);
+            } else if (i == 0 && msg.has("deck")) {
+                deck = deckFromList(msg.get("deck").getAsString());
+            }
+            if (deck == null) {
+                deck = commander ? DeckgenUtil.getRandomCommanderPreconDeck() : DeckgenUtil.getRandomPreconDeck();
+            }
             final RegisteredPlayer rp = commander ? RegisteredPlayer.forCommander(deck) : new RegisteredPlayer(deck);
             if (i == 0) {
                 rp.setPlayer(GamePlayerUtil.getGuiPlayer("You", 0, 0, false));
@@ -126,6 +135,54 @@ public final class BridgeMain {
         rules.setAppliedVariants(EnumSet.of(gameType));
         rules.setGamesPerMatch(1);
         match.startMatch(rules, EnumSet.of(gameType), players, human, gui);
+    }
+
+    /** {list, commanders?} from the client's deck picker; null (→ a precon) if nothing usable came of it. */
+    private static Deck pastedDeck(final JsonObject d, final boolean commander, final int seat) {
+        final List<String> chosen = new ArrayList<>();
+        if (d.has("commanders") && d.get("commanders").isJsonArray()) {
+            d.getAsJsonArray("commanders").forEach(e -> chosen.add(e.getAsString()));
+        }
+        final DeckImport.Result r = DeckImport.parse(d.has("list") ? d.get("list").getAsString() : "", commander, chosen);
+        if (r.deck == null) {
+            notice("error", "Seat " + (seat + 1) + ": couldn't read that deck list, using a precon instead");
+            return null;
+        }
+        if (d.has("name") && !d.get("name").getAsString().isBlank()) {
+            r.deck.setName(d.get("name").getAsString());
+        }
+        if (!r.unknown.isEmpty()) {
+            notice("message", r.deck.getName() + ": skipped " + r.unknown.size() + " unknown card(s)");
+        }
+        return r.deck;
+    }
+
+    private static void validateDeck(final JsonObject msg) {
+        final boolean commander = msg.has("format") && "commander".equalsIgnoreCase(msg.get("format").getAsString());
+        final List<String> chosen = new ArrayList<>();
+        if (msg.has("commanders") && msg.get("commanders").isJsonArray()) {
+            msg.getAsJsonArray("commanders").forEach(e -> chosen.add(e.getAsString()));
+        }
+        JsonObject out;
+        try {
+            out = DeckImport.describe(DeckImport.parse(msg.get("list").getAsString(), commander, chosen), commander);
+        } catch (final RuntimeException e) {
+            e.printStackTrace();
+            out = new JsonObject();
+            out.addProperty("ok", false);
+            out.addProperty("problem", "Couldn't read the list: " + e.getMessage());
+        }
+        out.addProperty("type", "deckInfo");
+        out.add("id", msg.get("id"));
+        session.send(out);
+    }
+
+    private static void notice(final String kind, final String text) {
+        final JsonObject n = new JsonObject();
+        n.addProperty("type", "notice");
+        n.addProperty("kind", kind);
+        n.addProperty("text", text);
+        session.send(n);
     }
 
     /** A plain "4 Forest" per line deck list (an optional "Commander:" line names the commander). */

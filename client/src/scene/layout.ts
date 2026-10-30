@@ -87,11 +87,24 @@ export interface Seat {
   player: PlayerState;
   regions: Regions;
   piles: typeof LOCAL_PILES;
-  /** rotation (around the table centre) and uniform shrink for 3–4 player tables */
+  /**
+   * Turn around the table centre. Opponent seats are laid out the way Arena shows its opponent (cards
+   * upright to someone looking across from the centre), so a camera yawed by rotY sees one exactly so.
+   */
   rotY: number;
-  shrink: number;
+  /** pushes the seat away from the centre (along its own z) before it is turned */
+  offsetZ: number;
   local: boolean;
 }
+
+/**
+ * Multiplayer seat placement. Everyone gets full-size regions; the camera zooms instead.
+ * You sit at the bottom, then clockwise: left, across, right (3 players: left and right).
+ */
+const MP_LOCAL_OFFSET = 6;
+const MP_ACROSS_OFFSET = -6;
+/** side seats: their creature row's inner edge lands just outside your battlefield's width */
+const MP_SIDE_OFFSET = -24;
 
 export function seatsFor(state: GameState, localId: number): Seat[] {
   const order = [...state.players];
@@ -103,33 +116,100 @@ export function seatsFor(state: GameState, localId: number): Seat[] {
       regions: i === 0 ? LOCAL_REGIONS : OPP_REGIONS,
       piles: i === 0 ? LOCAL_PILES : OPP_PILES,
       rotY: 0,
-      shrink: 1,
+      offsetZ: 0,
       local: i === 0,
     }));
   }
-  // Multiplayer: everyone gets the local layout, shrunk and turned to face their side of the table.
-  // Seats run clockwise from the local player: left, across, right.
-  const angles = rotated.length === 3 ? [0, -Math.PI / 2, Math.PI / 2] : [0, -Math.PI / 2, Math.PI, Math.PI / 2];
-  return rotated.map((p, i) => ({
-    player: p,
-    regions: LOCAL_REGIONS,
-    piles: LOCAL_PILES,
-    rotY: angles[i],
-    shrink: i === 0 ? 0.62 : 0.5,
-    local: i === 0,
-  }));
+  const opp = rotated.length === 3 ? ['left', 'right'] : ['left', 'across', 'right'];
+  return rotated.map((p, i) => {
+    if (i === 0) return { player: p, regions: LOCAL_REGIONS, piles: LOCAL_PILES, rotY: 0, offsetZ: MP_LOCAL_OFFSET, local: true };
+    const where = opp[i - 1];
+    const rotY = where === 'left' ? Math.PI / 2 : where === 'right' ? -Math.PI / 2 : 0;
+    return { player: p, regions: OPP_REGIONS, piles: OPP_PILES, rotY, offsetZ: where === 'across' ? MP_ACROSS_OFFSET : MP_SIDE_OFFSET, local: false };
+  });
 }
 
-/** Seat-local table point → world. Multiplayer seats are pulled toward their edge before turning. */
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+/** Seat-local table point → world. */
 function seatToWorld(seat: Seat, v: THREE.Vector3): THREE.Vector3 {
-  if (seat.rotY === 0 && seat.shrink === 1) return v.clone();
-  const p = v.clone().multiplyScalar(seat.shrink);
-  // keep each seat's battlefield between the centre and its edge
-  const edgeOffset = seat.local ? 5.2 : Math.abs(Math.sin(seat.rotY)) > 0.5 ? 10.5 : 6.2;
-  p.z += edgeOffset;
-  p.applyAxisAngle(new THREE.Vector3(0, 1, 0), seat.rotY);
-  if (Math.abs(Math.sin(seat.rotY)) > 0.5) p.z -= 1.2;
+  const p = v.clone();
+  p.z += seat.offsetZ;
+  if (seat.rotY !== 0) p.applyAxisAngle(Y_AXIS, seat.rotY);
   return p;
+}
+
+/** World → seat-local table point. */
+function worldToSeat(seat: Seat, v: THREE.Vector3): THREE.Vector3 {
+  const p = v.clone();
+  if (seat.rotY !== 0) p.applyAxisAngle(Y_AXIS, -seat.rotY);
+  p.z -= seat.offsetZ;
+  return p;
+}
+
+/** Each seat's whole footprint (battlefield, piles, avatar) in seat-local coordinates. */
+function footprint(seat: Seat): Rect {
+  return seat.local ? { x: -24.6, z: -0.8, w: 49.2, h: 14 } : { x: -24.6, z: -15.6, w: 49.2, h: 13.8 };
+}
+
+/** The inset mat drawn under each battlefield, seat-local. */
+function matRect(seat: Seat): Rect {
+  return seat.local ? { x: -21.8, z: -0.6, w: 43.6, h: 11.2 } : { x: -21.8, z: -12.6, w: 43.6, h: 10.7 };
+}
+
+function rectWorld(seat: Seat, r: Rect): THREE.Vector3[] {
+  return [
+    [r.x, r.z],
+    [r.x + r.w, r.z],
+    [r.x + r.w, r.z + r.h],
+    [r.x, r.z + r.h],
+  ].map(([x, z]) => seatToWorld(seat, new THREE.Vector3(x, 0, z)));
+}
+
+export interface SeatFrame {
+  playerId: number;
+  local: boolean;
+  rotY: number;
+  /** footprint corners on the table */
+  corners: THREE.Vector3[];
+  center: THREE.Vector3;
+}
+
+/** Where every seat sits, for the camera director. */
+export function seatFrames(state: GameState, localId: number): SeatFrame[] {
+  return seatsFor(state, localId).map((seat) => {
+    const corners = rectWorld(seat, footprint(seat));
+    const center = corners.reduce((a, c) => a.add(c), new THREE.Vector3()).multiplyScalar(1 / corners.length);
+    return { playerId: seat.player.id, local: seat.local, rotY: seat.rotY, corners, center };
+  });
+}
+
+/** Battlefield mats as world-space boxes (minX, minZ, maxX, maxZ) for the table shader. */
+export function tableMats(state: GameState, localId: number): THREE.Vector4[] {
+  return seatsFor(state, localId).map((seat) => {
+    const pts = rectWorld(seat, matRect(seat));
+    const xs = pts.map((p) => p.x);
+    const zs = pts.map((p) => p.z);
+    return new THREE.Vector4(Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs));
+  });
+}
+
+/** Whose side of the table a point belongs to: the seat whose footprint is nearest. */
+export function seatAt(state: GameState, localId: number, point: THREE.Vector3): number | null {
+  let best: number | null = null;
+  let bestD = Infinity;
+  for (const seat of seatsFor(state, localId)) {
+    const p = worldToSeat(seat, point);
+    const r = footprint(seat);
+    const dx = Math.max(r.x - p.x, 0, p.x - (r.x + r.w));
+    const dz = Math.max(r.z - p.z, 0, p.z - (r.z + r.h));
+    const d = Math.hypot(dx, dz);
+    if (d < bestD) {
+      bestD = d;
+      best = seat.player.id;
+    }
+  }
+  return best;
 }
 
 function categorize(c: CardState): 'creatures' | 'lands' | 'other' {
@@ -225,14 +305,14 @@ export function computeLayout(
           const world = seatToWorld(seat, local);
           const rot = flat.clone();
           rot.y = seat.rotY + (c.tapped ? -Math.PI / 2 : 0);
-          out.set(id, { space: 'table', pos: world, rot, scale: scale * seat.shrink, faceUp: c.visible, order: i });
+          out.set(id, { space: 'table', pos: world, rot, scale, faceUp: c.visible, order: i });
 
           // attachments tuck under their host, peeking out above it
           (attachments.get(id) ?? []).forEach((aid, ai) => {
             const a = new THREE.Vector3(local.x, 0.01 - (ai + 1) * 0.006, local.z - 0.55 * (ai + 1) * scale);
             const aRot = flat.clone();
             aRot.y = seat.rotY + (cards[aid]?.tapped ? -Math.PI / 2 : 0);
-            out.set(aid, { space: 'table', pos: seatToWorld(seat, a), rot: aRot, scale: scale * seat.shrink, faceUp: true, order: -1 - ai });
+            out.set(aid, { space: 'table', pos: seatToWorld(seat, a), rot: aRot, scale, faceUp: true, order: -1 - ai });
           });
         });
         x += colW + region.gutter * squeeze;
@@ -245,7 +325,7 @@ export function computeLayout(
         const v = anchor.clone().add(new THREE.Vector3(0, 0.03 + i * 0.006, spread * i));
         const rot = flat.clone();
         rot.y = seat.rotY;
-        out.set(id, { space: 'table', pos: seatToWorld(seat, v), rot, scale: scale * seat.shrink, faceUp, order: i });
+        out.set(id, { space: 'table', pos: seatToWorld(seat, v), rot, scale, faceUp, order: i });
       });
     };
     const pileScale = seat.local ? 0.7 : 0.55;
@@ -274,13 +354,14 @@ export function computeLayout(
     } else if (seats.length === 2) {
       layoutOpponentHand(p.zones.Hand, out);
     } else {
-      // multiplayer opponents: hand shown as a small fan by their library
+      // multiplayer opponents: a small face-down fan along the far edge of their side
+      const n = p.zones.Hand.length;
+      const step = Math.min(1.1, 14 / Math.max(1, n));
       p.zones.Hand.forEach((id, i) => {
-        const n = p.zones.Hand.length;
-        const v = seat.piles.library.clone().add(new THREE.Vector3(-4 - (n - 1 - i) * 0.5, 0.05 + i * 0.01, 1.5));
+        const v = new THREE.Vector3(2 + (i - (n - 1) / 2) * step, 0.05 + i * 0.01, -14.3);
         const rot = flat.clone();
-        rot.y = seat.rotY;
-        out.set(id, { space: 'table', pos: seatToWorld(seat, v), rot, scale: 0.55 * seat.shrink, faceUp: false, order: i });
+        rot.y = seat.rotY + (i - (n - 1) / 2) * 0.03;
+        out.set(id, { space: 'table', pos: seatToWorld(seat, v), rot, scale: 0.5, faceUp: false, order: i });
       });
     }
   }
@@ -356,17 +437,16 @@ export function libraryAnchor(state: GameState, localId: number, playerId: numbe
   return seatToWorld(seat, seat.piles.library);
 }
 
-export function seatRotation(state: GameState, localId: number, playerId: number): { rotY: number; shrink: number; local: boolean } | null {
+export function seatRotation(state: GameState, localId: number, playerId: number): { rotY: number; local: boolean } | null {
   const seat = seatsFor(state, localId).find((s) => s.player.id === playerId);
-  return seat ? { rotY: seat.rotY, shrink: seat.shrink, local: seat.local } : null;
+  return seat ? { rotY: seat.rotY, local: seat.local } : null;
 }
 
-/** Screen-space anchor for each player's avatar plate, as a point on the table. */
+/** Each player's avatar plate, as a point on the table. */
 export function avatarAnchor(state: GameState, localId: number, playerId: number): THREE.Vector3 | null {
   const seat = seatsFor(state, localId).find((s) => s.player.id === playerId);
   if (!seat) return null;
-  if (seatsFor(state, localId).length === 2) {
-    return seat.local ? new THREE.Vector3(-17.5, 0, 12.2) : new THREE.Vector3(-17, 0, -14.4);
-  }
-  return seatToWorld(seat, new THREE.Vector3(0, 0, 12.6));
+  if (seat.local) return seatToWorld(seat, new THREE.Vector3(-17.5, 0, 12.2));
+  // the seat on your left has its plate at its far end, clear of your commander in the bottom-left corner
+  return seatToWorld(seat, new THREE.Vector3(seat.rotY > 0 ? 17 : -17, 0, -14.4));
 }

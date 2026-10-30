@@ -26,6 +26,19 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: s
   return el;
 }
 
+export interface ViewBarState {
+  seats: { id: number; name: string; local: boolean }[];
+  /** 'table', a player id, or null for a framing of several seats */
+  showing: number | 'table' | null;
+  auto: boolean;
+}
+
+export interface ViewBarHandlers {
+  table(): void;
+  seat(id: number): void;
+  auto(on: boolean): void;
+}
+
 export interface HudHandlers {
   ok(): void;
   cancel(): void;
@@ -51,6 +64,7 @@ export class Hud {
   private readonly toasts = h('div', 'toasts');
   private readonly status = h('div', 'status');
   private zoomFor = -1;
+  private readonly viewBarEl = h('div', 'view-bar');
   private handlers!: HudHandlers;
 
   constructor() {
@@ -92,7 +106,7 @@ export class Hud {
     document.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest?.('button, .thumb')) sfx.click();
     }, true);
-    this.root.append(menu);
+    this.root.append(menu, this.viewBarEl);
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'm' || e.key === 'M') {
@@ -124,13 +138,13 @@ export class Hud {
 
   // ---- menu / game over -------------------------------------------------------------------------
 
-  menu(onStart: (format: 'constructed' | 'commander', players: number) => void): void {
+  menu(onStart: (format: 'constructed' | 'commander', players: number, title: string) => void): void {
     this.closeOverlay();
     const ov = h('div', 'overlay menu');
     ov.append(h('h1', '', 'MTG Tabletop'), h('p', 'sub', 'Play against Forge AI opponents'));
     const opts: [string, string, 'constructed' | 'commander', number][] = [
-      ['Duel', '1 v 1 with random preconstructed decks', 'constructed', 2],
-      ['Commander', '4-player free-for-all with commander precons', 'commander', 4],
+      ['Duel', '1 v 1 with a precon or your own deck', 'constructed', 2],
+      ['Commander', 'Free-for-all against three AI opponents', 'commander', 4],
       ['Commander duel', '1 v 1 commander', 'commander', 2],
     ];
     const row = h('div', 'menu-row');
@@ -139,7 +153,7 @@ export class Hud {
       b.append(h('div', 'menu-title', title), h('div', 'menu-desc', desc));
       b.onclick = () => {
         this.closeOverlay();
-        onStart(format, players);
+        onStart(format, players, title);
       };
       row.append(b);
     }
@@ -235,9 +249,30 @@ export class Hud {
     this.phaseBar.querySelectorAll<HTMLDivElement>('.phase').forEach((p) => p.classList.toggle('on', p.dataset.phase === group));
   }
 
+  // ---- camera views (multiplayer) ----------------------------------------------------------------
+
+  viewBar(state: ViewBarState | null, on: ViewBarHandlers): void {
+    const bar = this.viewBarEl;
+    bar.replaceChildren();
+    bar.classList.toggle('show', !!state);
+    if (!state) return;
+    const btn = (label: string, active: boolean, title: string, fn: () => void) => {
+      const b = h('button', `view-btn${active ? ' on' : ''}`, label);
+      b.title = title;
+      b.onclick = fn;
+      bar.append(b);
+      return b;
+    };
+    btn('Table', state.showing === 'table', 'See the whole table (0)', on.table);
+    state.seats.forEach((seat, i) => btn(seat.local ? 'You' : seat.name, state.showing === seat.id, `Look at ${seat.local ? 'your side' : seat.name} (${i + 1})`, () => on.seat(seat.id)));
+    const auto = btn('Auto', state.auto, 'Camera follows the game: whose turn it is, combat, what you need to pick (C)', () => on.auto(!state.auto));
+    auto.classList.add('auto');
+  }
+
   // ---- player plates ------------------------------------------------------------------------------
 
   updatePlayers(state: GameState, localId: number, screen: Map<number, { x: number; y: number }>, targetable: Set<number>): void {
+    const spots = this.placePlates(state, screen);
     for (const p of state.players) {
       let plate = this.plates.get(p.id);
       if (!plate) {
@@ -245,10 +280,11 @@ export class Hud {
         this.plates.set(p.id, plate);
         this.root.append(plate);
       }
-      const pos = screen.get(p.id);
-      if (pos) {
-        plate.style.left = `${pos.x}px`;
-        plate.style.top = `${pos.y}px`;
+      const spot = spots.get(p.id);
+      if (spot) {
+        plate.style.left = `${spot.x}px`;
+        plate.style.top = `${spot.y}px`;
+        plate.classList.toggle('edge', spot.edge);
       }
       plate.classList.toggle('local', p.id === localId);
       plate.classList.toggle('active', p.id === state.activePlayer);
@@ -283,6 +319,53 @@ export class Hud {
         mana.append(pip);
       }
     }
+  }
+
+  /**
+   * Plates sit on their seats. A seat out of view keeps its plate at the screen edge nearest to it,
+   * above your hand and clear of the prompt, and plates never pile onto each other.
+   */
+  private placePlates(state: GameState, screen: Map<number, { x: number; y: number }>): Map<number, { x: number; y: number; edge: boolean }> {
+    const w = window.innerWidth;
+    const hgt = window.innerHeight;
+    const PW = 236;
+    const PH = 66;
+    const out = new Map<number, { x: number; y: number; edge: boolean }>();
+    for (const p of state.players) {
+      const pos = screen.get(p.id);
+      if (!pos) continue;
+      const inside = pos.x > PW / 2 && pos.x < w - PW / 2 && pos.y > 60 && pos.y < hgt - 40;
+      if (inside) {
+        out.set(p.id, { x: pos.x, y: pos.y, edge: false });
+        continue;
+      }
+      out.set(p.id, { x: Math.min(w - PW / 2 - 8, Math.max(PW / 2 + 8, pos.x)), y: Math.min(hgt - 230, Math.max(70, pos.y)), edge: true });
+    }
+    // push overlapping edge plates apart (plates on screen stay put)
+    const ids = [...out.keys()];
+    for (let iter = 0; iter < 8; iter++) {
+      let moved = false;
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          const a = out.get(ids[i])!;
+          const b = out.get(ids[j])!;
+          const ox = PW - Math.abs(a.x - b.x);
+          const oy = PH - Math.abs(a.y - b.y);
+          if (ox <= 0 || oy <= 0 || (!a.edge && !b.edge)) continue;
+          moved = true;
+          const mover = b.edge ? b : a;
+          const other = mover === b ? a : b;
+          // slide along the edge it's pinned to: vertically on the sides, sideways on the top
+          const onSide = mover.x <= PW / 2 + 9 || mover.x >= w - PW / 2 - 9;
+          if (onSide) mover.y += (mover.y >= other.y ? 1 : -1) * (oy + 4);
+          else mover.x += (mover.x >= other.x ? 1 : -1) * (ox + 6);
+          mover.x = Math.min(w - PW / 2 - 8, Math.max(PW / 2 + 8, mover.x));
+          mover.y = Math.min(hgt - 230, Math.max(70, mover.y));
+        }
+      }
+      if (!moved) break;
+    }
+    return out;
   }
 
   private buildPlate(p: PlayerState): HTMLDivElement {
