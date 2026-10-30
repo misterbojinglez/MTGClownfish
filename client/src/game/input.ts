@@ -24,6 +24,7 @@ export class Input {
     private readonly table: Table,
     private readonly handlers: InputHandlers,
   ) {
+    this.ray.layers.enableAll(); // hand cards live on the overlay layer
     const canvas = stage.renderer.domElement;
     canvas.addEventListener('pointermove', (e) => this.onMove(e));
     canvas.addEventListener('pointerdown', (e) => this.onDown(e));

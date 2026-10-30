@@ -10,6 +10,9 @@ export const CAMERA_POS = new THREE.Vector3(0, 47.5, 18);
 export const CAMERA_TARGET = new THREE.Vector3(0, 0, 0.71);
 const DESIGN_ASPECT = 16 / 9;
 
+/** Camera layer for screen-space cards, rendered after post-processing. */
+export const OVERLAY_LAYER = 1;
+
 export class Stage {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -99,6 +102,27 @@ export class Stage {
     }
     this.camera.lookAt(CAMERA_TARGET);
     this.composer.render(dt);
+    this.renderOverlay();
+  }
+
+  /**
+   * Hand, stack and command-slot cards are drawn straight to the screen after post-processing.
+   * The composer's OutputPass tone-maps the whole frame (a material's toneMapped flag can't opt out),
+   * which washes card art out; drawn here, faces with toneMapped=false show their exact sRGB colours.
+   */
+  private renderOverlay(): void {
+    const r = this.renderer;
+    const bg = this.scene.background;
+    r.autoClear = false;
+    r.shadowMap.autoUpdate = false;
+    this.scene.background = null;
+    r.clearDepth();
+    this.camera.layers.set(OVERLAY_LAYER);
+    r.render(this.scene, this.camera);
+    this.camera.layers.set(0);
+    this.scene.background = bg;
+    r.shadowMap.autoUpdate = true;
+    r.autoClear = true;
   }
 
   private buildLights(): void {

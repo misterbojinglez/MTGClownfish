@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OVERLAY_LAYER } from './stage';
 import type { CardState } from '../protocol';
 import { cardBackTexture, cardFaceTexture, roundRect } from './textures';
 
@@ -245,6 +246,8 @@ export class CardObject {
    */
   setSpace(onTable: boolean): void {
     for (const m of [this.front, this.back, this.edge]) m.castShadow = onTable;
+    // screen-space cards draw in the overlay pass, after bloom/tone mapping, so their art keeps its true colour
+    for (const m of [this.front, this.back, this.edge, this.badge]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
     for (const mat of [this.frontMat, this.backMat]) {
       mat.color.setScalar(onTable ? 0.62 : 0);
       mat.emissiveIntensity = onTable ? 0.42 : 1;
