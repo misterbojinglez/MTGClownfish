@@ -1,5 +1,6 @@
 import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, Selection } from '../protocol';
 import { cardImageUrl, cardZoomUrl } from '../scene/textures';
+import { sfx } from '../audio';
 
 const PHASES: [string, string][] = [
   ['UNTAP', 'Untap'],
@@ -73,10 +74,30 @@ export class Hud {
     pass.onclick = () => this.handlers.passTurn();
     const concede = h('button', 'chip danger', 'Concede');
     concede.onclick = () => confirm('Concede this game?') && this.handlers.concede();
-    menu.append(pass, concede);
+    const sound = h('button', 'chip', '');
+    const showSound = () => {
+      sound.textContent = sfx.muted ? 'Sound off' : 'Sound on';
+      sound.classList.toggle('off', sfx.muted);
+    };
+    sound.title = 'Toggle sound (M)';
+    sound.onclick = () => {
+      sfx.toggleMute();
+      showSound();
+    };
+    showSound();
+    menu.append(sound, pass, concede);
+    // every button gets a soft click
+    document.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest?.('button, .thumb')) sfx.click();
+    }, true);
     this.root.append(menu);
 
     window.addEventListener('keydown', (e) => {
+      if (e.key === 'm' || e.key === 'M') {
+        sfx.toggleMute();
+        showSound();
+        return;
+      }
       if (document.querySelector('.modal')) return;
       if ((e.key === ' ' || e.key === 'Enter') && e.shiftKey) {
         e.preventDefault();

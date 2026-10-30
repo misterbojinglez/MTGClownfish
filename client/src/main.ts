@@ -6,6 +6,7 @@ import { Stage } from './scene/stage';
 import { Table } from './game/table';
 import { Input } from './game/input';
 import { Hud } from './ui/hud';
+import { sfx } from './audio';
 
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement);
 const table = new Table(stage);
@@ -122,6 +123,7 @@ async function applyUpdate(msg: UpdateMsg): Promise<void> {
 }
 
 async function answer(req: RequestMsg): Promise<void> {
+  if (req.kind !== 'reveal' || req.options?.length) sfx.chime();
   const value = await hud.request(req, table.state);
   bridge.respond(req.id, value);
 }
@@ -132,6 +134,7 @@ function showGameOver(): void {
   gameOverShown = true;
   const me = s.players.find((p) => p.id === table.localId);
   const won = !!me && s.winner === me.name;
+  setTimeout(() => (won ? sfx.victory() : sfx.defeat()), 700);
   setTimeout(() => hud.gameOver(won, s.winner, () => startGame(lastFormat.format, lastFormat.players)), 900);
 }
 
@@ -185,6 +188,7 @@ const input = new Input(stage, table, {
   },
   hover: (id) => {
     const inHand = id != null && table.isLocalHand(id);
+    if (inHand && id !== table.hoveredHand) sfx.hover();
     table.hoveredHand = inHand ? id : null;
     table.relayout(0.16);
     const card = id != null ? table.cards.get(id)?.state ?? null : null;
@@ -208,4 +212,4 @@ bridge.connect();
 hud.menu(startGame);
 
 // dev-only hook so the headless driver (scratch tooling) can read state and act like a player
-if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, autoPayArmed: () => performance.now() < autoPayUntil };
+if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, sfx, autoPayArmed: () => performance.now() < autoPayUntil };

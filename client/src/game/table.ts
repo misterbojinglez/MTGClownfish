@@ -4,6 +4,7 @@ import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
 import { avatarAnchor, computeLayout, libraryAnchor, seatsFor, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx } from '../scene/fx';
+import { sfx } from '../audio';
 import type { Stage } from '../scene/stage';
 import { cardBackTexture } from '../scene/textures';
 
@@ -102,12 +103,14 @@ export class Table {
     // merge the card delta into our cache
     const cards: Record<string, CardState> = { ...(prev?.cards ?? {}) };
     for (const [id, c] of Object.entries(msg.state.cards)) cards[id] = c;
+    if (prev) this.stateSounds(prev, msg.state.cards);
     const state: GameState = { ...msg.state, cards };
     this.state = state;
     this.prompt = msg.prompt;
     this.selection = msg.selection;
 
     const visibleIds = this.visibleCardIds(state);
+    const fromLibrary = new Set<number>();
     for (const id of visibleIds) {
       const c = cards[id];
       if (!c) continue;
@@ -115,7 +118,7 @@ export class Table {
       if (!obj) {
         obj = new CardObject(c);
         this.cards.set(id, obj);
-        this.spawn(obj, c, prev);
+        if (this.spawn(obj, c, prev)) fromLibrary.add(id);
       } else {
         obj.update(c);
       }
@@ -147,6 +150,7 @@ export class Table {
       const before = snapshots.get(id);
       const zoneChanged = before && before.zone !== obj.state.zone;
       if (zoneChanged) tasks.push(this.fly(obj, before.zone, obj.state.zone, target));
+      else if (fromLibrary.has(id)) tasks.push(this.fly(obj, 'Library' as ZoneName, obj.state.zone, target));
       else if (!this.flying.has(id)) this.settle(obj, target, before ? 0.28 : 0);
     }
 
@@ -303,6 +307,9 @@ export class Table {
     const trailColor = colorFor(obj.state.colors);
     const st = { t: 0 };
     const reveal = key === 'Library>Hand' && p.space === 'rig';
+    const pan = this.panOf(startPos);
+    if (to === 'Stack') sfx.cast(obj.state.colors, pan);
+    else if (to === 'Hand') sfx.draw(pan, p.space !== 'rig');
 
     return new Promise((resolve) => {
       gsap.to(st, {
@@ -324,9 +331,12 @@ export class Table {
           root.scale.setScalar(p.scale);
           if (to === 'Battlefield') {
             const s = obj.state;
+            if (s.land) sfx.land(this.panOf(end));
+            else sfx.etb(s.colors, s.power ?? 0, this.panOf(end));
             this.fx.etb(end, colorFor(s.colors), p.scale * (s.creature ? 1 : 0.7));
             if (s.creature && (s.power ?? 0) >= 5) this.stage.addShake(0.35);
           }
+          else if (to === 'Graveyard' || to === 'Exile' || to === 'Command') sfx.place(this.panOf(end));
           if (reveal) obj.body.position.set(0, 0, 0);
           resolve();
         },
@@ -338,8 +348,8 @@ export class Table {
     });
   }
 
-  /** A new card appears: drawn from its library, created as a token, or revealed from hiding. */
-  private spawn(obj: CardObject, c: CardState, prev: GameState | null): void {
+  /** A new card appears: drawn from its library, created as a token, or revealed from hiding. True if it starts on the library. */
+  private spawn(obj: CardObject, c: CardState, prev: GameState | null): boolean {
     const p = computeLayout(this.state!, this.localId, { hoveredHand: this.hoveredHand, handOrder: this.handOrder }).get(c.id);
     const lib = c.owner != null && prev ? libraryAnchor(this.state!, this.localId, c.owner) : null;
     if (p && lib && (c.zone === 'Hand' || (!c.token && c.zone !== 'Command'))) {
@@ -348,19 +358,20 @@ export class Table {
       obj.root.position.copy(lib).add(new THREE.Vector3(0, 0.6, 0));
       obj.root.rotation.set(-Math.PI / 2, 0, 0, 'YXZ');
       obj.root.scale.setScalar(0.7);
-      obj.state = { ...c, zone: 'Library' as ZoneName };
       obj.update(c);
-      return;
+      return true;
     }
     if (p) {
       this.parentFor(p.space).add(obj.root);
       obj.root.position.copy(p.pos);
       obj.root.quaternion.setFromEuler(p.rot);
       obj.root.scale.setScalar(c.token ? 0.01 : p.scale);
+      if (c.token && prev) sfx.token(this.panOf(obj.root.getWorldPosition(new THREE.Vector3())));
       if (c.token) gsap.to(obj.root.scale, { x: p.scale, y: p.scale, z: p.scale, duration: 0.35 / this.timeScale, ease: 'back.out(2)' });
     } else {
       this.stage.scene.add(obj.root);
     }
+    return false;
   }
 
   /** A card left every zone we draw (library, or out of the game): send it home and drop it. */
@@ -373,6 +384,7 @@ export class Table {
     if (wasOnField && obj.state.token) {
       const pos = new THREE.Vector3().setFromMatrixPosition(snap!.world);
       this.fx.death(pos, obj.root.scale.x);
+      sfx.death(this.panOf(pos));
       await this.dissolve(obj, 0.55, '#ff8a3a');
       obj.dispose();
       return;
@@ -396,6 +408,7 @@ export class Table {
     const pos = new THREE.Vector3().setFromMatrixPosition(snap.world);
     this.flying.add(obj.id);
     this.fx.death(pos, obj.root.scale.x);
+    sfx.death(this.panOf(pos));
     await this.dissolve(obj, 0.65, '#ff7a2a');
     const p = this.layout.get(obj.id);
     this.flying.delete(obj.id);
@@ -429,7 +442,11 @@ export class Table {
         case 'PlayerLivesChanged': {
           const pid = (e.player as Ref)?.player;
           const diff = (e.newLives as number) - (e.oldLives as number);
-          if (pid != null && diff > 0) this.floatAtPlayer(pid, `+${diff}`, 'heal');
+          if (pid != null && diff > 0) {
+            this.floatAtPlayer(pid, `+${diff}`, 'heal');
+            const at = this.playerWorld(pid);
+            sfx.lifeGain(at ? this.panOf(at) : 0);
+          }
           break;
         }
         case 'CardChangeZone': {
@@ -437,13 +454,18 @@ export class Table {
           const from = (e.from as { zone?: string } | null)?.zone;
           const to = (e.to as { zone?: string } | null)?.zone;
           const snap = card != null ? snaps.get(card) : undefined;
-          if (snap && from === 'Battlefield' && to === 'Exile') this.fx.exile(new THREE.Vector3().setFromMatrixPosition(snap.world));
+          if (snap && from === 'Battlefield' && to === 'Exile') {
+            const at = new THREE.Vector3().setFromMatrixPosition(snap.world);
+            this.fx.exile(at);
+            sfx.exile(this.panOf(at));
+          }
           break;
         }
         case 'TurnBegan': {
           const pid = (e.turnOwner as Ref)?.player;
           const name = s.players.find((p) => p.id === pid)?.name;
           if (name) this.banner(pid === this.localId ? 'Your turn' : `${name}'s turn`);
+          if (name) (pid === this.localId ? sfx.yourTurn() : sfx.opponentTurn());
           break;
         }
         case 'SpellAbilityCast': {
@@ -481,6 +503,7 @@ export class Table {
       if (!targetPos) continue;
       const onHit = () => {
         this.fx.impact(targetPos, targetPlayer != null ? '#ff5a3a' : '#ffb35a', Math.min(8, amount));
+        sfx.hit(amount, targetPlayer != null, this.panOf(targetPos));
         if (targetPlayer != null) {
           this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage');
           this.stage.addShake(Math.min(1, 0.15 + amount * 0.06));
@@ -506,6 +529,7 @@ export class Table {
     const origin = obj.root.getWorldPosition(new THREE.Vector3());
     // the body layer moves in the card's local frame; aim it by converting the world offset
     const worldTarget = origin.clone().lerp(target, 0.78);
+    sfx.whoosh(this.panOf(origin));
     const local = obj.root.worldToLocal(worldTarget.clone());
     local.z = 0;
     return new Promise((resolve) => {
@@ -524,7 +548,9 @@ export class Table {
   private pulse(obj: CardObject): Promise<void> {
     return new Promise((resolve) => {
       gsap.fromTo(obj.body.position, { z: 0 }, { z: 0.9, duration: 0.18 / this.timeScale, yoyo: true, repeat: 1, ease: 'sine.out', onComplete: resolve });
-      this.fx.flash(obj.root.getWorldPosition(new THREE.Vector3()), colorFor(obj.state.colors), 2, 0.4);
+      const at = obj.root.getWorldPosition(new THREE.Vector3());
+      this.fx.flash(at, colorFor(obj.state.colors), 2, 0.4);
+      sfx.ability(obj.state.colors, this.panOf(at));
     });
   }
 
@@ -535,11 +561,40 @@ export class Table {
     const from = srcId != null ? this.cardWorld(srcId) : null;
     const to = targetPlayer != null ? this.playerWorld(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
     const amount = e.amount as number;
+    if (from && to) sfx.zap(this.cards.get(srcId!)?.state.colors, this.panOf(from));
     if (from && to) await this.fx.bolt(from, to, colorFor(this.cards.get(srcId!)?.state.colors), 0.45 / this.timeScale);
+    if (to) sfx.hit(amount, targetPlayer != null, this.panOf(to));
     if (targetPlayer != null) {
       this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage');
       this.stage.addShake(Math.min(0.8, 0.1 + amount * 0.05));
     } else if (targetCard != null) this.floatAtCard(targetCard, `−${amount}`);
+  }
+
+  /** Combat declarations and taps show up as card flags flipping; one sound per kind per update. */
+  private stateSounds(prev: GameState, delta: Record<string, CardState>): void {
+    let attack = false;
+    let block: number | null = null;
+    let tap: number | null = null;
+    for (const [id, c] of Object.entries(delta)) {
+      const was = prev.cards[id];
+      if (!was || c.zone !== 'Battlefield' || was.zone !== 'Battlefield') continue;
+      if (c.attacking && !was.attacking) attack = true;
+      else if (c.blocking && !was.blocking) block = Number(id);
+      else if (c.tapped && !was.tapped) tap = Number(id);
+    }
+    const panAt = (id: number) => {
+      const w = this.cardWorld(id);
+      return w ? this.panOf(w) : 0;
+    };
+    if (attack) sfx.attack();
+    if (block != null) sfx.block(panAt(block));
+    if (tap != null && !attack) sfx.tap(panAt(tap));
+  }
+
+  /** Stereo position for a world point: where it sits across the screen. */
+  private panOf(world: THREE.Vector3): number {
+    const v = world.clone().project(this.stage.camera);
+    return Math.max(-1, Math.min(1, v.x)) * 0.6;
   }
 
   // ---- positions ----------------------------------------------------------------------------------

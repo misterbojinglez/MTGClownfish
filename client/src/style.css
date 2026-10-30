@@ -479,6 +479,10 @@ button {
   border-color: var(--gold);
 }
 
+.chip.off {
+  opacity: 0.55;
+}
+
 .chip.danger:hover {
   border-color: var(--red);
   color: #ffb3ab;
