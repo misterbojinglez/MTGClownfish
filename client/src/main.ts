@@ -155,7 +155,7 @@ hud.bind({
   ok: () => bridge.act({ action: 'ok' }),
   cancel: () => bridge.act({ action: 'cancel' }),
   player: (id) => bridge.act({ action: 'player', id }),
-  passTurn: () => bridge.act({ action: 'passUntilEndOfTurn' }),
+  passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
   concede: () => bridge.act({ action: 'concede' }),
 });
 

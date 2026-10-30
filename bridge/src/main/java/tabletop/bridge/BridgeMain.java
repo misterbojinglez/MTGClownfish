@@ -14,6 +14,7 @@ import forge.game.player.PlayerView;
 import forge.game.player.RegisteredPlayer;
 import forge.game.spellability.StackItemView;
 import forge.gamemodes.match.HostedMatch;
+import forge.gamemodes.match.YieldController;
 import forge.gamemodes.quest.QuestController;
 import forge.gui.FThreads;
 import forge.gui.GuiBase;
@@ -186,7 +187,15 @@ public final class BridgeMain {
             case "alphaStrike" -> controller.alphaStrike();
             case "undo" -> controller.undoLastAction();
             case "concede" -> controller.concede();
-            case "passUntilEndOfTurn" -> controller.getYieldController().autoPassUntilEndOfTurn();
+            // sets the end-of-turn yield and passes the priority currently held, like Forge's End Turn shortcut
+            // the client animates behind the engine: a pass meant for a turn that has already ended is dropped,
+            // or it would skip the player's next turn
+            case "passUntilEndOfTurn" -> {
+                final int seenTurn = msg.has("turn") ? msg.get("turn").getAsInt() : -1;
+                if (seenTurn < 0 || seenTurn == gui.getGameView().getTurn()) {
+                    YieldController.endTurn(controller, gui.getCurrentPlayer());
+                }
+            }
             case "reorderHand" -> {
                 final CardView card = tracker.getObj(TrackableTypes.CardViewType, id);
                 if (card != null) { controller.reorderHand(card, msg.get("index").getAsInt()); }

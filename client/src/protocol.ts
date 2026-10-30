@@ -170,7 +170,9 @@ export type ServerMsg =
   | { type: 'pong' };
 
 export type Action =
-  | { action: 'ok' | 'cancel' | 'alphaStrike' | 'undo' | 'concede' | 'passUntilEndOfTurn' }
+  | { action: 'ok' | 'cancel' | 'alphaStrike' | 'undo' | 'concede' }
+  /** turn: the turn the client is showing, so a late click can't carry into the next turn */
+  | { action: 'passUntilEndOfTurn'; turn?: number }
   | { action: 'card'; id: number; button?: number }
   | { action: 'player'; id: number; button?: number }
   | { action: 'stack'; id: number }
