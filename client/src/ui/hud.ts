@@ -153,6 +153,7 @@ export class Hud {
       const picked = sel.chosen.length;
       msg += sel.max > 1 ? `\n(${picked}/${sel.max} selected)` : '';
     }
+    if (sel.targets.some((t) => t?.player !== undefined)) msg += '\n(Click a player\'s portrait or their side of the table)';
     this.promptText.textContent = msg;
     const ok = prompt.ok;
     const cancel = prompt.cancel;
@@ -393,6 +394,8 @@ export class Hud {
           row.append(b);
         });
         panel.append(row);
+      } else if (req.kind === 'distribute') {
+        this.buildDistribute(req, state, panel, done);
       } else if (req.kind === 'input') {
         const input = h('input', 'modal-input');
         input.type = req.numeric ? 'number' : 'text';
@@ -417,11 +420,13 @@ export class Hud {
     let min = req.min ?? 1;
     let max = req.max ?? 1;
     if (ordering) {
+      // Forge passes how many may stay behind; a negative bound means "no limit" (e.g. scry: any number
+      // to the bottom), while 0/0 means every option must be placed in order
       const minRem = req.minRemaining ?? 0;
       const maxRem = req.maxRemaining ?? 0;
       max = minRem >= 0 ? n - minRem : n;
       min = maxRem >= 0 ? n - maxRem : 0;
-      if (minRem <= 0 && maxRem <= 0) min = max = n;
+      if (minRem === 0 && maxRem === 0) min = max = n;
     }
     const picked: number[] = [];
     const cardOf = (o: ChoiceOption): CardState | undefined => (o.card != null ? state?.cards[o.card] ?? o.cardData : undefined);
@@ -483,6 +488,59 @@ export class Hud {
     confirm.onclick = () => done(reveal ? [] : [...picked]);
     row.append(confirm);
     panel.append(row);
+    refresh();
+  }
+
+  /** Split an amount among targets: +/− per row, confirm once the whole amount is placed. */
+  private buildDistribute(req: RequestMsg, state: GameState | null, panel: HTMLElement, done: (v: unknown) => void): void {
+    const options = req.options ?? [];
+    const total = req.amount ?? 0;
+    const min: number = req.atLeastOne ? 1 : 0;
+    const shares: number[] = options.map(() => min);
+    // start with an even split so the common case is one click
+    let left = total - shares.reduce((a, b) => a + b, 0);
+    for (let i = 0; left > 0 && options.length; i = (i + 1) % options.length) {
+      if (shares[i] < (options[i].max ?? total)) {
+        shares[i]++;
+        left--;
+      } else if (shares.every((v, j) => v >= (options[j].max ?? total))) break;
+    }
+    const list = h('div', 'distribute');
+    const remaining = h('div', 'modal-sub');
+    const confirm = h('button', 'main-btn wide', 'Confirm');
+    const rows: HTMLElement[] = [];
+    const refresh = () => {
+      const used = shares.reduce((a, b) => a + b, 0);
+      remaining.textContent = used === total ? 'All assigned' : `${total - used} left to assign`;
+      confirm.disabled = used !== total;
+      rows.forEach((r, i) => (r.querySelector('.share')!.textContent = String(shares[i])));
+    };
+    options.forEach((o, i) => {
+      const card = o.card != null ? state?.cards[o.card] ?? o.cardData : undefined;
+      const player = o.player != null ? state?.players.find((p) => p.id === o.player) : undefined;
+      const row = h('div', 'dist-row');
+      const label = h('div', 'dist-label', player ? `${player.name} (${player.life} life)` : card?.name ?? o.label);
+      if (o.color) label.classList.add(`pip-${o.color}`, 'dist-color');
+      const minus = h('button', 'sub-btn', '−');
+      const plus = h('button', 'sub-btn', '+');
+      minus.onclick = () => {
+        if (shares[i] > min) shares[i]--;
+        refresh();
+      };
+      plus.onclick = () => {
+        if (shares.reduce((a, b) => a + b, 0) < total && shares[i] < (o.max ?? total)) shares[i]++;
+        refresh();
+      };
+      if (card) {
+        row.onmouseenter = () => this.showZoom(card, 'right');
+        row.onmouseleave = () => this.showZoom(null);
+      }
+      row.append(label, minus, h('div', 'share'), plus);
+      rows.push(row);
+      list.append(row);
+    });
+    confirm.onclick = () => done([...shares]);
+    panel.append(list, remaining, confirm);
     refresh();
   }
 

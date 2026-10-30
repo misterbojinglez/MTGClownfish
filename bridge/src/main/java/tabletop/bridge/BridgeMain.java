@@ -58,6 +58,9 @@ public final class BridgeMain {
         prefs.setPref(ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, true);
         prefs.setPref(ForgePreferences.FPref.YIELD_SKIP_PHASE_DELAY, true);
         prefs.setPref(ForgePreferences.FPref.YIELD_SKIP_RESOLVE_DELAY, true);
+        // Forge's "select from card displays" mode assumes its desktop zone windows (scry rearranging,
+        // revealed hands); the dialog-based paths are the ones this client renders
+        prefs.setPref(ForgePreferences.FPref.UI_SELECT_FROM_CARD_DISPLAYS, false);
 
         session = new Session(port, BridgeMain::onClientMessage);
         session.start();

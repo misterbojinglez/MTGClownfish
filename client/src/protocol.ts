@@ -132,6 +132,10 @@ export interface ChoiceOption {
   card?: number;
   /** the card's details when it comes from a zone the client doesn't track (library, hidden hand) */
   cardData?: CardState;
+  /** distribute: the most this option may receive */
+  max?: number;
+  /** distribute: a mana colour (W/U/B/R/G/C) rather than a game object */
+  color?: string;
   ability?: number;
   player?: number;
   entity?: number;
@@ -140,7 +144,10 @@ export interface ChoiceOption {
 export interface RequestMsg {
   type: 'request';
   id: number;
-  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input';
+  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input' | 'distribute';
+  /** distribute: total to divide, and whether every option needs at least one */
+  amount?: number;
+  atLeastOne?: boolean;
   message?: string;
   caption?: string;
   card?: number | null;

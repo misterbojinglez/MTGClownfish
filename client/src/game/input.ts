@@ -4,6 +4,8 @@ import type { Table } from './table';
 
 export interface InputHandlers {
   clickCard(id: number, button: number): void;
+  /** a click on empty table: the player whose side it is */
+  clickTable(playerId: number): void;
   hover(id: number | null): void;
 }
 
@@ -76,7 +78,16 @@ export class Input {
 
   private onDown(e: PointerEvent): void {
     const id = this.pick(e);
-    if (id == null) return;
+    if (id == null) {
+      if (e.button !== 0) return;
+      // empty table: hit the table plane and work out whose side it is
+      const hit = new THREE.Vector3();
+      if (this.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit)) {
+        const pid = this.table.playerAt(hit);
+        if (pid != null) this.handlers.clickTable(pid);
+      }
+      return;
+    }
     if (e.button === 0 && this.table.isLocalHand(id)) {
       const obj = this.table.cards.get(id)!;
       const depth = -obj.root.position.z;

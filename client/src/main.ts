@@ -164,6 +164,13 @@ const input = new Input(stage, table, {
       bridge.act({ action: 'stack', id: stackItem! });
       return;
     }
+    // aiming at a player but clicked one of their cards (that isn't itself a choice): target the player
+    const sel = table.selection;
+    const owner = table.cards.get(id)?.state.controller;
+    if (!sel.cards.includes(id) && owner != null && table.targetablePlayers().has(owner)) {
+      bridge.act({ action: 'player', id: owner });
+      return;
+    }
     // casting from hand or activating a non-land permanent arms auto-pay for the payment prompt that follows;
     // tapping a land for mana (picking colours up front) doesn't
     const c = table.cards.get(id)?.state;
@@ -172,6 +179,9 @@ const input = new Input(stage, table, {
       armAutoPay();
     }
     bridge.act({ action: 'card', id, button });
+  },
+  clickTable: (pid) => {
+    if (table.targetablePlayers().has(pid)) bridge.act({ action: 'player', id: pid });
   },
   hover: (id) => {
     const inHand = id != null && table.isLocalHand(id);

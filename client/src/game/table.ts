@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
-import { avatarAnchor, computeLayout, libraryAnchor, type Placement } from '../scene/layout';
+import { avatarAnchor, computeLayout, libraryAnchor, seatsFor, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx } from '../scene/fx';
 import type { Stage } from '../scene/stage';
 import { cardBackTexture } from '../scene/textures';
@@ -683,6 +683,23 @@ export class Table {
   stackItemFor(cardId: number): number | null {
     const item = this.state?.stack.find((s) => s.source === cardId);
     return item ? item.id : null;
+  }
+
+  /** Whose side of the table a point on it belongs to. */
+  playerAt(point: THREE.Vector3): number | null {
+    if (!this.state) return null;
+    const seats = seatsFor(this.state, this.localId);
+    if (seats.length === 2) return (point.z < -1.25 ? seats[1] : seats[0]).player.id;
+    let best: number | null = null;
+    let bestDot = -Infinity;
+    for (const seat of seats) {
+      const dot = point.x * Math.sin(seat.rotY) + point.z * Math.cos(seat.rotY);
+      if (dot > bestDot) {
+        bestDot = dot;
+        best = seat.player.id;
+      }
+    }
+    return best;
   }
 
   targetablePlayers(): Set<number> {

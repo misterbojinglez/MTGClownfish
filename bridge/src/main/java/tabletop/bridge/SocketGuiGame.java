@@ -378,23 +378,51 @@ public class SocketGuiGame extends AbstractGuiGame {
         return out;
     }
 
+    /**
+     * Dividing an amount among several things ("3 damage divided as you choose", counters, shields,
+     * mana of any combination). The player sets each share; the client only confirms a full split.
+     */
     @Override
     public Map<Object, Integer> assignGenericAmount(final CardView effectSource, final Map<Object, Integer> target, final int amount, final boolean atLeastOne, final String amountLabel) {
+        final List<Object> keys = new ArrayList<>(target.keySet());
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", (effectSource == null ? "" : effectSource.getName() + ": ") + "Divide " + amount + " " + (amountLabel == null ? "" : amountLabel));
+        req.addProperty("amount", amount);
+        req.addProperty("atLeastOne", atLeastOne);
+        req.addProperty("card", effectSource == null ? null : effectSource.getId());
+        final JsonArray opts = new JsonArray();
+        for (final Object k : keys) {
+            final JsonObject o = k instanceof Byte b ? colorOption(b) : option(k, null);
+            o.addProperty("max", target.get(k) == null ? amount : target.get(k));
+            opts.add(o);
+        }
+        req.add("options", opts);
+        final JsonElement answer = session.request("distribute", req);
         final Map<Object, Integer> out = new LinkedHashMap<>();
-        if (target.isEmpty()) {
+        if (answer != null && answer.isJsonArray() && answer.getAsJsonArray().size() == keys.size()) {
+            for (int i = 0; i < keys.size(); i++) {
+                out.put(keys.get(i), answer.getAsJsonArray().get(i).getAsInt());
+            }
             return out;
         }
+        // no answer (client gone): fall back to an even-handed split
         int remaining = amount;
         if (atLeastOne) {
-            for (final Object t : target.keySet()) {
+            for (final Object t : keys) {
                 if (remaining <= 0) { break; }
                 out.put(t, 1);
                 remaining--;
             }
         }
-        final Object first = target.keySet().iterator().next();
-        out.merge(first, remaining, Integer::sum);
+        out.merge(keys.get(0), remaining, Integer::sum);
         return out;
+    }
+
+    private static JsonObject colorOption(final byte color) {
+        final JsonObject o = new JsonObject();
+        o.addProperty("label", forge.card.MagicColor.toLongString(color));
+        o.addProperty("color", forge.card.MagicColor.toShortString(color));
+        return o;
     }
 
     @Override
