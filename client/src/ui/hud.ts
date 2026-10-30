@@ -177,6 +177,9 @@ export class Hud {
       this.promptSource.replaceChildren(...(prompt.source ? [this.sourceHeader(prompt.source, state)] : []));
     }
     let msg = tidyMessage(prompt.message ?? '');
+    // Forge's status line counts game turns; show the active player's own count instead
+    const active = state?.players.find((p) => p.id === state.activePlayer);
+    if (active?.turns != null) msg = msg.replace(/^Turn: \d+ \((.+?)\)$/m, (_m, who: string) => `Turn: ${active.turns} (${who})`);
     if (sel.cards.length && sel.max > 0) {
       const picked = sel.chosen.length;
       msg += sel.max > 1 ? `\n(${picked}/${sel.max} selected)` : '';
@@ -218,7 +221,8 @@ export class Hud {
 
   setPhase(state: GameState, localId: number): void {
     const active = state.players.find((p) => p.id === state.activePlayer);
-    this.turnLabel.textContent = active ? `Turn ${state.turn} · ${active.id === localId ? 'Your turn' : active.name}` : '';
+    const n = active?.turns ?? state.turn;
+    this.turnLabel.textContent = active ? (active.id === localId ? `Your turn ${n}` : `${active.name} · turn ${n}`) : '';
     this.turnLabel.classList.toggle('mine', active?.id === localId);
     const phase = state.phase ?? '';
     const group =

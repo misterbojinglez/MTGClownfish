@@ -40,6 +40,8 @@ export interface PlayerState {
   name: string;
   ai: boolean;
   life: number;
+  /** turns this player has started (the game's turn number counts everyone's) */
+  turns?: number;
   lost: boolean;
   priority: boolean;
   poison: number;

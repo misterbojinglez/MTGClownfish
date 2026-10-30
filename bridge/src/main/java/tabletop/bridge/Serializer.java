@@ -74,6 +74,13 @@ public final class Serializer {
         o.addProperty("name", p.getName());
         o.addProperty("ai", p.isAI());
         o.addProperty("life", p.getLife());
+        // Forge's game turn counts every player's turns; players think in their own ("my third turn")
+        try {
+            final forge.game.player.Player real = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
+            if (real != null) { o.addProperty("turns", real.getTurn()); }
+        } catch (RuntimeException ignored) {
+            // view mid-update; the next snapshot carries it
+        }
         o.addProperty("lost", p.getHasLost());
         o.addProperty("priority", p.getHasPriority());
         o.addProperty("poison", p.getCounters(forge.game.card.CounterEnumType.POISON));
