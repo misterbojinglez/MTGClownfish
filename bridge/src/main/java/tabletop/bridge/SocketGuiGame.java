@@ -84,6 +84,20 @@ public class SocketGuiGame extends AbstractGuiGame {
                 changed.add(e.getKey(), e.getValue());
             }
         }
+        // Cards that dropped out of every listed zone (mid-cast, back to the library) still get their new
+        // zone sent, so the client never has to guess where a vanished card went.
+        for (final Map.Entry<Integer, String> e : sentCards.entrySet()) {
+            final String key = String.valueOf(e.getKey());
+            if (allCards.has(key)) { continue; }
+            final CardView cv = getGameView().getTracker().getObj(forge.trackable.TrackableTypes.CardViewType, e.getKey());
+            if (cv == null) { continue; }
+            final JsonObject json = Serializer.card(cv, mayView(cv));
+            final String text = json.toString();
+            if (!text.equals(e.getValue())) {
+                e.setValue(text);
+                changed.add(key, json);
+            }
+        }
         state.add("cards", changed);
 
         final JsonObject msg = new JsonObject();
@@ -163,6 +177,23 @@ public class SocketGuiGame extends AbstractGuiGame {
         flush();
     }
 
+    /**
+     * Forge calls this the moment an input finishes (including auto-passes). Until the next input shows
+     * its own buttons the player has nothing to answer, so the client must not offer a live OK button.
+     */
+    @Override
+    public void awaitNextInput() {
+        super.awaitNextInput();
+        synchronized (snapshotLock) {
+            for (final String b : new String[] {"ok", "cancel"}) {
+                if (prompt.has(b)) {
+                    prompt.getAsJsonObject(b).addProperty("enabled", false);
+                }
+            }
+        }
+        flush();
+    }
+
     @Override public void flashIncorrectAction() { notice("incorrect", null); }
     @Override public void alertUser() { notice("alert", null); }
 
@@ -175,7 +206,21 @@ public class SocketGuiGame extends AbstractGuiGame {
     @Override public void setPanelSelection(final CardView hostCard) { }
     @Override public void setCard(final CardView card) { }
     @Override public void setPlayerAvatar(final LobbyPlayer player, final IHasIcon ihi) { }
-    @Override public boolean isUiSetToSkipPhase(final PlayerView playerTurn, final PhaseType phase) { return false; }
+    /**
+     * Arena-style phase stops. With an empty stack the player only gets priority at these steps; at any of
+     * them Forge's auto-pass still skips the stop when there is nothing castable or activatable.
+     */
+    @Override
+    public boolean isUiSetToSkipPhase(final PlayerView playerTurn, final PhaseType phase) {
+        if (playerTurn == null || phase == null) {
+            return false;
+        }
+        final boolean myTurn = isLocalPlayer(playerTurn);
+        final boolean stop = myTurn
+                ? phase == PhaseType.MAIN1 || phase == PhaseType.MAIN2 || phase == PhaseType.COMBAT_DECLARE_BLOCKERS
+                : phase == PhaseType.COMBAT_DECLARE_ATTACKERS || phase == PhaseType.COMBAT_DECLARE_BLOCKERS || phase == PhaseType.END_OF_TURN;
+        return !stop;
+    }
 
     private void notice(final String kind, final String text) {
         final JsonObject msg = new JsonObject();

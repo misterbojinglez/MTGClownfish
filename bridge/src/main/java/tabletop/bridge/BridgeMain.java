@@ -53,6 +53,11 @@ public final class BridgeMain {
         final var prefs = FModel.getPreferences();
         prefs.setPref(ForgePreferences.FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, true);
         prefs.setPref(ForgePreferences.FPref.UI_SHOW_AUTOTAP_PREVIEW, true);
+        // Arena-style flow: pass priority automatically whenever there's nothing you could do,
+        // and don't add Forge's artificial pauses (the client animates every action anyway)
+        prefs.setPref(ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, true);
+        prefs.setPref(ForgePreferences.FPref.YIELD_SKIP_PHASE_DELAY, true);
+        prefs.setPref(ForgePreferences.FPref.YIELD_SKIP_RESOLVE_DELAY, true);
 
         session = new Session(port, BridgeMain::onClientMessage);
         session.start();

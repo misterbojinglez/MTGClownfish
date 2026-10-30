@@ -25,6 +25,9 @@ const MOVE_TIME: Record<string, number> = {
 };
 const DEFAULT_MOVE = 0.8;
 
+/** Zones we draw; a card reported in one of these but not yet listed there is mid-move. */
+const IN_TRANSIT_ZONES = new Set<string>(['Stack', 'Battlefield', 'Hand', 'Graveyard', 'Exile', 'Command']);
+
 const EASE: Record<string, string> = {
   'Hand>Stack': 'power2.out',
   'Stack>Battlefield': 'back.out(1.15)',
@@ -126,6 +129,10 @@ export class Table {
 
     for (const [id, obj] of this.cards) {
       if (!visibleIds.has(id)) {
+        // A card between zones (cast but not yet on the stack, etc.) stays where it is until it lands;
+        // only a card that really went to its library or out of the game leaves the table.
+        const zone = cards[id]?.zone;
+        if (zone && IN_TRANSIT_ZONES.has(zone)) continue;
         tasks.push(this.vanish(obj, prev, snapshots.get(id)));
         continue;
       }
