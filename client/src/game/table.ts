@@ -139,7 +139,7 @@ export class Table {
       }
     }
 
-    this.layout = computeLayout(state, this.localId, { hoveredHand: this.hoveredHand, handOrder: this.handOrder });
+    this.layout = computeLayout(state, this.localId, this.layoutOpts());
     this.updateLibraries(state);
     this.updateHandZones();
 
@@ -185,7 +185,7 @@ export class Table {
   relayout(duration = 0.18): void {
     if (!this.state) return;
     this.updateHandZones();
-    this.layout = computeLayout(this.state, this.localId, { hoveredHand: this.hoveredHand, handOrder: this.handOrder });
+    this.layout = computeLayout(this.state, this.localId, this.layoutOpts());
     for (const [id, obj] of this.cards) {
       const t = this.layout.get(id);
       if (t && !this.flying.has(id)) this.settle(obj, t, duration);
@@ -207,7 +207,7 @@ export class Table {
       }
     }
     if (!this.state || hand.size === 0) return;
-    const rest = computeLayout(this.state, this.localId, { hoveredHand: null, handOrder: this.handOrder });
+    const rest = computeLayout(this.state, this.localId, { ...this.layoutOpts(), hoveredHand: null });
     for (const id of hand) {
       const p = rest.get(id);
       if (!p) continue;
@@ -371,7 +371,7 @@ export class Table {
 
   /** A new card appears: drawn from its library, created as a token, or revealed from hiding. True if it starts on the library. */
   private spawn(obj: CardObject, c: CardState, prev: GameState | null): boolean {
-    const p = computeLayout(this.state!, this.localId, { hoveredHand: this.hoveredHand, handOrder: this.handOrder }).get(c.id);
+    const p = computeLayout(this.state!, this.localId, this.layoutOpts()).get(c.id);
     const lib = c.owner != null && prev ? libraryAnchor(this.state!, this.localId, c.owner) : null;
     if (p && lib && (c.zone === 'Hand' || (!c.token && c.zone !== 'Command'))) {
       // start face-down on top of the library, then fly
@@ -778,12 +778,21 @@ export class Table {
 
   // ---- highlights & arrows ------------------------------------------------------------------------
 
+  private layoutOpts(): { hoveredHand: number | null; handOrder: number[]; liftedHand: Set<number> } {
+    const picked = new Set(this.selection.chosen.map((r) => r?.card).filter((x): x is number => x != null));
+    return { hoveredHand: this.hoveredHand, handOrder: this.handOrder, liftedHand: picked };
+  }
+
   refreshHighlights(): void {
     const s = this.state;
     if (!s) return;
     const sel = this.selection;
     const chosen = new Set(sel.chosen.map((r) => r?.card).filter((x): x is number => x != null));
     const selectable = new Set(sel.cards);
+    // Forge's London mulligan doesn't list its choices: every card in hand may go to the bottom
+    if (this.prompt.input === 'InputLondonMulligan') {
+      s.players.find((p) => p.id === this.localId)?.zones.Hand.forEach((id) => selectable.add(id));
+    }
     const autoPay = new Set(sel.actionable.filter((id, i) => sel.actionable.indexOf(id) !== i));
     const actionable = new Set(sel.actionable);
     const top = s.stack[0];

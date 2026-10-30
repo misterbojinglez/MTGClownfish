@@ -154,7 +154,8 @@ interface Column {
 export function computeLayout(
   state: GameState,
   localId: number,
-  opts: { hoveredHand: number | null; handOrder: number[] },
+  /** liftedHand: hand cards picked in a choice (mulligan bottom, discard), raised out of the fan */
+  opts: { hoveredHand: number | null; handOrder: number[]; liftedHand?: Set<number> },
 ): Map<number, Placement> {
   const out = new Map<number, Placement>();
   const cards = state.cards;
@@ -269,7 +270,7 @@ export function computeLayout(
     if (seat.local) {
       const order = opts.handOrder.filter((id) => p.zones.Hand.includes(id));
       for (const id of p.zones.Hand) if (!order.includes(id)) order.push(id);
-      layoutLocalHand(order, opts.hoveredHand, out);
+      layoutLocalHand(order, opts.hoveredHand, out, opts.liftedHand);
     } else if (seats.length === 2) {
       layoutOpponentHand(p.zones.Hand, out);
     } else {
@@ -301,7 +302,10 @@ export function computeLayout(
   return out;
 }
 
-function layoutLocalHand(ids: number[], hovered: number | null, out: Map<number, Placement>): void {
+/** How far a picked hand card rises (about a third of a card). */
+const PICKED_LIFT = 2.4;
+
+function layoutLocalHand(ids: number[], hovered: number | null, out: Map<number, Placement>, lifted?: Set<number>): void {
   const n = ids.length;
   if (n === 0) return;
   const delta = n > 1 ? Math.min(HAND.maxDelta, HAND.fitAngle / (n - 1)) : 0;
@@ -313,9 +317,10 @@ function layoutLocalHand(ids: number[], hovered: number | null, out: Map<number,
     if (hi >= 0 && i !== hi) deg += Math.sign(i - hi) * Math.max(0, 2.6 - Math.abs(i - hi) * 0.6);
     const a = THREE.MathUtils.degToRad(deg);
     const isHover = i === hi;
+    const lift = !isHover && lifted?.has(id) ? PICKED_LIFT : 0;
     const x = Math.sin(a) * HAND.radius;
-    const y = HAND.baseY + (Math.cos(a) - 1) * HAND.radius + (isHover ? HOVER_LIFT : 0);
-    const z = -HAND.distance + i * 0.02 + (isHover ? 0.6 : 0);
+    const y = HAND.baseY + (Math.cos(a) - 1) * HAND.radius + (isHover ? HOVER_LIFT : lift);
+    const z = -HAND.distance + i * 0.02 + (isHover ? 0.6 : lift ? 0.3 : 0);
     out.set(id, {
       space: 'rig',
       pos: new THREE.Vector3(x, y, z),

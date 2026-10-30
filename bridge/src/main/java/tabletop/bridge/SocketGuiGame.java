@@ -6,7 +6,9 @@ import com.google.gson.JsonObject;
 import forge.LobbyPlayer;
 import forge.deck.CardPool;
 import forge.game.GameEntityView;
+import forge.game.card.Card;
 import forge.game.card.CardView;
+import forge.game.zone.ZoneType;
 import forge.game.event.GameEvent;
 import forge.game.event.GameEventCardDamaged;
 import forge.game.event.GameEventPlayerDamaged;
@@ -134,6 +136,14 @@ public class SocketGuiGame extends AbstractGuiGame {
             final CardView cv = getGameView().getTracker().getObj(forge.trackable.TrackableTypes.CardViewType, e.getKey());
             if (cv == null) { continue; }
             final JsonObject json = Serializer.card(cv, mayView(cv));
+            // Forge's view can lag the move: after a mulligan the old hand's views still say Hand while the
+            // cards sit in the library. A view claiming a zone that doesn't list the card is stale; ask the game.
+            if (cv.getZone() != null && cv.getZone() != ZoneType.Library) {
+                final Card real = getGameView().getGame() != null ? getGameView().getGame().findById(e.getKey()) : null;
+                if (real != null && real.getZone() != null) {
+                    json.addProperty("zone", real.getZone().getZoneType().name());
+                }
+            }
             final String text = json.toString();
             if (!text.equals(e.getValue())) {
                 e.setValue(text);
