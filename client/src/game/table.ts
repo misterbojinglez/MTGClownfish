@@ -138,7 +138,7 @@ export class Table {
       const before = snapshots.get(id);
       const zoneChanged = before && before.zone !== obj.state.zone;
       if (zoneChanged) tasks.push(this.fly(obj, before.zone, obj.state.zone, target));
-      else this.settle(obj, target, before ? 0.28 : 0);
+      else if (!this.flying.has(id)) this.settle(obj, target, before ? 0.28 : 0);
     }
 
     tasks.push(this.playEvents(msg.events, snapshots));
@@ -190,6 +190,30 @@ export class Table {
       zone.translateY((CARD_H / 2) * p.scale);
       zone.position.z += 0.001 * p.order;
     }
+  }
+
+  /** The player picked up a hand card: stop layout from moving it and stand it upright. */
+  beginDrag(id: number): void {
+    const obj = this.cards.get(id);
+    if (!obj) return;
+    this.flying.add(id);
+    gsap.killTweensOf(obj.root.position);
+    gsap.killTweensOf(obj.root.scale);
+    gsap.killTweensOf(obj.root.quaternion);
+    const q0 = obj.root.quaternion.clone();
+    const st = { t: 0 };
+    gsap.to(st, { t: 1, duration: 0.12, onUpdate: () => { obj.root.quaternion.slerpQuaternions(q0, new THREE.Quaternion(), st.t); } });
+  }
+
+  /** Dropped: a played card waits for the engine to move it; otherwise it slides back into the fan. */
+  endDrag(id: number, played: boolean): void {
+    this.flying.delete(id);
+    const obj = this.cards.get(id);
+    const p = this.layout.get(id);
+    if (!obj || !p) return;
+    if (!played) this.settle(obj, p, 0.22);
+    // if the engine refuses the play, the next update (or this fallback) returns the card
+    else setTimeout(() => { if (this.isLocalHand(id) && !this.flying.has(id)) this.settle(obj, this.layout.get(id) ?? p, 0.25); }, 600);
   }
 
   handZoneMeshes(): THREE.Object3D[] {

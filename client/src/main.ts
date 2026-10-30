@@ -10,7 +10,9 @@ import { Hud } from './ui/hud';
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement);
 const table = new Table(stage);
 const hud = new Hud();
-const bridge = new Bridge();
+// ?bridge=7778 points the client at another bridge instance (used for automated testing)
+const bridgePort = new URLSearchParams(location.search).get('bridge') ?? '7777';
+const bridge = new Bridge(`ws://127.0.0.1:${bridgePort}`);
 
 let lastFormat: { format: 'constructed' | 'commander'; players: number } = { format: 'constructed', players: 2 };
 let gameOverShown = false;

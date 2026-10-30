@@ -15,7 +15,7 @@ export class Input {
   private readonly ray = new THREE.Raycaster();
   private readonly ndc = new THREE.Vector2();
   private hovered: number | null = null;
-  private drag: { id: number; startY: number; startX: number; moved: boolean } | null = null;
+  private drag: { id: number; startY: number; startX: number; moved: boolean; grab: THREE.Vector3; depth: number } | null = null;
 
   constructor(
     private readonly stage: Stage,
@@ -50,8 +50,9 @@ export class Input {
       if (Math.hypot(dy, e.clientX - this.drag.startX) > 24) this.drag.moved = true;
       const obj = this.table.cards.get(this.drag.id);
       if (obj && this.drag.moved) {
-        obj.body.position.y = Math.max(0, dy / 40);
-        obj.body.position.x = (e.clientX - this.drag.startX) / 40;
+        // keep the grabbed point of the card exactly under the cursor
+        const p = this.pointOnPlane(e.clientX, e.clientY, this.drag.depth);
+        obj.root.position.copy(p.sub(this.drag.grab));
       }
       return;
     }
@@ -77,7 +78,12 @@ export class Input {
     const id = this.pick(e);
     if (id == null) return;
     if (e.button === 0 && this.table.isLocalHand(id)) {
-      this.drag = { id, startY: e.clientY, startX: e.clientX, moved: false };
+      const obj = this.table.cards.get(id)!;
+      const depth = -obj.root.position.z;
+      // offset from the card's centre to where the cursor grabbed it, in screen-locked (camera) space
+      const grab = this.pointOnPlane(e.clientX, e.clientY, depth).sub(obj.root.position);
+      this.drag = { id, startY: e.clientY, startX: e.clientX, moved: false, grab, depth };
+      this.table.beginDrag(id);
       return;
     }
     this.handlers.clickCard(id, e.button === 2 ? 3 : 1);
@@ -87,10 +93,19 @@ export class Input {
     const d = this.drag;
     if (!d) return;
     this.drag = null;
-    const obj = this.table.cards.get(d.id);
-    if (obj) obj.body.position.set(0, 0, 0);
     const dy = d.startY - e.clientY;
     // a plain click or a drag up out of the hand plays the card; a short drag just drops it back
-    if (!d.moved || dy > window.innerHeight * 0.12) this.handlers.clickCard(d.id, 1);
+    const play = !d.moved || dy > window.innerHeight * 0.12;
+    this.table.endDrag(d.id, play);
+    if (play) this.handlers.clickCard(d.id, 1);
+  }
+
+  /** The point under the cursor at a given distance in front of the camera, in camera space. */
+  private pointOnPlane(clientX: number, clientY: number, depth: number): THREE.Vector3 {
+    const cam = this.stage.camera;
+    const ndcX = (clientX / window.innerWidth) * 2 - 1;
+    const ndcY = -(clientY / window.innerHeight) * 2 + 1;
+    const halfH = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * depth;
+    return new THREE.Vector3(ndcX * halfH * cam.aspect, ndcY * halfH, -depth);
   }
 }
