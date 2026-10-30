@@ -1,0 +1,6 @@
+engine/forge/
+**/target/
+node_modules/
+dist/
+client/src-tauri/target/
+.DS_Store
