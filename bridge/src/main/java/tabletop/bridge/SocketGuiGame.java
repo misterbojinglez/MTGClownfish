@@ -244,6 +244,10 @@ public class SocketGuiGame extends AbstractGuiGame {
         if (choices == null || choices.isEmpty()) {
             return new ArrayList<>();
         }
+        if (min < 0 && message != null && message.toLowerCase().contains("play these cards well")) {
+            // Forge's deck-quality warning about AI decks; not something the player needs to see
+            return new ArrayList<>();
+        }
         if (min < 0) {
             // a reveal: nothing to choose, the client just shows it
             final JsonObject req = new JsonObject();

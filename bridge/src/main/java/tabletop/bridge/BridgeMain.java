@@ -18,6 +18,7 @@ import forge.gamemodes.quest.QuestController;
 import forge.gui.FThreads;
 import forge.gui.GuiBase;
 import forge.interfaces.IGameController;
+import forge.localinstance.properties.ForgePreferences;
 import forge.model.FModel;
 import forge.player.GamePlayerUtil;
 import forge.trackable.TrackableTypes;
@@ -48,6 +49,10 @@ public final class BridgeMain {
         final long t0 = System.currentTimeMillis();
         FModel.initialize(null, null);
         System.out.println("[bridge] Forge ready in " + (System.currentTimeMillis() - t0) + " ms");
+        // the client highlights playable cards and the auto-tap plan, Arena-style
+        final var prefs = FModel.getPreferences();
+        prefs.setPref(ForgePreferences.FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, true);
+        prefs.setPref(ForgePreferences.FPref.UI_SHOW_AUTOTAP_PREVIEW, true);
 
         session = new Session(port, BridgeMain::onClientMessage);
         session.start();
