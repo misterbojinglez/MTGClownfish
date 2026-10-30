@@ -70,7 +70,37 @@ async function handle(msg: ServerMsg): Promise<void> {
   }
 }
 
+/**
+ * Arena-style payment: right after the player casts a spell or activates an ability themselves, Forge's
+ * mana prompt is answered with "Auto" (it spends floating mana first, then taps sources). Payment prompts
+ * the player didn't start — "counter unless you pay" and the like — are left for them to decide.
+ */
+let autoPayUntil = 0;
+/** set once the cast has moved past plain priority (targets, payment…), so a later priority prompt means it's over */
+let autoPayMovedOn = false;
+
+function armAutoPay(): void {
+  autoPayUntil = performance.now() + 30000;
+  autoPayMovedOn = false;
+}
+
+function maybeAutoPay(msg: UpdateMsg): void {
+  const p = msg.prompt;
+  if (performance.now() > autoPayUntil || !p.ok?.enabled) return;
+  if (p.input === 'InputPassPriority') {
+    // a priority prompt right after the click is stale; one after targeting/payment means the cast ended
+    if (autoPayMovedOn) autoPayUntil = 0;
+    return;
+  }
+  autoPayMovedOn = true;
+  if (p.input?.startsWith('InputPayMana')) {
+    autoPayUntil = 0;
+    bridge.act({ action: 'ok' });
+  }
+}
+
 async function applyUpdate(msg: UpdateMsg): Promise<void> {
+  maybeAutoPay(msg);
   await table.apply(msg);
   refreshPrompt();
   if (msg.state.gameOver) showGameOver();
@@ -111,12 +141,22 @@ hud.bind({
   concede: () => bridge.act({ action: 'concede' }),
 });
 
-new Input(stage, table, {
+const input = new Input(stage, table, {
   clickCard: (id, button) => {
     const stackItem = table.stackItemFor(id);
     const targetsStack = stackItem != null && table.selection.targets.some((t) => t?.stack === stackItem);
-    if (targetsStack) bridge.act({ action: 'stack', id: stackItem! });
-    else bridge.act({ action: 'card', id, button });
+    if (targetsStack) {
+      bridge.act({ action: 'stack', id: stackItem! });
+      return;
+    }
+    // casting from hand or activating a non-land permanent arms auto-pay for the payment prompt that follows;
+    // tapping a land for mana (picking colours up front) doesn't
+    const c = table.cards.get(id)?.state;
+    const paying = table.prompt.input?.startsWith('InputPayMana');
+    if (c && !paying && button === 1 && !c.land && (table.isLocalHand(id) || c.zone === 'Battlefield' || c.zone === 'Command')) {
+      armAutoPay();
+    }
+    bridge.act({ action: 'card', id, button });
   },
   hover: (id) => {
     const inHand = id != null && table.isLocalHand(id);
@@ -143,4 +183,4 @@ bridge.connect();
 hud.menu(startGame);
 
 // dev-only hook so the headless driver (scratch tooling) can read state and act like a player
-if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge };
+if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, autoPayArmed: () => performance.now() < autoPayUntil };

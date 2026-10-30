@@ -173,6 +173,8 @@ public class SocketGuiGame extends AbstractGuiGame {
             cancel.addProperty("enabled", enable2);
             prompt.add("ok", ok);
             prompt.add("cancel", cancel);
+            // which Forge input is asking (e.g. InputPayManaOfCostPayment), so the client can react to it
+            prompt.addProperty("input", currentInputName());
         }
         flush();
     }
@@ -192,6 +194,14 @@ public class SocketGuiGame extends AbstractGuiGame {
             }
         }
         flush();
+    }
+
+    private String currentInputName() {
+        if (getGameController() instanceof forge.player.PlayerControllerHuman pch) {
+            final var input = pch.getInputQueue().getInput();
+            return input == null ? null : input.getClass().getSimpleName();
+        }
+        return null;
     }
 
     @Override public void flashIncorrectAction() { notice("incorrect", null); }

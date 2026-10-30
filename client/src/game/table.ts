@@ -66,7 +66,7 @@ export class Table {
   private layout = new Map<number, Placement>();
   /** Invisible, unmoving click targets for hand cards at their resting slots. */
   private readonly handZones = new Map<number, THREE.Mesh>();
-  private readonly zoneGeo = new THREE.PlaneGeometry(CARD_W, CARD_H * 2);
+  private readonly zoneGeo = new THREE.PlaneGeometry(CARD_W, CARD_H);
   private readonly zoneMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
 
   constructor(private readonly stage: Stage) {
@@ -166,8 +166,9 @@ export class Table {
   }
 
   /**
-   * Hand hit zones sit where each card rests (as if nothing were hovered) and reach up over the popped-up
-   * card, so a hovered card never slides out from under the pointer and clicks land on the card you aimed at.
+   * Hand hit zones cover exactly where each card rests (as if nothing were hovered), so hovering never
+   * reshuffles which card is under the pointer, and the table just above the hand stays clickable.
+   * The popped-up card itself is hit-tested separately while it's hovered.
    */
   private updateHandZones(): void {
     const me = this.state?.players.find((p) => p.id === this.localId);
@@ -193,8 +194,6 @@ export class Table {
       zone.position.copy(p.pos);
       zone.rotation.copy(p.rot);
       zone.scale.setScalar(p.scale);
-      // shift up half a card so the zone covers the resting card and the space it pops into
-      zone.translateY((CARD_H / 2) * p.scale);
       zone.position.z += 0.001 * p.order;
     }
   }

@@ -100,6 +100,8 @@ export interface Prompt {
   card?: number | null;
   ok?: Button;
   cancel?: Button;
+  /** Forge input class behind this prompt, e.g. InputPassPriority, InputPayManaOfCostPayment */
+  input?: string | null;
 }
 
 export interface Selection {
