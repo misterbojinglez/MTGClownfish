@@ -152,6 +152,28 @@ public class SocketGuiGame extends AbstractGuiGame {
         }
         state.add("cards", changed);
 
+        final JsonObject promptOut = prompt.deepCopy();
+        promptOut.add("source", resolvingSource());
+        final JsonObject selection = Serializer.selection(getSelection());
+
+        // Forge refreshes the view many times per step (priority passing between players, zone bookkeeping);
+        // most refreshes change nothing the player can see. Skip those, or the client's queue backs up and
+        // it has to rush its animations to catch up.
+        boolean meaningful = changed.size() > 0;
+        for (final JsonElement e : pendingEvents) {
+            final String kind = e.isJsonObject() && e.getAsJsonObject().has("event") ? e.getAsJsonObject().get("event").getAsString() : "";
+            if (!NOISE_EVENTS.contains(kind)) {
+                meaningful = true;
+                break;
+            }
+        }
+        final String fingerprint = visibleFingerprint(state) + promptOut + selection;
+        if (!meaningful && fingerprint.equals(lastFingerprint)) {
+            pendingEvents.clear();
+            return;
+        }
+        lastFingerprint = fingerprint;
+
         final JsonObject msg = new JsonObject();
         msg.addProperty("type", "update");
         msg.addProperty("seq", ++seq);
@@ -160,11 +182,28 @@ public class SocketGuiGame extends AbstractGuiGame {
         pendingEvents.clear();
         msg.add("events", events);
         msg.add("state", state);
-        final JsonObject promptOut = prompt.deepCopy();
-        promptOut.add("source", resolvingSource());
         msg.add("prompt", promptOut);
-        msg.add("selection", Serializer.selection(getSelection()));
+        msg.add("selection", selection);
         session.send(msg);
+    }
+
+    /** Events the client draws nothing for; on their own they don't justify an update. */
+    private static final java.util.Set<String> NOISE_EVENTS = java.util.Set.of(
+            "Zone", "PlayerPriority", "AddLog", "ManaPool", "CardStatsChanged", "CombatUpdate", "TurnPhase");
+
+    private String lastFingerprint = "";
+
+    /** The state as the player sees it, minus whose priority it is (that changes on every pass). */
+    private static String visibleFingerprint(final JsonObject state) {
+        final JsonObject copy = state.deepCopy();
+        if (copy.has("players")) {
+            for (final JsonElement p : copy.getAsJsonArray("players")) {
+                if (p.isJsonObject()) {
+                    p.getAsJsonObject().remove("priority");
+                }
+            }
+        }
+        return copy.toString();
     }
 
     /** Why a land in hand can't be played right now, or null if it can (or isn't a land). */

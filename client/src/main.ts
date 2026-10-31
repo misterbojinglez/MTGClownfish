@@ -23,6 +23,9 @@ const bridge = new Bridge(`ws://127.0.0.1:${bridgePort}`);
 let lastSetup: GameSetup = { format: 'constructed', players: 2, decks: [] };
 let gameOverShown = false;
 
+/** seconds each phase stays lit before the next is shown (shorter while catching up) */
+const PHASE_DWELL = 0.32;
+
 // Every server message runs in arrival order; updates await their animations so the
 // player always sees what the AI did before being asked to respond.
 const queue: ServerMsg[] = [];
@@ -34,11 +37,20 @@ async function drain(): Promise<void> {
   while (queue.length) {
     const msg = queue.shift()!;
     const backlog = queue.filter((m) => m.type === 'update').length;
-    table.timeScale = Math.min(5, 1 + backlog / 6);
+    // play at normal speed unless well behind, and never rush past what is happening
+    table.timeScale = Math.min(2.5, 1 + Math.max(0, backlog - 8) / 20);
+    const phaseBefore = table.state ? `${table.state.turn}|${table.state.phase}` : '';
+    const started = performance.now();
     try {
       await handle(msg);
     } catch (err) {
       console.error('failed handling', msg, err);
+    }
+    // every step of the turn gets a beat on screen, even when nothing happens in it (end of combat, end
+    // step, the next player's untap and upkeep), so the turn visibly passes instead of jumping
+    if (msg.type === 'update' && table.state && `${table.state.turn}|${table.state.phase}` !== phaseBefore) {
+      const dwell = PHASE_DWELL / table.timeScale - (performance.now() - started) / 1000;
+      if (dwell > 0.01) await new Promise((r) => setTimeout(r, dwell * 1000));
     }
   }
   draining = false;
