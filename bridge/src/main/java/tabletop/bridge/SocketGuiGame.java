@@ -154,6 +154,8 @@ public class SocketGuiGame extends AbstractGuiGame {
 
         final JsonObject promptOut = prompt.deepCopy();
         promptOut.add("source", resolvingSource());
+        // always the input Forge holds right now, so the client can never be stuck answering an old one
+        promptOut.addProperty("inputId", currentInputId());
         final JsonObject selection = Serializer.selection(getSelection());
 
         // Forge refreshes the view many times per step (priority passing between players, zone bookkeeping);
@@ -330,6 +332,7 @@ public class SocketGuiGame extends AbstractGuiGame {
             prompt.add("cancel", cancel);
             // which Forge input is asking (e.g. InputPayManaOfCostPayment), so the client can react to it
             prompt.addProperty("input", currentInputName());
+            prompt.addProperty("inputId", currentInputId());
         }
         flush();
     }
@@ -349,6 +352,63 @@ public class SocketGuiGame extends AbstractGuiGame {
             }
         }
         flush();
+    }
+
+    /** The Forge input last numbered, and its number: each new input object gets the next one. */
+    private Object numberedInput;
+    private int inputId;
+
+    /**
+     * A number for the input Forge is showing now. The client runs a beat behind Forge (it animates every
+     * update in turn), so each click carries the number of the prompt the player was looking at; a click
+     * meant for an earlier prompt must not land on a later one (a creature clicked during a cast would
+     * otherwise be taken as the sacrifice the cost asks for next).
+     */
+    synchronized int currentInputId() {
+        final Object input = getGameController() instanceof forge.player.PlayerControllerHuman pch ? pch.getInputQueue().getInput() : null;
+        if (input != numberedInput) {
+            numberedInput = input;
+            inputId++;
+        }
+        return inputId;
+    }
+
+    /**
+     * Names of the sources Forge's Auto button would sacrifice for mana right now (Lotus Petal, a Treasure),
+     * or an empty list. Forge works out that plan before it enables Auto, so it is known by the time the
+     * client's auto-pay arrives, even when the client hasn't been sent the plan yet.
+     */
+    java.util.List<String> autoPaySacrifices() {
+        final java.util.List<String> names = new java.util.ArrayList<>();
+        if (!(getGameController() instanceof forge.player.PlayerControllerHuman pch)
+                || !(pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputPayMana pay)) {
+            return names;
+        }
+        try {
+            final java.lang.reflect.Field f = forge.gamemodes.match.input.InputPayMana.class.getDeclaredField("autoPayManaSources");
+            f.setAccessible(true);
+            final Object sources = f.get(pay);
+            if (sources instanceof Iterable<?> it) {
+                for (final Object o : it) {
+                    if (o instanceof Card c && Serializer.manaCostsSacrifice(c)) {
+                        names.add(c.getName());
+                    }
+                }
+            }
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[bridge] couldn't read the auto-pay plan: " + e);
+        }
+        return names;
+    }
+
+    /** A click was dropped because Forge had already moved past the prompt it answered. */
+    void staleClick() {
+        notice("stale", null);
+    }
+
+    /** Tell the client something it should show the player (a toast). */
+    void tell(final String text) {
+        notice("message", text);
     }
 
     private String currentInputName() {

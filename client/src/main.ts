@@ -60,6 +60,8 @@ async function drain(): Promise<void> {
 function refreshPrompt(): void {
   if (!table.state) return;
   hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0, table.state);
+  // clicks from here on answer this prompt
+  bridge.shownInput = table.prompt.inputId;
   hud.setPhase(table.state, table.localId);
   hud.setStack(table.state, table.localId);
   refreshBrowser();
@@ -100,6 +102,11 @@ async function handle(msg: ServerMsg): Promise<void> {
       break;
     case 'notice':
       if (msg.kind === 'message' || msg.kind === 'error') hud.toast(msg.text ?? '', msg.kind);
+      // a click landed after the game had moved on from what was on screen: it was dropped, not misapplied
+      if (msg.kind === 'stale' && performance.now() - lastStaleToast > 4000) {
+        lastStaleToast = performance.now();
+        hud.toast('The table was still catching up, so that click was skipped. Try again.');
+      }
       if (msg.kind === 'gameFinished') showGameOver();
       break;
   }
@@ -110,6 +117,8 @@ async function handle(msg: ServerMsg): Promise<void> {
  * mana prompt is answered with "Auto" (it spends floating mana first, then taps sources). Payment prompts
  * the player didn't start — "counter unless you pay" and the like — are left for them to decide.
  */
+/** when the "click was skipped" toast last showed, so a burst of clicks gets one */
+let lastStaleToast = 0;
 let autoPayUntil = 0;
 /** set once the cast has moved past plain priority (targets, payment…), so a later priority prompt means it's over */
 let autoPayMovedOn = false;
@@ -130,7 +139,10 @@ function maybeAutoPay(msg: UpdateMsg): void {
   autoPayMovedOn = true;
   if (p.input?.startsWith('InputPayMana')) {
     autoPayUntil = 0;
-    bridge.act({ action: 'ok' });
+    // answers this payment prompt specifically, not whatever is on screen (or whatever Forge shows by the time
+    // it lands). Flagged as automatic: if Forge's plan would sacrifice a source (Lotus Petal, a Treasure), the
+    // bridge leaves the prompt up and says so, and the player taps their mana or presses Auto themselves.
+    bridge.act({ action: 'ok', auto: true }, p.inputId);
   }
 }
 

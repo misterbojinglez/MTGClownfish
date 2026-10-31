@@ -309,8 +309,32 @@ public final class BridgeMain {
         final Integer id = msg.has("id") && !msg.get("id").isJsonNull() ? msg.get("id").getAsInt() : null;
         final Click click = new Click(msg.has("button") ? msg.get("button").getAsInt() : 1);
 
+        // prompt answers are dropped when Forge has moved on from the prompt the player was answering
+        if (msg.has("input") && GUARDED_ACTIONS.contains(action)) {
+            final int meant = msg.get("input").getAsInt();
+            final int now = gui.currentInputId();
+            if (meant != now) {
+                System.out.println("[bridge] dropped stale " + action + (id != null ? " " + id : "") + " (meant for prompt " + meant + ", now " + now + ")");
+                // the player clicked while the table was still catching up; their own clicks get a word, auto-pay's don't
+                if (!msg.has("auto")) {
+                    gui.staleClick();
+                }
+                return;
+            }
+        }
         switch (action) {
-            case "ok" -> controller.selectButtonOk();
+            case "ok" -> {
+                // the client's automatic payment never spends a source that has to be sacrificed: the player
+                // decides (taps their own mana, or presses Auto, which comes without the flag)
+                if (msg.has("auto") && msg.get("auto").getAsBoolean()) {
+                    final List<String> sacrificed = gui.autoPaySacrifices();
+                    if (!sacrificed.isEmpty()) {
+                        gui.tell("Auto-pay would sacrifice " + String.join(" and ", sacrificed) + ". Tap your mana, or press Auto to use it.");
+                        return;
+                    }
+                }
+                controller.selectButtonOk();
+            }
             case "cancel" -> controller.selectButtonCancel();
             case "card" -> {
                 final CardView card = tracker.getObj(TrackableTypes.CardViewType, id);
@@ -344,6 +368,9 @@ public final class BridgeMain {
             default -> System.err.println("[bridge] unknown action: " + action);
         }
     }
+
+    /** Actions that answer the prompt on screen; the rest (pass turn, concede, undo, hand order) stand alone. */
+    private static final java.util.Set<String> GUARDED_ACTIONS = java.util.Set.of("ok", "cancel", "card", "player", "stack", "mana", "alphaStrike");
 
     private static List<DeckProxy> constructedPrecons() {
         return DeckProxy.getAllPreconstructedDecks(QuestController.getPrecons());

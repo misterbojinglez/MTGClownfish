@@ -387,6 +387,19 @@ public final class Serializer {
         return o;
     }
 
+    /** Whether every mana ability of this card has a sacrifice in its cost (Lotus Petal, Treasure, Phyrexian Altar). */
+    public static boolean manaCostsSacrifice(final forge.game.card.Card card) {
+        if (card == null || card.getManaAbilities().isEmpty()) {
+            return false;
+        }
+        for (final forge.game.spellability.SpellAbility sa : card.getManaAbilities()) {
+            if (sa.getPayCosts() == null || !sa.getPayCosts().hasSpecificCostType(forge.game.cost.CostSacrifice.class)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** A typed reference to a game object, so the client knows which table to look in. */
     public static JsonElement ref(final Object obj) {
         if (obj == null) {

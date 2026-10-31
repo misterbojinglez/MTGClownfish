@@ -127,6 +127,8 @@ export interface Prompt {
   cancel?: Button;
   /** Forge input class behind this prompt, e.g. InputPassPriority, InputPayManaOfCostPayment */
   input?: string | null;
+  /** which Forge input object this is: a new number for each prompt (the same one while you pick several cards) */
+  inputId?: number;
   source?: ResolvingSource | null;
 }
 
@@ -232,7 +234,9 @@ export type ServerMsg =
   | { type: 'precons'; format: string; decks: PreconInfo[] };
 
 export type Action =
-  | { action: 'ok' | 'cancel' | 'alphaStrike' | 'undo' | 'concede' }
+  /** auto: the client's own auto-pay (the bridge won't let it sacrifice a mana source) */
+  | { action: 'ok'; auto?: boolean }
+  | { action: 'cancel' | 'alphaStrike' | 'undo' | 'concede' }
   /** turn: the turn the client is showing, so a late click can't carry into the next turn */
   | { action: 'passUntilEndOfTurn'; turn?: number }
   | { action: 'card'; id: number; button?: number }

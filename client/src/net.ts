@@ -97,8 +97,14 @@ export class Bridge {
     });
   }
 
-  act(a: Action): void {
-    this.send({ type: 'action', ...a });
+  /**
+   * The prompt the player is looking at. The client animates a beat behind Forge, so prompt answers carry
+   * it and the bridge drops any that arrive after Forge has moved on to a different prompt.
+   */
+  shownInput: number | undefined;
+
+  act(a: Action, input = this.shownInput): void {
+    this.send({ type: 'action', ...a, ...(input != null ? { input } : {}) });
   }
 
   respond(id: number, value: unknown): void {
