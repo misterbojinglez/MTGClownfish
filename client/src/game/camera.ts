@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { GameEvent, GameState, Ref, Selection } from '../protocol';
 import { HOME_VIEW, type CameraView, type Stage } from '../scene/stage';
-import { seatFrames, tableMats, type SeatFrame } from '../scene/layout';
+import { computeLayout, seatFrames, tableMats, type SeatFrame } from '../scene/layout';
+import { CARD_H } from '../scene/cardMesh';
 
 /**
  * Multiplayer camera. The table is too big to read all at once, so the camera glides between an
@@ -35,6 +36,10 @@ export class CameraDirector {
   /** how long the result of an attack or spell stays framed before the camera goes back */
   private static readonly RESULT_HOLD_MS = 1600;
   private frames: SeatFrame[] = [];
+  /** the latest game state, for framing a seat around the cards actually on its battlefield */
+  private state: GameState | null = null;
+  /** how many cards the framed seat had when it was framed; a change re-frames it */
+  private framedCount = -1;
   private localId = -1;
   private activePlayer: number | null = null;
   /** what the current prompt needs on screen, so it isn't re-framed on every update */
@@ -76,6 +81,7 @@ export class CameraDirector {
 
   /** Called with every update before it animates, so the camera is already looking where things happen. */
   update(state: GameState, localId: number, events: GameEvent[], selection: Selection, targetable: Set<number> = new Set()): void {
+    this.state = state;
     if (this.frames.length !== state.players.length || this.localId !== localId) {
       this.localId = localId;
       this.frames = seatFrames(state, localId);
@@ -90,6 +96,11 @@ export class CameraDirector {
       this.onChange?.();
     }
     if (!this.multiplayer) return;
+    // an opponent's board framed on its own grows or shrinks: keep it filling the view
+    if (this.mode.kind === 'seats' && this.mode.players.length === 1 && this.mode.players[0] !== localId) {
+      const n = state.players.find((p) => p.id === (this.mode as { players: number[] }).players[0])?.zones.Battlefield.length ?? -1;
+      if (this.framedCount >= 0 && n !== this.framedCount) this.stage.setView(this.viewFor(this.mode), 0.6);
+    }
 
     const turnBegan = events.find((e) => e.event === 'TurnBegan');
     if (turnBegan) {
@@ -259,12 +270,17 @@ export class CameraDirector {
     if (frames.length === 0) return this.viewFor({ kind: 'table' });
     const pts = frames.flatMap((f) => f.corners);
     if (frames.length === 1) {
-      // one seat, seen the way a duel shows it (an opponent's cards upright). Include some of the table in
-      // front of it: an opponent's side sits in the upper part of the screen, your own just above your hand
+      // one seat, seen the way a duel shows it (an opponent's cards upright)
       const f = frames[0];
-      const toCentre = f.center.clone().negate().setY(0).normalize();
-      pts.push(f.center.clone().addScaledVector(toCentre, f.local ? 14 : f.center.length() * 0.45));
-      return this.fit(pts, f.rotY, 1.2, f.local ? REGION_LOCAL : REGION_SEATS);
+      if (f.local) {
+        // your own side sits just above your hand, with some of the table in front of it
+        const toCentre = f.center.clone().negate().setY(0).normalize();
+        pts.push(f.center.clone().addScaledVector(toCentre, 14));
+        return this.fit(pts, f.rotY, 1.2, REGION_LOCAL);
+      }
+      // an opponent's turn: close in on the cards on their battlefield, so they can be read
+      this.framedCount = this.state?.players.find((p) => p.id === f.playerId)?.zones.Battlefield.length ?? -1;
+      return this.fit(this.boardPoints(f), f.rotY, 1.2, REGION_SEATS);
     }
     // several seats: whichever direction frames them closest, preferring your own point of view
     const yaws = [0, this.meanAngle(frames.map((f) => f.rotY)), ...frames.map((f) => f.rotY)];
@@ -279,6 +295,32 @@ export class CameraDirector {
       }
     }
     return best!;
+  }
+
+  /**
+   * The area to frame for one opponent's seat: where their battlefield cards come to rest (with a card's
+   * margin round each), widened to at least ~60% of their mat so a near-empty board isn't framed huge.
+   * Falls back to the seat's whole footprint when there's no state yet.
+   */
+  private boardPoints(f: SeatFrame): THREE.Vector3[] {
+    const state = this.state;
+    const player = state?.players.find((p) => p.id === f.playerId);
+    if (!state || !player) return f.corners;
+    const layout = computeLayout(state, this.localId, { hoveredHand: null, handOrder: [] });
+    const pts: THREE.Vector3[] = [];
+    for (const id of player.zones.Battlefield) {
+      const at = layout.get(id);
+      if (!at || at.space !== 'table') continue;
+      const m = (CARD_H / 2) * at.scale + 0.4;
+      for (const [dx, dz] of [[-m, -m], [m, -m], [m, m], [-m, m]]) pts.push(at.pos.clone().add(new THREE.Vector3(dx, 0, dz)));
+    }
+    // the seat's own left-right axis, from its footprint corners
+    const axis = f.corners[1].clone().sub(f.corners[0]);
+    const minHalf = axis.length() * 0.3;
+    axis.normalize();
+    const mid = pts.length ? pts.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / pts.length) : f.center.clone();
+    pts.push(mid.clone().addScaledVector(axis, minHalf), mid.clone().addScaledVector(axis, -minHalf));
+    return pts;
   }
 
   /** Circular mean; opposite seats (no sensible middle) look from your side. */
