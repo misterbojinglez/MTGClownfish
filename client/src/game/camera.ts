@@ -66,7 +66,7 @@ export class CameraDirector {
   }
 
   /** Called with every update before it animates, so the camera is already looking where things happen. */
-  update(state: GameState, localId: number, events: GameEvent[], selection: Selection): void {
+  update(state: GameState, localId: number, events: GameEvent[], selection: Selection, targetable: Set<number> = new Set()): void {
     if (this.frames.length !== state.players.length || this.localId !== localId) {
       this.localId = localId;
       this.frames = seatFrames(state, localId);
@@ -94,7 +94,7 @@ export class CameraDirector {
     if (!this.auto || this.manual) return;
 
     // 1. a prompt that needs things on screen: frame every seat it involves
-    const needed = this.seatsNeeded(state, selection);
+    const needed = this.seatsNeeded(state, selection, targetable);
     const key = [...needed].sort().join(',');
     if (needed.size > 0) {
       if (key !== this.promptKey) {
@@ -173,13 +173,15 @@ export class CameraDirector {
   }
 
   /** Seats whose cards or player the current prompt lets you pick. */
-  private seatsNeeded(state: GameState, sel: Selection): Set<number> {
+  private seatsNeeded(state: GameState, sel: Selection, targetable: Set<number>): Set<number> {
     const out = new Set<number>();
     for (const id of sel.cards) {
       const c = state.cards[id];
       if (c?.zone === 'Battlefield' && c.controller != null) out.add(c.controller);
     }
     for (const t of sel.targets) if (t?.player != null) out.add(t.player);
+    // includes every possible defender while you declare attackers
+    for (const pid of targetable) out.add(pid);
     // choosing among your own permanents only (paying costs, blocking with nothing to block) doesn't move anything
     if (out.size === 1 && out.has(this.localId)) out.clear();
     if (out.size > 0 && state.activePlayer != null && state.combat?.length) out.add(state.activePlayer);

@@ -885,6 +885,19 @@ export class Table {
   }
 
   targetablePlayers(): Set<number> {
-    return new Set(this.selection.targets.map((t) => t?.player).filter((x): x is number => x != null));
+    const out = new Set(this.selection.targets.map((t) => t?.player).filter((x): x is number => x != null));
+    // declaring attackers: Forge attacks one defender at a time, and clicking a player switches to them
+    if (this.isDeclaringAttack()) for (const p of this.state?.players ?? []) if (p.id !== this.localId && !p.lost) out.add(p.id);
+    return out;
+  }
+
+  isDeclaringAttack(): boolean {
+    return this.prompt.input === 'InputAttack';
+  }
+
+  /** The player your attackers are currently aimed at (Forge's current defender), while declaring. */
+  currentDefender(): number | null {
+    if (!this.isDeclaringAttack()) return null;
+    return this.selection.chosen.find((r) => r?.player != null)?.player ?? null;
   }
 }

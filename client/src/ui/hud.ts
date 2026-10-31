@@ -199,6 +199,7 @@ export class Hud {
       msg += sel.max > 1 ? `\n(${picked}/${sel.max} selected)` : '';
     }
     if (sel.targets.some((t) => t?.player !== undefined)) msg += '\n(Click a player\'s portrait or their side of the table)';
+    else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Click another opponent\'s portrait or side of the table to attack them instead)';
     this.promptText.textContent = msg;
     const ok = prompt.ok;
     const cancel = prompt.cancel;
@@ -271,7 +272,7 @@ export class Hud {
 
   // ---- player plates ------------------------------------------------------------------------------
 
-  updatePlayers(state: GameState, localId: number, screen: Map<number, { x: number; y: number }>, targetable: Set<number>): void {
+  updatePlayers(state: GameState, localId: number, screen: Map<number, { x: number; y: number }>, targetable: Set<number>, defender: number | null = null): void {
     const spots = this.placePlates(state, screen);
     for (const p of state.players) {
       let plate = this.plates.get(p.id);
@@ -290,7 +291,8 @@ export class Hud {
       plate.classList.toggle('active', p.id === state.activePlayer);
       plate.classList.toggle('priority', p.priority);
       plate.classList.toggle('lost', p.lost);
-      plate.classList.toggle('targetable', targetable.has(p.id));
+      plate.classList.toggle('targetable', targetable.has(p.id) && defender !== p.id);
+      plate.classList.toggle('defending', defender === p.id);
       const lifeEl = plate.querySelector<HTMLDivElement>('.life')!;
       if (lifeEl.textContent !== String(p.life)) {
         const prev = Number(lifeEl.textContent);

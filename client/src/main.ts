@@ -123,7 +123,7 @@ async function applyUpdate(msg: UpdateMsg): Promise<void> {
   maybeAutoPay(msg);
   const animating = table.apply(msg);
   // the camera turns toward what's about to happen while it animates
-  director.update(table.state!, table.localId, msg.events, msg.selection);
+  director.update(table.state!, table.localId, msg.events, msg.selection, table.targetablePlayers());
   await animating;
   refreshPrompt();
   if (msg.state.gameOver) showGameOver();
@@ -191,7 +191,9 @@ const input = new Input(stage, table, {
     // aiming at a player but clicked one of their cards (that isn't itself a choice): target the player
     const sel = table.selection;
     const owner = table.cards.get(id)?.state.controller;
-    if (!sel.cards.includes(id) && owner != null && table.targetablePlayers().has(owner)) {
+    // (a planeswalker or battle you're declaring attacks on is clicked itself)
+    const attackable = table.isDeclaringAttack() && /Planeswalker|Battle/.test(table.cards.get(id)?.state.typeLine ?? '');
+    if (!sel.cards.includes(id) && !attackable && owner != null && table.targetablePlayers().has(owner)) {
       bridge.act({ action: 'player', id: owner });
       return;
     }
@@ -226,7 +228,7 @@ stage.onTick(() => {
     const w = table.playerWorld(p.id);
     if (w) screen.set(p.id, table.toScreen(new THREE.Vector3(w.x, w.y, w.z)));
   }
-  hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers());
+  hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers(), table.currentDefender());
 });
 
 // ---- camera views (multiplayer) ----
