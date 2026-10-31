@@ -242,6 +242,7 @@ public class SocketGuiGame extends AbstractGuiGame {
 
     @Override
     public void openView(final TrackableCollection<PlayerView> myPlayers) {
+        try { liveGame = getGameView().getGame(); } catch (final RuntimeException ignored) { }
         final JsonObject msg = new JsonObject();
         msg.addProperty("type", "gameStarted");
         final JsonArray you = new JsonArray();
@@ -374,7 +375,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         } else if (item instanceof SpellAbilityView sa) {
             o.addProperty("ability", sa.getId());
             if (sa.getHostCard() != null) { o.addProperty("card", sa.getHostCard().getId()); }
-            if (label == null) { label = sa.getDescription(); }
+            if (label == null) { label = spellLabel(sa); }
         } else if (item instanceof PlayerView p) {
             o.addProperty("player", p.getId());
             if (label == null) { label = p.getName(); }
@@ -383,6 +384,46 @@ public class SocketGuiGame extends AbstractGuiGame {
         }
         o.addProperty("label", label == null ? String.valueOf(item) : label);
         return o;
+    }
+
+    /** the running game, for looking up what a view stands for */
+    static volatile forge.game.Game liveGame;
+
+    /**
+     * A spell offered more than one way (alternative costs, flash costs, kicker…) is labelled by how you'd
+     * pay for it, so "Pay {2}{B}{B}" and "Sacrifice a nontoken black creature" read differently at a glance.
+     */
+    private static String spellLabel(final SpellAbilityView view) {
+        final String desc = view.getDescription();
+        // alternative costs are made on the fly (not on the card's list): read the reminder Forge appends,
+        // "(You may sacrifice a nontoken black creature rather than pay this spell's mana cost.)"
+        final java.util.regex.Matcher alt = java.util.regex.Pattern
+                .compile("\\((?:You may )?([^()]*?) rather than pay[^)]*\\)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(desc == null ? "" : desc);
+        if (alt.find()) {
+            final String how = alt.group(1).trim();
+            final String effect = desc.substring(0, alt.start()).trim();
+            return Character.toUpperCase(how.charAt(0)) + how.substring(1) + " — " + effect;
+        }
+        try {
+            final forge.game.Game game = liveGame;
+            final CardView host = view.getHostCard();
+            if (game == null || host == null) { return desc; }
+            final Card card = game.findById(host.getId());
+            if (card == null) { return desc; }
+            for (final forge.game.spellability.SpellAbility sa : card.getAllSpellAbilities()) {
+                if (sa.getId() != view.getId() || !sa.isSpell() || sa.getPayCosts() == null) { continue; }
+                final forge.game.cost.Cost cost = sa.getPayCosts();
+                String how = cost.toSimpleString();
+                if (how == null || how.isBlank()) { how = "Free"; }
+                else if (how.startsWith("{") || how.matches("^[0-9X].*")) { how = "Pay " + how; }
+                // the effect, without the reminder of the alternative cost
+                final String effect = desc.replaceAll("\\s*\\([^)]*rather than pay[^)]*\\)", "").trim();
+                return how + " — " + effect;
+            }
+        } catch (final RuntimeException ignored) {
+            // fall back to Forge's own description
+        }
+        return desc;
     }
 
     private static <T> JsonArray options(final List<T> items, final FSerializableFunction<T, String> display) {
