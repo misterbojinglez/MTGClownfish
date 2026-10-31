@@ -7,7 +7,9 @@ import { seatFrames, tableMats, type SeatFrame } from '../scene/layout';
  * Multiplayer camera. The table is too big to read all at once, so the camera glides between an
  * overview and closer views of one or two seats: the player whose turn it is, the two sides of a combat,
  * everything a prompt asks you to pick from. You can take over at any time (view bar, number keys,
- * mouse wheel, clicking a player's plate); your choice holds until the next turn begins.
+ * mouse wheel, clicking a player's plate); your choice holds until the next turn begins, except that an
+ * attack or a spell aimed at another player always pulls back to show both sides and what happens, then
+ * returns to your view.
  * Duels keep Arena's fixed camera.
  */
 
@@ -25,10 +27,16 @@ export class CameraDirector {
   mode: ViewMode = { kind: 'table' };
   /** a view the player chose; auto framing waits until the next turn */
   private manual = false;
+  private manualMode: ViewMode = { kind: 'table' };
+  /** seats of the attack or targeted spell being shown ('' when none) */
+  private actionKey = '';
+  /** going back to the previous view a moment after an action ends, so its result is seen */
+  private restoreTimer = 0;
+  /** how long the result of an attack or spell stays framed before the camera goes back */
+  private static readonly RESULT_HOLD_MS = 1600;
   private frames: SeatFrame[] = [];
   private localId = -1;
   private activePlayer: number | null = null;
-  private inCombat = false;
   /** what the current prompt needs on screen, so it isn't re-framed on every update */
   private promptKey = '';
   private lastKey = '';
@@ -56,9 +64,10 @@ export class CameraDirector {
   reset(): void {
     this.frames = [];
     this.manual = false;
-    this.inCombat = false;
     this.promptKey = '';
     this.lastKey = '';
+    this.actionKey = '';
+    clearTimeout(this.restoreTimer);
     this.activePlayer = null;
     this.mode = { kind: 'table' };
     this.stage.setView(HOME_VIEW, 0);
@@ -85,50 +94,94 @@ export class CameraDirector {
     const turnBegan = events.find((e) => e.event === 'TurnBegan');
     if (turnBegan) {
       this.manual = false;
-      this.inCombat = false;
       this.promptKey = '';
       this.activePlayer = (turnBegan.turnOwner as Ref)?.player ?? state.activePlayer;
     } else if (this.activePlayer == null) {
       this.activePlayer = state.activePlayer;
     }
-    if (!this.auto || this.manual) return;
+    if (!this.auto) return;
 
-    // 1. a prompt that needs things on screen: frame every seat it involves
-    const needed = this.seatsNeeded(state, selection, targetable);
-    const key = [...needed].sort().join(',');
-    if (needed.size > 0) {
-      if (key !== this.promptKey) {
-        this.promptKey = key;
-        this.frameSeats([...needed]);
+    // 1. a prompt that needs things on screen: frame every seat it involves (unless you've picked a view)
+    const hadPrompt = this.promptKey !== '';
+    if (!this.manual) {
+      const needed = this.seatsNeeded(state, selection, targetable);
+      const key = [...needed].sort().join(',');
+      if (needed.size > 0) {
+        if (key !== this.promptKey) {
+          this.promptKey = key;
+          this.frameSeats([...needed]);
+        }
+        return;
+      }
+      this.promptKey = '';
+    }
+
+    // 2. an attack, or a spell or ability aimed at another player: always pull back to show both sides
+    //    (even over a view you picked), and hold on the result for a moment once it's over
+    const sides = this.actionSeats(state);
+    if (sides.size > 1) {
+      clearTimeout(this.restoreTimer);
+      this.restoreTimer = 0;
+      const key = [...sides].sort().join(',');
+      if (key !== this.actionKey) {
+        this.actionKey = key;
+        this.frameSeats([...sides]);
       }
       return;
     }
-    this.promptKey = '';
-
-    // 2. combat: the attacker and whoever they're attacking
-    const attacks = state.combat ?? [];
-    if (attacks.length && state.activePlayer != null) {
-      const sides = new Set<number>([state.activePlayer]);
-      for (const a of attacks) {
-        const pid = a.defender?.player ?? (a.defender?.card != null ? state.cards[a.defender.card]?.controller : null);
-        if (pid != null) sides.add(pid);
-      }
-      this.inCombat = true;
-      this.frameSeats([...sides]);
+    if (this.actionKey) {
+      this.actionKey = '';
+      clearTimeout(this.restoreTimer);
+      this.restoreTimer = window.setTimeout(() => {
+        this.restoreTimer = 0;
+        if (this.actionKey || !this.auto) return;
+        if (this.manual) this.go(this.manualMode);
+        else this.frameTurn();
+      }, CameraDirector.RESULT_HOLD_MS);
       return;
     }
+    if (this.restoreTimer || this.manual) return;
 
     // 3. otherwise: the player whose turn it is (your own turn shows the whole table)
-    if (turnBegan || this.inCombat || this.lastKey === '') {
-      this.inCombat = false;
-      this.frameTurn();
+    if (turnBegan || hadPrompt || this.lastKey === '') this.frameTurn();
+  }
+
+  /**
+   * Seats involved in what's happening between players: an attack (attacker and everyone attacked) or
+   * the next spell/ability on the stack that targets another player or their permanents.
+   */
+  private actionSeats(state: GameState): Set<number> {
+    const out = new Set<number>();
+    const attacks = state.combat ?? [];
+    if (attacks.length && state.activePlayer != null) {
+      out.add(state.activePlayer);
+      for (const a of attacks) {
+        const pid = a.defender?.player ?? (a.defender?.card != null ? state.cards[a.defender.card]?.controller : null);
+        if (pid != null) out.add(pid);
+      }
+      return out;
     }
+    for (const item of state.stack) {
+      if (item.controller == null) continue;
+      const seats = new Set<number>([item.controller]);
+      for (const t of item.targets) {
+        const pid = t?.player ?? (t?.card != null ? state.cards[t.card]?.controller : null);
+        if (pid != null) seats.add(pid);
+      }
+      if (seats.size > 1) return seats;
+    }
+    return out;
   }
 
   /** The player picked a view. */
   choose(mode: ViewMode): void {
     if (!this.multiplayer) return;
     this.manual = true;
+    this.manualMode = mode;
+    // a view picked mid-action wins until the next action
+    this.actionKey = '';
+    clearTimeout(this.restoreTimer);
+    this.restoreTimer = 0;
     this.go(mode);
   }
 
@@ -143,6 +196,7 @@ export class CameraDirector {
     if (on) {
       this.manual = false;
       this.promptKey = '';
+      this.actionKey = '';
       this.frameTurn();
     }
     this.onChange?.();

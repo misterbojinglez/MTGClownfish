@@ -1,10 +1,11 @@
-import type { DeckInfo, SeatDeckSpec } from '../protocol';
+import type { DeckInfo, PreconInfo, SeatDeckSpec } from '../protocol';
 import type { Bridge } from '../net';
 import { cardArtUrl } from '../scene/textures';
 
 /**
- * Game setup: a deck for every seat, either a random Forge precon or a list pasted from Moxfield
- * (or MTGA / MTGO / plain text). Pasted decks are kept in this browser so they can be picked again.
+ * Game setup: a name and a deck for every seat: a random Forge precon, a precon you pick (by commander),
+ * or a list pasted from Moxfield (or MTGA / MTGO / plain text). Pasted decks are kept in this browser
+ * so they can be picked again.
  */
 
 export type Format = 'constructed' | 'commander';
@@ -21,13 +22,50 @@ export interface SavedDeck {
   savedAt: number;
 }
 
-/** null = random precon */
+/** null = random precon, "precon:<name>" = that precon, otherwise a saved deck's id */
 type SeatChoice = string | null;
 
 export interface GameSetup {
   format: Format;
   players: number;
   decks: (SeatDeckSpec | null)[];
+  /** what each seat is called (index 0 is you) */
+  names: string[];
+}
+
+const PRECON = 'precon:';
+const PRECON_INFO_KEY = 'mtg-tabletop.preconInfo';
+const NAMES_KEY = 'mtg-tabletop.aiNames';
+
+/** opponents' default names (original, picked at random; each can be renamed on the seat screen) */
+const AI_NAMES = [
+  'Morwen', 'Aldric', 'Isolde', 'Corvin', 'Brannoc', 'Seraphine', 'Vesna', 'Old Maud', 'Halvard', 'Ysolde',
+  'Kestrel', 'Dorian', 'Rook', 'Sable', 'Quill', 'Mirela', 'Tobiah', 'Wren', 'Garrick', 'Liora',
+  'Thessaly', 'Marrow', 'Ansel', 'Petra', 'Fenwick', 'Odile', 'Caspian', 'Nerys', 'Bastian', 'Juniper',
+];
+
+function randomNames(n: number, avoid: string[] = []): string[] {
+  const pool = AI_NAMES.filter((x) => !avoid.includes(x));
+  const out: string[] = [];
+  while (out.length < n && pool.length) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  return out;
+}
+
+/** a precon's details, kept for the ones chosen so their seat tile can show them before the list loads */
+function preconInfo(name: string): PreconInfo | undefined {
+  return load<Record<string, PreconInfo>>(PRECON_INFO_KEY, {})[name];
+}
+
+function rememberPrecon(p: PreconInfo): void {
+  const all = load<Record<string, PreconInfo>>(PRECON_INFO_KEY, {});
+  all[p.name] = p;
+  save(PRECON_INFO_KEY, all);
+}
+
+/** "Abzan Armor [TDC] [2025]" → "Abzan Armor", "TDC 2025" */
+function splitPreconName(name: string): { title: string; tag: string } {
+  const tags = [...name.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1]);
+  return { title: name.replace(/\s*\[[^\]]+\]/g, '').trim() || name, tag: tags.join(' ') };
 }
 
 const DECKS_KEY = 'mtg-tabletop.decks';
@@ -113,6 +151,7 @@ export class DeckSetup {
       };
       let count = players;
       let choices: SeatChoice[] = this.loadSeats(format, count);
+      const names = this.loadNames();
 
       const render = () => {
         ov.replaceChildren();
@@ -137,12 +176,37 @@ export class DeckSetup {
         const seats = h('div', 'seats');
         for (let i = 0; i < count; i++) {
           const row = h('div', 'seat-row');
-          const badge = h('div', 'seat-badge', i === 0 ? 'Y' : 'A');
+          const badge = h('div', 'seat-badge', i === 0 ? 'Y' : (names[i - 1]?.trim()[0] ?? 'A').toUpperCase());
           badge.style.setProperty('--hue', String(SEAT_HUES[i % 4]));
           const who = h('div', 'seat-who');
-          who.append(h('div', 'seat-name', i === 0 ? 'You' : `AI ${i}`), h('div', 'seat-role', i === 0 ? 'Your deck' : 'Opponent'));
-          const deck = savedDecks().find((d) => d.id === choices[i]);
-          const tile = this.deckTile(deck, format);
+          if (i === 0) {
+            who.append(h('div', 'seat-name', 'You'));
+          } else {
+            // opponents can be renamed; the die picks another name
+            const nameRow = h('div', 'seat-name-row');
+            const input = h('input', 'seat-name-input');
+            input.value = names[i - 1] ?? '';
+            input.maxLength = 24;
+            input.placeholder = `AI ${i}`;
+            input.spellcheck = false;
+            input.oninput = () => {
+              names[i - 1] = input.value;
+              badge.textContent = (input.value.trim()[0] ?? 'A').toUpperCase();
+              this.saveNames(names);
+            };
+            const die = h('button', 'seat-reroll', '↻');
+            die.title = 'Another name';
+            die.onclick = () => {
+              names[i - 1] = randomNames(1, names)[0] ?? names[i - 1];
+              input.value = names[i - 1];
+              badge.textContent = (input.value.trim()[0] ?? 'A').toUpperCase();
+              this.saveNames(names);
+            };
+            nameRow.append(input, die);
+            who.append(nameRow);
+          }
+          who.append(h('div', 'seat-role', i === 0 ? 'Your deck' : 'Opponent'));
+          const tile = this.choiceTile(choices[i], format);
           tile.classList.add('seat-deck');
           tile.title = 'Choose a deck';
           tile.onclick = async () => {
@@ -163,11 +227,17 @@ export class DeckSetup {
         const start = h('button', 'main-btn wide glow', 'Start game');
         start.onclick = () => {
           const all = savedDecks();
-          const decks = choices.slice(0, count).map((id) => {
+          const decks = choices.slice(0, count).map((id): SeatDeckSpec | null => {
+            if (id?.startsWith(PRECON)) return { precon: id.slice(PRECON.length) };
             const d = all.find((x) => x.id === id);
             return d ? specFor(d) : null;
           });
-          close({ format, players: count, decks });
+          // blank or repeated names fall back to "AI n"
+          const seatNames = ['You', ...names.slice(0, count - 1).map((n, i, a) => {
+            const t = n.trim();
+            return t && a.findIndex((x) => x.trim().toLowerCase() === t.toLowerCase()) === i && t.toLowerCase() !== 'you' ? t : `AI ${i + 1}`;
+          })];
+          close({ format, players: count, decks, names: seatNames });
         };
         actions.append(back, start);
         ov.append(actions);
@@ -180,7 +250,42 @@ export class DeckSetup {
   private loadSeats(format: Format, players: number): SeatChoice[] {
     const ids = new Set(savedDecks().filter((d) => d.format === format).map((d) => d.id));
     const stored = load<SeatChoice[]>(seatsKey(format, players), []);
-    return Array.from({ length: players }, (_, i) => (stored[i] && ids.has(stored[i]!) ? stored[i] : null));
+    return Array.from({ length: players }, (_, i) => (stored[i] && (ids.has(stored[i]!) || stored[i]!.startsWith(PRECON)) ? stored[i] : null));
+  }
+
+  private loadNames(): string[] {
+    const stored = load<string[]>(NAMES_KEY, []).filter((x) => typeof x === 'string');
+    if (stored.length >= 3) return stored.slice(0, 3);
+    const names = [...stored, ...randomNames(3 - stored.length, stored)];
+    this.saveNames(names);
+    return names;
+  }
+
+  private saveNames(names: string[]): void {
+    save(NAMES_KEY, names);
+  }
+
+  /** The tile for a seat's current choice. */
+  private choiceTile(choice: SeatChoice, format: Format): HTMLElement {
+    if (choice?.startsWith(PRECON)) {
+      const name = choice.slice(PRECON.length);
+      return this.preconTile(preconInfo(name) ?? { name, commanders: [], colors: [] });
+    }
+    return this.deckTile(savedDecks().find((d) => d.id === choice), format);
+  }
+
+  private preconTile(p: PreconInfo): HTMLElement {
+    const tile = h('button', 'deck-tile');
+    const art = h('div', 'deck-art');
+    setArt(art, p.face);
+    const { title, tag } = splitPreconName(p.name);
+    const body = h('div', 'deck-body');
+    body.append(h('div', 'deck-name', p.commanders.length ? p.commanders.join(' & ') : title));
+    const meta = h('div', 'deck-meta');
+    meta.append(pips(p.colors), h('span', '', p.commanders.length ? `${title}${tag ? ' · ' + tag : ''}` : tag || 'Precon'));
+    body.append(meta);
+    tile.append(art, body);
+    return tile;
   }
 
   private saveSeats(format: Format, players: number, choices: SeatChoice[]): void {
@@ -251,6 +356,24 @@ export class DeckSetup {
           wrap.append(tile, edit, del);
           grid.append(wrap);
         }
+        if (current?.startsWith(PRECON)) {
+          const chosen = this.choiceTile(current, format);
+          chosen.classList.add('current');
+          chosen.onclick = () => done(current);
+          grid.append(chosen);
+        }
+        const browse = h('button', 'deck-tile add');
+        browse.append(h('div', 'deck-art plus', '♛'), h('div', 'deck-body', format === 'commander' ? 'Choose a commander precon…' : 'Choose a precon…'));
+        browse.onclick = async () => {
+          modal.style.visibility = 'hidden';
+          const p = await this.browsePrecons(format);
+          modal.style.visibility = '';
+          if (p) {
+            rememberPrecon(p);
+            done(PRECON + p.name);
+          }
+        };
+        grid.append(browse);
         const add = h('button', 'deck-tile add');
         add.append(h('div', 'deck-art plus', '+'), h('div', 'deck-body', 'Paste a deck list…'));
         add.onclick = async () => {
@@ -268,6 +391,78 @@ export class DeckSetup {
       render();
       modal.append(box);
       this.root.append(modal);
+    });
+  }
+
+  /** Forge's precons, searchable by deck name or commander. Resolves with the one picked, or null. */
+  private browsePrecons(format: Format): Promise<PreconInfo | null> {
+    return new Promise((resolve) => {
+      const modal = h('div', 'modal deck-modal');
+      const box = h('div', 'modal-panel deck-picker precon-browser');
+      const done = (v: PreconInfo | null) => {
+        modal.remove();
+        resolve(v);
+      };
+      modal.onclick = (e) => {
+        if (e.target === modal) done(null);
+      };
+      box.append(h('div', 'modal-title', format === 'commander' ? 'Choose a commander' : 'Choose a precon'));
+      const search = h('input', 'paste-name precon-search');
+      search.placeholder = format === 'commander' ? 'Search by commander, deck or colour (e.g. "BG", "dragons")' : 'Search decks';
+      search.spellcheck = false;
+      const grid = h('div', 'deck-grid');
+      grid.append(h('div', 'paste-checking', 'Loading precons…'));
+      const actions = h('div', 'modal-buttons');
+      const cancel = h('button', 'sub-btn', 'Cancel');
+      cancel.onclick = () => done(null);
+      actions.append(cancel);
+      box.append(search, grid, actions);
+      modal.append(box);
+      this.root.append(modal);
+      setTimeout(() => search.focus(), 30);
+
+      let all: PreconInfo[] = [];
+      const show = () => {
+        const q = search.value.trim().toLowerCase();
+        const colorQuery = /^[wubrg]{1,5}$/i.test(q) ? q.toUpperCase().split('').sort().join('') : null;
+        const hits = all.filter((p) => {
+          if (!q) return true;
+          if (colorQuery && [...p.colors].sort().join('') === colorQuery) return true;
+          return p.name.toLowerCase().includes(q) || p.commanders.some((c) => c.toLowerCase().includes(q));
+        });
+        grid.replaceChildren();
+        // tiles load their art as they're built, so long lists are built a page at a time
+        const page = (from: number) => {
+          for (const p of hits.slice(from, from + 40)) {
+            const tile = this.preconTile(p);
+            tile.onclick = () => done(p);
+            grid.append(tile);
+          }
+          if (hits.length > from + 40) {
+            const more = h('button', 'sub-btn wide precon-more', `Show more (${hits.length - from - 40})`);
+            more.onclick = () => {
+              more.remove();
+              page(from + 40);
+            };
+            grid.append(more);
+          }
+        };
+        if (hits.length === 0) grid.append(h('div', 'paste-note', 'No precon matches that.'));
+        else page(0);
+      };
+      let timer = 0;
+      search.oninput = () => {
+        clearTimeout(timer);
+        timer = window.setTimeout(show, 150);
+      };
+      void this.bridge.listPrecons(format).then((decks) => {
+        all = [...decks].sort((a, b) => (a.commanders[0] ?? a.name).localeCompare(b.commanders[0] ?? b.name));
+        if (all.length === 0) {
+          grid.replaceChildren(h('div', 'paste-bad', 'The rules engine did not send its precon list.'));
+          return;
+        }
+        show();
+      });
     });
   }
 

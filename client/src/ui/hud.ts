@@ -145,6 +145,9 @@ export class Hud {
     this.root.append(menu, this.viewBarEl);
 
     window.addEventListener('keydown', (e) => {
+      // typing a deck name or list mustn't trigger shortcuts (an "m" used to mute everything)
+      if ((e.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === 'm' || e.key === 'M') {
         sfx.toggleMute();
         showSound();

@@ -211,7 +211,7 @@ final class DeckImport {
         return null;
     }
 
-    private static List<String> colorsOf(final Deck deck) {
+    static List<String> colorsOf(final Deck deck) {
         final List<String> out = new ArrayList<>();
         final String wubrg = "WUBRG";
         int mask = 0;
@@ -227,7 +227,7 @@ final class DeckImport {
         return out;
     }
 
-    private static PaperCard cardFace(final Deck deck) {
+    static PaperCard cardFace(final Deck deck) {
         if (deck.has(DeckSection.Commander) && !deck.get(DeckSection.Commander).isEmpty()) {
             return deck.get(DeckSection.Commander).get(0);
         }
@@ -243,6 +243,31 @@ final class DeckImport {
             }
         }
         return best;
+    }
+
+    /** A precon for the deck picker: name, commanders, colours and a card to show. */
+    static JsonObject summary(final Deck deck) {
+        final JsonObject o = new JsonObject();
+        o.addProperty("name", deck.getName());
+        final JsonArray cmds = new JsonArray();
+        if (deck.has(DeckSection.Commander)) {
+            for (final Map.Entry<PaperCard, Integer> e : deck.get(DeckSection.Commander)) {
+                cmds.add(e.getKey().getName());
+            }
+        }
+        o.add("commanders", cmds);
+        final JsonArray colors = new JsonArray();
+        colorsOf(deck).forEach(colors::add);
+        o.add("colors", colors);
+        final PaperCard face = cardFace(deck);
+        if (face != null) {
+            final JsonObject f = new JsonObject();
+            f.addProperty("name", face.getName());
+            f.addProperty("set", face.getEdition());
+            f.addProperty("cn", face.getCollectorNumber());
+            o.add("face", f);
+        }
+        return o;
     }
 
     /** The importer wants date-filter widgets; headless, they're inert stand-ins. */

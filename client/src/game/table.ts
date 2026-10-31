@@ -73,6 +73,8 @@ export class Table {
   private readonly arrows: Arrows;
   private readonly libraries = new Map<number, THREE.Mesh>();
   private readonly flying = new Set<number>();
+  /** cards in flight, resolving when each lands (effects on a card wait for it to arrive) */
+  private readonly landings = new Map<number, Promise<void>>();
   private layout = new Map<number, Placement>();
   /** Invisible, unmoving click targets for hand cards at their resting slots. */
   private readonly handZones = new Map<number, THREE.Mesh>();
@@ -385,7 +387,7 @@ export class Table {
     if (to === 'Stack') sfx.cast(obj.state.colors, pan);
     else if (to === 'Hand') sfx.draw(pan, p.space !== 'rig');
 
-    return new Promise((resolve) => {
+    const landed = new Promise<void>((resolve) => {
       gsap.to(st, {
         t: 1,
         duration,
@@ -423,6 +425,7 @@ export class Table {
           }
           else if (to === 'Graveyard' || to === 'Exile' || to === 'Command') sfx.place(this.panOf(end));
           if (reveal) obj.body.position.set(0, 0, 0);
+          if (this.landings.get(obj.id) === landed) this.landings.delete(obj.id);
           resolve();
         },
       });
@@ -431,6 +434,8 @@ export class Table {
         gsap.fromTo(obj.body.position, { z: 0 }, { z: 2.2, duration: duration * 0.5, yoyo: true, repeat: 1, ease: 'sine.inOut' });
       }
     });
+    this.landings.set(obj.id, landed);
+    return landed;
   }
 
   /** A new card appears: drawn from its library, created as a token, or revealed from hiding. True if it starts on the library. */
@@ -790,7 +795,12 @@ export class Table {
     gsap.fromTo(obj.body.rotation, { z: 0.12 }, { z: 0, duration: 0.5 / this.timeScale, ease: 'elastic.out(1.2, 0.35)' });
   }
 
-  private pulse(obj: CardObject): Promise<void> {
+  private async pulse(obj: CardObject): Promise<void> {
+    // a trigger from a card still on its way (an enters-the-battlefield ability) fires where it lands,
+    // not mid-air or back at the stack
+    const landing = this.landings.get(obj.id);
+    if (landing) await landing;
+    if (this.cards.get(obj.id) !== obj) return;
     return new Promise((resolve) => {
       gsap.fromTo(obj.body.position, { z: 0 }, { z: 0.9, duration: 0.18 / this.timeScale, yoyo: true, repeat: 1, ease: 'sine.out', onComplete: resolve });
       const at = obj.root.getWorldPosition(new THREE.Vector3());

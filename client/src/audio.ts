@@ -83,8 +83,9 @@ class AudioEngine {
   }
 
   private unlock(): void {
-    if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+    if (this.ctx && this.ctx.state !== 'closed') {
+      // suspended by the browser, or interrupted (output device changed, machine slept): wake it again
+      if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => undefined);
       return;
     }
     const ctx = new AudioContext();
@@ -213,7 +214,7 @@ class AudioEngine {
     const env = ctx.createGain();
     const a = o.attack ?? 0.005;
     env.gain.setValueAtTime(0.0001, t0);
-    env.gain.exponentialRampToValueAtTime(gain, t0 + a);
+    env.gain.exponentialRampToValueAtTime(Math.max(1e-4, gain), t0 + a);
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     osc.connect(env);
     this.out(env, o.pan, o.wet ?? 0.2);
@@ -234,7 +235,7 @@ class AudioEngine {
     const env = ctx.createGain();
     const a = o.attack ?? 0.005;
     env.gain.setValueAtTime(0.0001, t0);
-    env.gain.exponentialRampToValueAtTime(gain, t0 + a);
+    env.gain.exponentialRampToValueAtTime(Math.max(1e-4, gain), t0 + a);
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     src.connect(f).connect(env);
     this.out(env, o.pan, o.wet ?? 0.15);
@@ -247,6 +248,7 @@ class AudioEngine {
   private begin(key: string, minGap = 0.04): number | null {
     const ctx = this.ctx;
     if (!ctx || this.muted || !this.fx) return null;
+    if (ctx.state !== 'running') void ctx.resume().catch(() => undefined);
     const now = ctx.currentTime;
     if (now - (this.last.get(key) ?? -1) < minGap) return null;
     this.last.set(key, now);

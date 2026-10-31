@@ -524,15 +524,22 @@ public class SocketGuiGame extends AbstractGuiGame {
         req.addProperty("caption", top);
         req.addProperty("minRemaining", remainingObjectsMin);
         req.addProperty("maxRemaining", remainingObjectsMax);
-        req.add("options", options(sourceChoices, null));
+        // Forge can pre-place items: re-ordering triggers it has ordered before (same abilities again) comes
+        // with every item already in destChoices and nothing left in sourceChoices. Offer them all, in the
+        // order they were placed, or an empty answer would drop the triggers entirely
+        final List<T> all = new ArrayList<>();
+        if (destChoices != null) all.addAll(destChoices);
+        if (sourceChoices != null) all.addAll(sourceChoices);
+        req.add("options", options(all, null));
         final List<T> ordered = new ArrayList<>();
         for (final int i : indices(ask("order", req))) {
-            if (i >= 0 && i < sourceChoices.size()) {
-                ordered.add(sourceChoices.get(i));
+            if (i >= 0 && i < all.size() && !ordered.contains(all.get(i))) {
+                ordered.add(all.get(i));
             }
         }
-        if (ordered.isEmpty() && remainingObjectsMax <= 0) {
-            ordered.addAll(sourceChoices);
+        if (remainingObjectsMax <= 0) {
+            // everything has to be placed: whatever the answer left out keeps its offered order
+            for (final T t : all) if (!ordered.contains(t)) ordered.add(t);
         }
         return new OrderResult<>(ordered, false);
     }

@@ -20,7 +20,7 @@ table.onPlayerHit = (pid, amount) => hud.hitPlate(pid, amount);
 const bridgePort = new URLSearchParams(location.search).get('bridge') ?? '7777';
 const bridge = new Bridge(`ws://127.0.0.1:${bridgePort}`);
 
-let lastSetup: GameSetup = { format: 'constructed', players: 2, decks: [] };
+let lastSetup: GameSetup = { format: 'constructed', players: 2, decks: [], names: [] };
 let gameOverShown = false;
 
 /** seconds each phase stays lit before the next is shown (shorter while catching up) */
@@ -208,7 +208,7 @@ function showGameOver(): void {
 function startGame(setup: GameSetup): void {
   lastSetup = setup;
   hud.loading('Starting game…');
-  bridge.start(setup.format, setup.players, undefined, setup.decks);
+  bridge.start(setup.format, setup.players, undefined, setup.decks, setup.names);
 }
 
 const deckSetup = new DeckSetup(document.getElementById('hud')!, bridge);
@@ -262,10 +262,12 @@ function pickPlayer(id: number): void {
 hud.bind({
   ok: () => bridge.act({ action: 'ok' }),
   cancel: () => bridge.act({ action: 'cancel' }),
-  // a plate click picks that player when the engine is asking for one; otherwise it looks at their side
+  // a plate click picks that player when the engine is asking for one; otherwise the camera goes to
+  // their side (clicking the player already shown goes back to the whole table)
   player: (id) => {
-    if (director.multiplayer && !table.targetablePlayers().has(id)) director.focusPlayer(id);
-    else pickPlayer(id);
+    if (!director.multiplayer || table.targetablePlayers().has(id)) return pickPlayer(id);
+    if (director.isShowing(id)) director.showTable();
+    else director.focusPlayer(id);
   },
   passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
   concede: () => bridge.act({ action: 'concede' }),

@@ -72,6 +72,7 @@ public final class BridgeMain {
         switch (type) {
             case "start" -> new Thread(() -> startGame(msg), "bridge-start").start();
             case "validateDeck" -> new Thread(() -> validateDeck(msg), "bridge-deck").start();
+            case "listPrecons" -> new Thread(() -> listPrecons(msg), "bridge-precons").start();
             // test tooling only: set up a board from Forge's game-state text (-Dbridge.dev=true)
             case "devState" -> {
                 if (Boolean.getBoolean("bridge.dev") && match != null && match.getGame() != null) {
@@ -121,8 +122,11 @@ public final class BridgeMain {
         final JsonArray seatDecks = msg.has("decks") && msg.get("decks").isJsonArray() ? msg.getAsJsonArray("decks") : new JsonArray();
         for (int i = 0; i < playerCount; i++) {
             Deck deck = null;
-            if (i < seatDecks.size() && seatDecks.get(i).isJsonObject()) {
-                deck = pastedDeck(seatDecks.get(i).getAsJsonObject(), commander, i);
+            final JsonObject spec = i < seatDecks.size() && seatDecks.get(i).isJsonObject() ? seatDecks.get(i).getAsJsonObject() : null;
+            if (spec != null && spec.has("precon")) {
+                deck = precon(spec.get("precon").getAsString(), commander);
+            } else if (spec != null) {
+                deck = pastedDeck(spec, commander, i);
             } else if (i == 0 && msg.has("deck")) {
                 deck = deckFromList(msg.get("deck").getAsString());
             }
@@ -134,7 +138,7 @@ public final class BridgeMain {
                 rp.setPlayer(GamePlayerUtil.getGuiPlayer("You", 0, 0, false));
                 human = rp;
             } else {
-                rp.setPlayer(GamePlayerUtil.createAiPlayer("AI " + i, i));
+                rp.setPlayer(GamePlayerUtil.createAiPlayer(seatName(msg, i), i));
             }
             deckNames.add(deck.getName());
             players.add(rp);
@@ -160,6 +164,61 @@ public final class BridgeMain {
         rules.setAppliedVariants(EnumSet.of(gameType));
         rules.setGamesPerMatch(1);
         match.startMatch(rules, EnumSet.of(gameType), players, human, gui);
+    }
+
+    /** The name the client gave seat i (opponents can be named), else "AI i". Names must be unique. */
+    private static String seatName(final JsonObject msg, final int i) {
+        final String fallback = "AI " + i;
+        if (!msg.has("names") || !msg.get("names").isJsonArray()) return fallback;
+        final JsonArray names = msg.getAsJsonArray("names");
+        if (i >= names.size() || !names.get(i).isJsonPrimitive()) return fallback;
+        final String name = names.get(i).getAsString().trim();
+        if (name.isEmpty() || name.equalsIgnoreCase("You") || name.length() > 24) return fallback;
+        for (int j = 0; j < names.size(); j++) {
+            if (j != i && names.get(j).isJsonPrimitive() && names.get(j).getAsString().trim().equalsIgnoreCase(name)) return fallback;
+        }
+        return name;
+    }
+
+    private static List<DeckProxy> precons(final boolean commander) {
+        final List<DeckProxy> out = new ArrayList<>();
+        if (commander) DeckProxy.getAllCommanderPreconDecks().forEach(out::add);
+        else out.addAll(constructedPrecons());
+        return out;
+    }
+
+    /** A specific precon by name, or null (→ random) if it isn't found. */
+    private static Deck precon(final String name, final boolean commander) {
+        for (final DeckProxy p : precons(commander)) {
+            if (p.getName().equalsIgnoreCase(name)) return p.getDeck();
+        }
+        notice("error", "Couldn't find the precon \"" + name + "\", using a random one");
+        return null;
+    }
+
+    private static JsonArray preconCache;
+    private static JsonArray preconCacheCommander;
+
+    private static void listPrecons(final JsonObject msg) {
+        final boolean commander = msg.has("format") && "commander".equalsIgnoreCase(msg.get("format").getAsString());
+        JsonArray decks = commander ? preconCacheCommander : preconCache;
+        if (decks == null) {
+            decks = new JsonArray();
+            for (final DeckProxy p : precons(commander)) {
+                try {
+                    decks.add(DeckImport.summary(p.getDeck()));
+                } catch (final RuntimeException e) {
+                    System.err.println("[bridge] precon " + p.getName() + ": " + e.getMessage());
+                }
+            }
+            if (commander) preconCacheCommander = decks;
+            else preconCache = decks;
+        }
+        final JsonObject out = new JsonObject();
+        out.addProperty("type", "precons");
+        out.addProperty("format", commander ? "commander" : "constructed");
+        out.add("decks", decks);
+        session.send(out);
     }
 
     /** {list, commanders?} from the client's deck picker; null (→ a precon) if nothing usable came of it. */
@@ -286,7 +345,6 @@ public final class BridgeMain {
         }
     }
 
-    @SuppressWarnings("unused")
     private static List<DeckProxy> constructedPrecons() {
         return DeckProxy.getAllPreconstructedDecks(QuestController.getPrecons());
     }

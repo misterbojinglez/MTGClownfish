@@ -204,10 +204,15 @@ export interface DeckInfo {
 }
 
 /** One seat's deck when starting a game: a pasted list, or null for a random precon. */
-export interface SeatDeckSpec {
-  list: string;
-  name?: string;
-  commanders?: string[];
+/** a pasted list, or one of Forge's precons by name */
+export type SeatDeckSpec = { list: string; name?: string; commanders?: string[] } | { precon: string };
+
+/** one of Forge's precon decks, for the deck picker */
+export interface PreconInfo {
+  name: string;
+  commanders: string[];
+  colors: string[];
+  face?: { name: string; set: string; cn: string };
 }
 
 export type ServerMsg =
@@ -217,7 +222,8 @@ export type ServerMsg =
   | { type: 'gameStarted'; you: number[] }
   | { type: 'notice'; kind: string; text: string | null }
   | { type: 'pong' }
-  | DeckInfo;
+  | DeckInfo
+  | { type: 'precons'; format: string; decks: PreconInfo[] };
 
 export type Action =
   | { action: 'ok' | 'cancel' | 'alphaStrike' | 'undo' | 'concede' }

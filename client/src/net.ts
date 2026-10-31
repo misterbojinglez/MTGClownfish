@@ -1,4 +1,4 @@
-import type { Action, DeckInfo, SeatDeckSpec, ServerMsg } from './protocol';
+import type { Action, DeckInfo, PreconInfo, SeatDeckSpec, ServerMsg } from './protocol';
 
 type Listener = (msg: ServerMsg) => void;
 
@@ -10,6 +10,8 @@ export class Bridge {
   connected = false;
   private deckSeq = 0;
   private readonly deckWaiters = new Map<number, (info: DeckInfo) => void>();
+  private readonly preconWaiters = new Map<string, ((decks: PreconInfo[]) => void)[]>();
+  private readonly precons = new Map<string, PreconInfo[]>();
 
   constructor(private url = 'ws://127.0.0.1:7777') {}
 
@@ -28,6 +30,12 @@ export class Bridge {
       if (msg.type === 'deckInfo') {
         this.deckWaiters.get(msg.id)?.(msg);
         this.deckWaiters.delete(msg.id);
+        return;
+      }
+      if (msg.type === 'precons') {
+        this.precons.set(msg.format, msg.decks);
+        for (const w of this.preconWaiters.get(msg.format) ?? []) w(msg.decks);
+        this.preconWaiters.delete(msg.format);
         return;
       }
       for (const l of this.listeners) l(msg);
@@ -52,8 +60,27 @@ export class Bridge {
   }
 
   /** deck: optional "4 Forest" per line list for the local player (others get precons) */
-  start(format: 'constructed' | 'commander', players: number, deck?: string, decks?: (SeatDeckSpec | null)[]): void {
-    this.send({ type: 'start', format, players, ...(deck ? { deck } : {}), ...(decks ? { decks } : {}) });
+  /** names: what to call each seat (index 0 is you; opponents can be named) */
+  start(format: 'constructed' | 'commander', players: number, deck?: string, decks?: (SeatDeckSpec | null)[], names?: string[]): void {
+    this.send({ type: 'start', format, players, ...(deck ? { deck } : {}), ...(decks ? { decks } : {}), ...(names ? { names } : {}) });
+  }
+
+  /** Forge's precon decks for a format (fetched once, then remembered). */
+  listPrecons(format: 'constructed' | 'commander'): Promise<PreconInfo[]> {
+    const have = this.precons.get(format);
+    if (have) return Promise.resolve(have);
+    return new Promise((resolve) => {
+      const waiting = this.preconWaiters.get(format);
+      if (waiting) return waiting.push(resolve);
+      this.preconWaiters.set(format, [resolve]);
+      this.send({ type: 'listPrecons', format });
+      setTimeout(() => {
+        const w = this.preconWaiters.get(format);
+        if (!w) return;
+        this.preconWaiters.delete(format);
+        w.forEach((f) => f([]));
+      }, 30000);
+    });
   }
 
   /** Ask the engine to read a pasted deck list (Moxfield, MTGA, MTGO or plain text). */
