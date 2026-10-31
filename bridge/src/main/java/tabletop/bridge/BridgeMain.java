@@ -135,7 +135,7 @@ public final class BridgeMain {
             }
             final RegisteredPlayer rp = commander ? RegisteredPlayer.forCommander(deck) : new RegisteredPlayer(deck);
             if (i == 0) {
-                rp.setPlayer(GamePlayerUtil.getGuiPlayer("You", 0, 0, false));
+                rp.setPlayer(new BridgeHumanPlayer("You"));
                 human = rp;
             } else {
                 rp.setPlayer(GamePlayerUtil.createAiPlayer(seatName(msg, i), i));

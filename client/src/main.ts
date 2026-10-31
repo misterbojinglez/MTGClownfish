@@ -290,9 +290,16 @@ const input = new Input(stage, table, {
     // a graveyard or exile card you can't use right now opens that whole pile
     const pileCard = table.state?.cards[id];
     const usableNow = table.selection.cards.includes(id) || table.selection.actionable.includes(id);
-    if (button === 1 && pileCard && (pileCard.zone === 'Graveyard' || pileCard.zone === 'Exile') && !usableNow) {
-      openPile(pileCard.owner ?? pileCard.controller, pileCard.zone);
-      return;
+    if (button === 1 && pileCard && (pileCard.zone === 'Graveyard' || pileCard.zone === 'Exile')) {
+      // piles are drawn stacked, so a click lands on the top card: when more than one card in the pile could be
+      // used (Animate Dead's targets), open the pile and let the player choose rather than taking the top one
+      const pileOwner = table.state?.players.find((p) => p.id === (pileCard.owner ?? pileCard.controller));
+      const zoneIds = pileOwner?.zones[pileCard.zone] ?? [];
+      const usableInPile = zoneIds.filter((z) => table.selection.cards.includes(z) || table.selection.actionable.includes(z)).length;
+      if (!usableNow || usableInPile > 1) {
+        openPile(pileCard.owner ?? pileCard.controller, pileCard.zone);
+        return;
+      }
     }
     const stackItem = table.stackItemFor(id);
     const targetsStack = stackItem != null && table.selection.targets.some((t) => t?.stack === stackItem);
