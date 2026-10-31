@@ -199,7 +199,7 @@ export class Hud {
       msg += sel.max > 1 ? `\n(${picked}/${sel.max} selected)` : '';
     }
     if (sel.targets.some((t) => t?.player !== undefined)) msg += '\n(Click a player\'s portrait or their side of the table)';
-    else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Click another opponent\'s portrait or side of the table to attack them instead)';
+    else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Click your creatures and an opponent\'s portrait or side of the table, in either order)';
     this.promptText.textContent = msg;
     const ok = prompt.ok;
     const cancel = prompt.cancel;

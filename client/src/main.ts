@@ -120,6 +120,7 @@ function maybeAutoPay(msg: UpdateMsg): void {
 }
 
 async function applyUpdate(msg: UpdateMsg): Promise<void> {
+  if (msg.prompt.input !== 'InputAttack') attackGroup = [];
   maybeAutoPay(msg);
   const animating = table.apply(msg);
   // the camera turns toward what's about to happen while it animates
@@ -168,13 +169,44 @@ bridge.onMessage((msg) => {
 });
 bridge.onStatus((connected) => hud.setConnection(connected));
 
+/**
+ * Declaring attackers in multiplayer: Forge sends clicked creatures at its "current defender" (the first
+ * opponent until you pick another). Picking an opponent also re-aims the creatures you clicked since your
+ * last pick, so "creatures, then opponent" works as well as "opponent, then creatures".
+ */
+let attackGroup: number[] = [];
+
+function trackAttacker(id: number): void {
+  if (!table.isDeclaringAttack()) return;
+  const c = table.state?.cards[id];
+  if (!c || c.controller !== table.localId || c.zone !== 'Battlefield') return;
+  // clicking an attacker that's already aimed where you're pointing takes it back out
+  const i = attackGroup.indexOf(id);
+  if (i >= 0) attackGroup.splice(i, 1);
+  else attackGroup.push(id);
+}
+
+/** Pick a player (or a planeswalker/battle card) to attack, taking the pending group along. */
+function chooseDefender(pick: () => void): void {
+  pick();
+  if (table.isDeclaringAttack()) {
+    for (const id of attackGroup) if (table.state?.cards[id]?.attacking) bridge.act({ action: 'card', id });
+  }
+  attackGroup = [];
+}
+
+function pickPlayer(id: number): void {
+  if (table.isDeclaringAttack()) chooseDefender(() => bridge.act({ action: 'player', id }));
+  else bridge.act({ action: 'player', id });
+}
+
 hud.bind({
   ok: () => bridge.act({ action: 'ok' }),
   cancel: () => bridge.act({ action: 'cancel' }),
   // a plate click picks that player when the engine is asking for one; otherwise it looks at their side
   player: (id) => {
     if (director.multiplayer && !table.targetablePlayers().has(id)) director.focusPlayer(id);
-    else bridge.act({ action: 'player', id });
+    else pickPlayer(id);
   },
   passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
   concede: () => bridge.act({ action: 'concede' }),
@@ -194,7 +226,16 @@ const input = new Input(stage, table, {
     // (a planeswalker or battle you're declaring attacks on is clicked itself)
     const attackable = table.isDeclaringAttack() && /Planeswalker|Battle/.test(table.cards.get(id)?.state.typeLine ?? '');
     if (!sel.cards.includes(id) && !attackable && owner != null && table.targetablePlayers().has(owner)) {
-      bridge.act({ action: 'player', id: owner });
+      pickPlayer(owner);
+      return;
+    }
+    if (attackable && owner !== table.localId) {
+      chooseDefender(() => bridge.act({ action: 'card', id }));
+      return;
+    }
+    if (table.isDeclaringAttack()) {
+      trackAttacker(id);
+      bridge.act({ action: 'card', id, button });
       return;
     }
     // casting from hand or activating a non-land permanent arms auto-pay for the payment prompt that follows;
@@ -207,7 +248,7 @@ const input = new Input(stage, table, {
     bridge.act({ action: 'card', id, button });
   },
   clickTable: (pid) => {
-    if (table.targetablePlayers().has(pid)) bridge.act({ action: 'player', id: pid });
+    if (table.targetablePlayers().has(pid)) pickPlayer(pid);
   },
   hover: (id) => {
     const inHand = id != null && table.isLocalHand(id);
