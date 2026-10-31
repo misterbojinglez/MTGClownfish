@@ -325,6 +325,12 @@ public class SocketGuiGame extends AbstractGuiGame {
     @Override
     public void finishGame() {
         flush();
+        try {
+            final forge.game.GameOutcome o = getGameView().getGame().getOutcome();
+            System.out.println("[bridge] game over: winner=" + getGameView().getWinningPlayerName() + " outcome=" + (o == null ? null : o.getWinCondition() + " " + o.getOutcomeStrings()));
+        } catch (final RuntimeException e) {
+            System.out.println("[bridge] game over (outcome unavailable: " + e + ")");
+        }
         notice("gameFinished", getGameView().isGameOver() ? getGameView().getWinningPlayerName() : null);
     }
 

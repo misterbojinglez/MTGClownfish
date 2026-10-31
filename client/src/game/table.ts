@@ -140,7 +140,9 @@ export class Table {
         this.cards.set(id, obj);
         if (this.spawn(obj, c, prev)) fromLibrary.add(id);
       } else {
+        const was = obj.state;
         obj.update(c);
+        if (was.zone === 'Battlefield' && c.zone === 'Battlefield' && was.state !== c.state && was.name !== c.name) this.transform(obj);
       }
     }
 
@@ -538,6 +540,17 @@ export class Table {
             const at = this.playerWorld(pid);
             sfx.lifeGain(at ? this.panOf(at) : 0);
           }
+          // life lost without damage (drain, paying life): damage shows its own number
+          const damaged = events.some((d) => d.event === 'PlayerDamaged' && (d.target as Ref)?.player === pid);
+          if (pid != null && diff < 0 && !damaged) {
+            this.floatAtPlayer(pid, `−${-diff}`, 'damage');
+            this.onPlayerHit?.(pid, -diff);
+            const at = this.playerWorld(pid);
+            if (at) {
+              this.magic.burst(at, 'B', 0.3);
+              sfx.hit(-diff, true, this.panOf(at));
+            }
+          }
           break;
         }
         case 'CardChangeZone': {
@@ -743,6 +756,23 @@ export class Table {
     } else {
       this.stage.hitPulse(0.15 + heavy * 0.35, screen);
     }
+  }
+
+  /** A card transforms (or flips): it turns edge-on, shows its other face, and flares in its colours. */
+  private transform(obj: CardObject): void {
+    const at = obj.root.getWorldPosition(new THREE.Vector3());
+    const d = 0.22 / this.timeScale;
+    gsap.timeline()
+      .to(obj.body.scale, { x: 0.02, duration: d, ease: 'power2.in' })
+      .to(obj.body.position, { z: 1.6, duration: d, ease: 'power2.out' }, 0)
+      .to(obj.body.scale, { x: 1, duration: d * 1.4, ease: 'back.out(2)' })
+      .to(obj.body.position, { z: 0, duration: d * 1.6, ease: 'power2.inOut' }, '<');
+    gsap.delayedCall(d, () => {
+      this.magic.burst(at, obj.state.colors, 1.3);
+      this.fx.shockwave(at, colorFor(obj.state.colors), 1);
+      sfx.etb(obj.state.colors, obj.state.power ?? 3, this.panOf(at));
+      this.stage.addShake(0.3);
+    });
   }
 
   /** A struck card rocks back, away from the blow, and springs upright. */

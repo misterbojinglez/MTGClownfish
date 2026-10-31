@@ -72,6 +72,29 @@ public final class BridgeMain {
         switch (type) {
             case "start" -> new Thread(() -> startGame(msg), "bridge-start").start();
             case "validateDeck" -> new Thread(() -> validateDeck(msg), "bridge-deck").start();
+            // test tooling only: set up a board from Forge's game-state text (-Dbridge.dev=true)
+            case "devState" -> {
+                if (Boolean.getBoolean("bridge.dev") && match != null && match.getGame() != null) {
+                    final forge.game.GameState gs = new forge.game.GameState();
+                    gs.parse(java.util.Arrays.asList(msg.get("text").getAsString().split("\\r?\\n")));
+                    gs.applyToGame(match.getGame());
+                    // setting up a board fires no game events; push the new state once it's applied
+                    new Thread(() -> {
+                        try { Thread.sleep(1200); } catch (final InterruptedException ignored) { }
+                        for (final forge.game.player.Player pl : match.getGame().getPlayers()) {
+                            System.out.println("[dev] " + pl.getName() + " battlefield=" + pl.getCardsIn(forge.game.zone.ZoneType.Battlefield) + " hand=" + pl.getCardsIn(forge.game.zone.ZoneType.Hand));
+                        }
+                        gui.refreshField();
+                        // the waiting prompt was wiped by the setup: show it again
+                        for (final forge.game.player.Player pl : match.getGame().getPlayers()) {
+                            if (pl.getController() instanceof forge.player.PlayerControllerHuman pch
+                                    && pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputBase inp) {
+                                FThreads.invokeInEdtLater(inp::showMessageInitial);
+                            }
+                        }
+                    }, "bridge-dev").start();
+                }
+            }
             case "action" -> FThreads.invokeInEdtLater(() -> handleAction(msg));
             case "ping" -> {
                 final JsonObject pong = new JsonObject();
