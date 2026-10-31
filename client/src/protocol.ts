@@ -29,6 +29,10 @@ export interface CardState {
   planeswalker?: boolean;
   /** a creature with flying (hovers above the table) */
   flying?: boolean;
+  /** keywords worth showing on the battlefield (Haste, Vigilance, Trample…) */
+  keywords?: string[];
+  /** a creature that couldn't block even untapped (Gravecrawler, "can't block this turn") */
+  cantBlock?: boolean;
   power?: number;
   toughness?: number;
   loyalty?: string;

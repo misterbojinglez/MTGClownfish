@@ -122,12 +122,56 @@ function maybeAutoPay(msg: UpdateMsg): void {
   }
 }
 
+/**
+ * Combat explanations. Forge skips the blockers step when you have nothing that can block, and a creature
+ * with haste attacks the turn it arrives; both are easy to miss, so say so.
+ */
+const combatNotes = { turn: -1, blockPrompt: false, blockNote: false, arrived: new Set<number>(), hasteNoted: new Set<number>() };
+
+function explainCombat(msg: UpdateMsg): void {
+  const s = table.state;
+  if (!s) return;
+  if (s.turn !== combatNotes.turn) {
+    Object.assign(combatNotes, { turn: s.turn, blockPrompt: false, blockNote: false });
+    combatNotes.arrived.clear();
+    combatNotes.hasteNoted.clear();
+  }
+  for (const e of msg.events) {
+    const to = (e.to as { zone?: string } | null)?.zone;
+    const card = (e.card as { card?: number } | null)?.card;
+    if (e.event === 'CardChangeZone' && to === 'Battlefield' && card != null) combatNotes.arrived.add(card);
+  }
+  if (msg.prompt.input === 'InputBlock') combatNotes.blockPrompt = true;
+  const attacks = s.combat ?? [];
+  // haste: an opponent's creature attacking the turn it came in
+  for (const a of attacks) {
+    const c = s.cards[a.attacker];
+    if (!c || c.controller === table.localId || combatNotes.hasteNoted.has(a.attacker)) continue;
+    if (combatNotes.arrived.has(a.attacker) && c.keywords?.includes('Haste')) {
+      combatNotes.hasteNoted.add(a.attacker);
+      hud.toast(`${c.name} has haste — it can attack the turn it arrives`, 'message');
+    }
+  }
+  // blocks skipped: you were attacked, combat is past declaring blockers, and you were never asked
+  const late = s.phase === 'COMBAT_FIRST_STRIKE_DAMAGE' || s.phase === 'COMBAT_DAMAGE' || s.phase === 'COMBAT_END';
+  const atMe = attacks.filter((a) => a.defender?.player === table.localId);
+  if (late && atMe.length && !combatNotes.blockPrompt && !combatNotes.blockNote) {
+    combatNotes.blockNote = true;
+    const me = s.players.find((p) => p.id === table.localId);
+    const mine = (me?.zones.Battlefield ?? []).map((id) => s.cards[id]).filter((c) => c?.creature);
+    const reasons = mine.flatMap((c) => (c!.cantBlock ? [`${c!.name} can't block`] : c!.tapped ? [`${c!.name} is tapped`] : []));
+    const why = mine.length === 0 ? 'you have no creatures' : reasons.length ? reasons.join(', ') : 'none of your creatures can block these attackers';
+    hud.toast(`No blocks possible: ${why}`, 'message');
+  }
+}
+
 async function applyUpdate(msg: UpdateMsg): Promise<void> {
   if (msg.prompt.input !== 'InputAttack') attackGroup = [];
   maybeAutoPay(msg);
   const animating = table.apply(msg);
   // the camera turns toward what's about to happen while it animates
   director.update(table.state!, table.localId, msg.events, msg.selection, table.targetablePlayers());
+  explainCombat(msg);
   await animating;
   refreshPrompt();
   if (msg.state.gameOver) showGameOver();

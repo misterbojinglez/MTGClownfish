@@ -181,6 +181,27 @@ public final class Serializer {
         if (s.isCreature() && s.hasKeyword(forge.game.keyword.Keyword.FLYING)) {
             o.addProperty("flying", true);
         }
+        // keywords worth seeing at a glance on the battlefield, and whether it could block at all
+        final JsonArray kws = new JsonArray();
+        for (final forge.game.keyword.Keyword k : SHOWN_KEYWORDS) {
+            if (s.hasKeyword(k)) {
+                kws.add(k.toString());
+            }
+        }
+        if (!kws.isEmpty()) {
+            o.add("keywords", kws);
+        }
+        if (s.isCreature() && c.getZone() == forge.game.zone.ZoneType.Battlefield) {
+            try {
+                final forge.game.Game game = SocketGuiGame.liveGame;
+                final forge.game.card.Card real = game == null ? null : game.findById(c.getId());
+                if (real != null && !forge.game.combat.CombatUtil.canBlock(real, true)) {
+                    o.addProperty("cantBlock", true);
+                }
+            } catch (final RuntimeException ignored) {
+                // the game moved on mid-check; the next update will say
+            }
+        }
         if (s.isCreature() || s.hasPrintedPT()) {
             o.addProperty("power", s.getPower());
             o.addProperty("toughness", s.getToughness());
@@ -215,6 +236,13 @@ public final class Serializer {
         collectorNumbers.put(key, cn);
         return cn.isEmpty() ? null : cn;
     }
+
+    private static final forge.game.keyword.Keyword[] SHOWN_KEYWORDS = {
+        forge.game.keyword.Keyword.HASTE, forge.game.keyword.Keyword.VIGILANCE, forge.game.keyword.Keyword.TRAMPLE,
+        forge.game.keyword.Keyword.DEATHTOUCH, forge.game.keyword.Keyword.LIFELINK, forge.game.keyword.Keyword.FIRST_STRIKE,
+        forge.game.keyword.Keyword.DOUBLE_STRIKE, forge.game.keyword.Keyword.REACH, forge.game.keyword.Keyword.MENACE,
+        forge.game.keyword.Keyword.HEXPROOF, forge.game.keyword.Keyword.INDESTRUCTIBLE, forge.game.keyword.Keyword.DEFENDER,
+    };
 
     private static final java.util.Map<String, String[]> tokenPrints = new java.util.concurrent.ConcurrentHashMap<>();
 

@@ -210,23 +210,41 @@ export class CardObject {
     const counters = Object.entries(s.counters ?? {}).filter(([, n]) => n > 0);
     const pt = s.creature && s.power !== undefined ? `${s.power}/${(s.toughness ?? 0) - (s.damage ?? 0)}` : '';
     const loyalty = s.planeswalker ? String(s.loyalty ?? '') : '';
-    const key = `${onField}|${pt}|${loyalty}|${s.damage}|${counters.map(([k, n]) => k + n).join(',')}`;
+    const icons = onField ? keywordIcons(s) : [];
+    const key = `${onField}|${pt}|${loyalty}|${s.damage}|${counters.map(([k, n]) => k + n).join(',')}|${icons.map((i) => i.glyph).join('')}`;
     if (key === this.badgeKey) return;
     this.badgeKey = key;
-    this.badge.visible = onField && (pt !== '' || loyalty !== '' || counters.length > 0);
+    this.badge.visible = onField && (pt !== '' || loyalty !== '' || counters.length > 0 || icons.length > 0);
     if (!this.badge.visible) return;
 
     const g = this.badgeCanvas.getContext('2d')!;
     g.clearRect(0, 0, 256, 96);
+    // keyword icons sit just left of the P/T box, newest-relevant first
+    let left = 156;
+    for (const icon of icons.slice(0, 4)) {
+      left -= 38;
+      g.beginPath();
+      g.arc(left + 17, 51, 17, 0, Math.PI * 2);
+      g.fillStyle = icon.bg;
+      g.fill();
+      g.lineWidth = 3;
+      g.strokeStyle = 'rgba(0,0,0,0.55)';
+      g.stroke();
+      g.fillStyle = icon.fg;
+      g.font = `800 ${icon.glyph.length > 1 ? 15 : 21}px Inter, sans-serif`;
+      g.textAlign = 'center';
+      g.fillText(icon.glyph, left + 17, 58);
+      g.textAlign = 'left';
+    }
     if (counters.length) {
       const label = counters.map(([k, n]) => (n > 1 ? `${n}× ${prettyCounter(k)}` : prettyCounter(k))).join('  ');
       g.font = '600 26px Inter, sans-serif';
-      const w = Math.min(150, g.measureText(label).width + 22);
+      const w = Math.min(Math.max(40, left - 8), g.measureText(label).width + 22);
       g.fillStyle = 'rgba(20,16,30,0.86)';
       roundRect(g, 4, 30, w, 50, 14);
       g.fill();
       g.fillStyle = '#e8dcff';
-      g.fillText(label, 15, 64, 130);
+      g.fillText(label, 15, 64, w - 22);
     }
     const value = pt || loyalty;
     if (value) {
@@ -328,4 +346,33 @@ function prettyCounter(k: string): string {
   if (k === 'M1M1') return '−1/−1';
   if (k === 'LOYALTY') return 'Loyalty';
   return k.charAt(0) + k.slice(1).toLowerCase();
+}
+
+interface KeywordIcon {
+  glyph: string;
+  bg: string;
+  fg: string;
+}
+
+const KEYWORD_ICONS: Record<string, KeywordIcon> = {
+  Haste: { glyph: '»', bg: '#e8552e', fg: '#fff' },
+  Vigilance: { glyph: '◉', bg: '#f1e6c4', fg: '#3a2c10' },
+  Trample: { glyph: '▲', bg: '#5c9c4a', fg: '#fff' },
+  Deathtouch: { glyph: '☠', bg: '#3a2a46', fg: '#e8dcff' },
+  Lifelink: { glyph: '♥', bg: '#f4f0e4', fg: '#c0281c' },
+  'First Strike': { glyph: '1st', bg: '#d8c27a', fg: '#2a1d05' },
+  'Double Strike': { glyph: '2×', bg: '#d8c27a', fg: '#2a1d05' },
+  Reach: { glyph: '↟', bg: '#3f7d4e', fg: '#fff' },
+  Menace: { glyph: '‼', bg: '#7a1d1d', fg: '#fff' },
+  Hexproof: { glyph: '◈', bg: '#2f6fb0', fg: '#fff' },
+  Indestructible: { glyph: '◆', bg: '#9aa0aa', fg: '#1a1d22' },
+  Defender: { glyph: '▣', bg: '#6c6255', fg: '#fff' },
+};
+
+/** Small badges for keywords, and a red no-entry mark on a creature that can't block. */
+function keywordIcons(s: CardState): KeywordIcon[] {
+  const out: KeywordIcon[] = [];
+  if (s.cantBlock && !(s.keywords ?? []).includes('Defender')) out.push({ glyph: '⊘', bg: '#c0281c', fg: '#fff' });
+  for (const k of s.keywords ?? []) if (KEYWORD_ICONS[k]) out.push(KEYWORD_ICONS[k]);
+  return out;
 }
