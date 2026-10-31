@@ -52,11 +52,18 @@ class AudioEngine {
   private master!: GainNode;
   private sfxBus!: GainNode;
   private ambBus!: GainNode;
+  /** each bus's share of the reverb, so muting a bus silences its echo too */
+  private sfxSend!: GainNode;
+  private ambSend!: GainNode;
   private reverb!: ConvolverNode;
   private noiseBuf!: AudioBuffer;
   private last = new Map<string, number>();
   private ambientOn = false;
   muted = false;
+  /** sound effects on/off (independent of music) */
+  fx = true;
+  /** the ambient music bed on/off */
+  music = true;
   volume = 0.8;
 
   constructor() {
@@ -64,6 +71,8 @@ class AudioEngine {
       const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? '{}');
       if (typeof saved.muted === 'boolean') this.muted = saved.muted;
       if (typeof saved.volume === 'number') this.volume = saved.volume;
+      if (typeof saved.fx === 'boolean') this.fx = saved.fx;
+      if (typeof saved.music === 'boolean') this.music = saved.music;
     } catch {
       /* storage unavailable: defaults */
     }
@@ -87,9 +96,10 @@ class AudioEngine {
     comp.ratio.value = 4;
     this.master.connect(comp).connect(ctx.destination);
     this.sfxBus = ctx.createGain();
+    this.sfxBus.gain.value = this.fx ? 1 : 0;
     this.sfxBus.connect(this.master);
     this.ambBus = ctx.createGain();
-    this.ambBus.gain.value = 0.55;
+    this.ambBus.gain.value = this.music ? 0.55 : 0;
     this.ambBus.connect(this.master);
 
     this.reverb = ctx.createConvolver();
@@ -97,6 +107,12 @@ class AudioEngine {
     const wet = ctx.createGain();
     wet.gain.value = 0.9;
     this.reverb.connect(wet).connect(this.master);
+    this.sfxSend = ctx.createGain();
+    this.sfxSend.gain.value = this.fx ? 1 : 0;
+    this.sfxSend.connect(this.reverb);
+    this.ambSend = ctx.createGain();
+    this.ambSend.gain.value = this.music ? 1 : 0;
+    this.ambSend.connect(this.reverb);
 
     this.noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
@@ -106,17 +122,45 @@ class AudioEngine {
 
   private save(): void {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ muted: this.muted, volume: this.volume }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({ muted: this.muted, volume: this.volume, fx: this.fx, music: this.music }));
     } catch {
       /* ignore */
     }
   }
 
   toggleMute(): boolean {
-    this.muted = !this.muted;
+    this.setMuted(!this.muted);
+    return this.muted;
+  }
+
+  setMuted(on: boolean): void {
+    this.muted = on;
     if (this.ctx) this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.ctx.currentTime, 0.05);
     this.save();
-    return this.muted;
+  }
+
+  setFx(on: boolean): void {
+    this.fx = on;
+    if (this.ctx) {
+      this.sfxBus.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.05);
+      this.sfxSend.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.05);
+    }
+    this.save();
+  }
+
+  setMusic(on: boolean): void {
+    this.music = on;
+    if (this.ctx) {
+      this.ambBus.gain.setTargetAtTime(on ? 0.55 : 0, this.ctx.currentTime, 0.3);
+      this.ambSend.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.3);
+    }
+    this.save();
+  }
+
+  setVolume(v: number): void {
+    this.volume = Math.max(0, Math.min(1, v));
+    if (this.ctx && !this.muted) this.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.05);
+    this.save();
   }
 
   // ---- building blocks ----------------------------------------------------------------------------
@@ -146,7 +190,7 @@ class AudioEngine {
     if (wet > 0) {
       const g = ctx.createGain();
       g.gain.value = wet;
-      tail.connect(g).connect(this.reverb);
+      tail.connect(g).connect(bus === this.ambBus ? this.ambSend : this.sfxSend);
     }
   }
 
@@ -202,7 +246,7 @@ class AudioEngine {
   /** Start time for a sound, or null if muted/locked or the same sound just played (bursts of events). */
   private begin(key: string, minGap = 0.04): number | null {
     const ctx = this.ctx;
-    if (!ctx || this.muted) return null;
+    if (!ctx || this.muted || !this.fx) return null;
     const now = ctx.currentTime;
     if (now - (this.last.get(key) ?? -1) < minGap) return null;
     this.last.set(key, now);
@@ -430,7 +474,7 @@ class AudioEngine {
     pad.connect(this.ambBus);
     const send = ctx.createGain();
     send.gain.value = 0.3;
-    pad.connect(send).connect(this.reverb);
+    pad.connect(send).connect(this.ambSend);
 
     const sparkle = () => {
       if (this.ctx && !this.muted) {

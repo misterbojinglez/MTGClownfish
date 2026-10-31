@@ -1,5 +1,5 @@
 import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, ResolvingSource, Selection } from '../protocol';
-import { cardImageUrl, cardZoomUrl } from '../scene/textures';
+import { cardArtUrl, cardImageUrl, cardZoomUrl } from '../scene/textures';
 import { sfx } from '../audio';
 
 const PHASES: [string, string][] = [
@@ -52,6 +52,8 @@ export class Hud {
   private readonly promptBox = h('div', 'prompt');
   private readonly promptText = h('div', 'prompt-text');
   private readonly promptSource = h('div', 'prompt-source');
+  private readonly stackPanel = h('div', 'stack-panel');
+  private stackKey = '';
   private promptSourceKey = '';
   private readonly okBtn = h('button', 'main-btn');
   private readonly cancelBtn = h('button', 'sub-btn');
@@ -70,7 +72,7 @@ export class Hud {
   constructor() {
     const actions = h('div', 'actions');
     actions.append(this.cancelBtn, this.okBtn);
-    this.promptBox.append(this.promptSource, this.promptText, actions);
+    this.promptBox.append(this.stackPanel, this.promptSource, this.promptText, actions);
     const phaseWrap = h('div', 'phase-wrap');
     phaseWrap.append(this.turnLabel, this.phaseBar);
     for (const key of PHASE_GROUPS) {
@@ -90,18 +92,52 @@ export class Hud {
     pass.onclick = () => this.handlers.passTurn();
     const concede = h('button', 'chip danger', 'Concede');
     concede.onclick = () => confirm('Concede this game?') && this.handlers.concede();
-    const sound = h('button', 'chip', '');
+    // sound menu: everything, or effects and music separately, plus volume
+    const sound = h('button', 'chip', 'Sound');
+    const soundWrap = h('div', 'sound-wrap');
+    const soundMenu = h('div', 'sound-menu');
+    const row = (label: string, get: () => boolean, set: (v: boolean) => void) => {
+      const r = h('label', 'sound-row');
+      const box = h('input');
+      box.type = 'checkbox';
+      box.onchange = () => {
+        set(box.checked);
+        showSound();
+      };
+      r.append(box, h('span', '', label));
+      soundMenu.append(r);
+      return () => (box.checked = get());
+    };
+    const syncs = [
+      row('All sound', () => !sfx.muted, (v) => sfx.setMuted(!v)),
+      row('Sound effects', () => sfx.fx, (v) => sfx.setFx(v)),
+      row('Music', () => sfx.music, (v) => sfx.setMusic(v)),
+    ];
+    const vol = h('input', 'sound-volume');
+    vol.type = 'range';
+    vol.min = '0';
+    vol.max = '100';
+    vol.oninput = () => sfx.setVolume(Number(vol.value) / 100);
+    const volRow = h('label', 'sound-row');
+    volRow.append(h('span', '', 'Volume'), vol);
+    soundMenu.append(volRow);
     const showSound = () => {
-      sound.textContent = sfx.muted ? 'Sound off' : 'Sound on';
-      sound.classList.toggle('off', sfx.muted);
+      syncs.forEach((f) => f());
+      vol.value = String(Math.round(sfx.volume * 100));
+      soundMenu.querySelectorAll<HTMLElement>('.sound-row').forEach((r, i) => i > 0 && r.classList.toggle('dim', sfx.muted));
+      sound.textContent = sfx.muted ? 'Sound off' : !sfx.fx && !sfx.music ? 'Sound off' : 'Sound';
+      sound.classList.toggle('off', sfx.muted || (!sfx.fx && !sfx.music));
     };
-    sound.title = 'Toggle sound (M)';
-    sound.onclick = () => {
-      sfx.toggleMute();
-      showSound();
+    sound.title = 'Sound settings (M mutes everything)';
+    sound.onclick = (e) => {
+      e.stopPropagation();
+      soundWrap.classList.toggle('open');
     };
+    soundMenu.onclick = (e) => e.stopPropagation();
+    document.addEventListener('click', () => soundWrap.classList.remove('open'));
+    soundWrap.append(sound, soundMenu);
     showSound();
-    menu.append(sound, pass, concede);
+    menu.append(soundWrap, pass, concede);
     // every button gets a soft click
     document.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest?.('button, .thumb')) sfx.click();
@@ -185,10 +221,13 @@ export class Hud {
   // ---- prompt -------------------------------------------------------------------------------------
 
   setPrompt(prompt: Prompt, sel: Selection, waiting: boolean, state: GameState | null = null): void {
-    const key = prompt.source ? JSON.stringify(prompt.source) : '';
+    // the resolving spell gets a header with its art and text, unless the stack list already shows it on top
+    const onTop = !!prompt.source && prompt.source.card != null && state?.stack[0]?.source === prompt.source.card;
+    const src = onTop ? null : prompt.source;
+    const key = src ? JSON.stringify(src) : '';
     if (key !== this.promptSourceKey) {
       this.promptSourceKey = key;
-      this.promptSource.replaceChildren(...(prompt.source ? [this.sourceHeader(prompt.source, state)] : []));
+      this.promptSource.replaceChildren(...(src ? [this.sourceHeader(src, state)] : []));
     }
     let msg = tidyMessage(prompt.message ?? '');
     // Forge's status line counts game turns; show the active player's own count instead
@@ -211,6 +250,42 @@ export class Hud {
     this.cancelBtn.style.visibility = cancel?.enabled && !waiting ? 'visible' : 'hidden';
     this.cancelBtn.disabled = !cancel?.enabled || waiting;
     this.promptBox.classList.toggle('waiting', waiting);
+  }
+
+  /**
+   * What's on the stack, newest (next to resolve) first: each spell or ability with its card's art, so
+   * it's clear which card every trigger comes from. Hover a row for the card.
+   */
+  setStack(state: GameState | null, localId: number): void {
+    const items = state?.stack ?? [];
+    const key = items.map((i) => `${i.id}:${i.source}`).join(',');
+    if (key === this.stackKey) return;
+    this.stackKey = key;
+    this.stackPanel.replaceChildren();
+    if (!state || items.length === 0) return;
+    const head = h('div', 'stack-head', items.length === 1 ? 'Stack · 1 item' : `Stack · ${items.length} items`);
+    this.stackPanel.append(head);
+    const shown = items.slice(0, 6);
+    shown.forEach((item, i) => {
+      const card = item.source != null ? state.cards[item.source] : undefined;
+      const row = h('div', `stack-row${i === 0 ? ' top' : ''}`);
+      const art = h('div', 'stack-art');
+      if (card?.visible) void cardArtUrl(card).then((url) => { if (url) art.style.backgroundImage = `url("${url}")`; });
+      const body = h('div', 'stack-body');
+      const name = card?.name ?? item.text.split(' - ')[0];
+      const kind = item.trigger ? 'Trigger' : item.ability ? 'Ability' : 'Spell';
+      const who = item.controller === localId ? 'You' : state.players.find((p) => p.id === item.controller)?.name ?? '';
+      body.append(h('div', 'stack-name', name ?? 'Effect'), h('div', 'stack-kind', who ? `${kind} · ${who}` : kind));
+      const text = effectText(tidyMessage(item.text), name ?? '');
+      if (text && text !== name) body.append(h('div', 'stack-text', text));
+      row.append(art, body);
+      if (card) {
+        row.onmouseenter = () => this.showZoom(card, 'right');
+        row.onmouseleave = () => this.showZoom(null);
+      }
+      this.stackPanel.append(row);
+    });
+    if (items.length > shown.length) this.stackPanel.append(h('div', 'stack-more', `+ ${items.length - shown.length} more`));
   }
 
   /** "Preordain · Spell" with its art and rules text: what is asking the current question. Hover for the card. */
@@ -366,6 +441,20 @@ export class Hud {
         }
       }
       if (!moved) break;
+    }
+    // nothing sits on the prompt and stack list in the bottom-right corner: slide left of it, then up past
+    // any plate already there
+    const box = this.promptBox.getBoundingClientRect();
+    if (box.width > 0) {
+      const hits = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) < PW && Math.abs(a.y - b.y) < PH;
+      for (const [id, spot] of out) {
+        const overlapX = spot.x + PW / 2 > box.left - 6 && spot.x - PW / 2 < box.right;
+        const overlapY = spot.y + PH / 2 > box.top - 6 && spot.y - PH / 2 < box.bottom;
+        if (!overlapX || !overlapY) continue;
+        spot.x = box.left - PW / 2 - 14;
+        spot.edge = true;
+        for (let k = 0; k < 6 && [...out].some(([o, other]) => o !== id && hits(spot, other)); k++) spot.y -= PH + 6;
+      }
     }
     return out;
   }

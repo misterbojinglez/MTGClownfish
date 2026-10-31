@@ -49,6 +49,7 @@ function refreshPrompt(): void {
   if (!table.state) return;
   hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0, table.state);
   hud.setPhase(table.state, table.localId);
+  hud.setStack(table.state, table.localId);
   refreshBrowser();
 }
 
@@ -73,6 +74,7 @@ async function handle(msg: ServerMsg): Promise<void> {
     case 'gameStarted':
       table.reset();
       director.reset();
+      hud.setStack(null, -1);
       hud.resetPlayers();
       table.localId = msg.you[0];
       gameOverShown = false;
