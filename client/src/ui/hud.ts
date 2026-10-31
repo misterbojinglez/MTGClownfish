@@ -370,6 +370,17 @@ export class Hud {
     return out;
   }
 
+  /** A player's plate recoils from a blow: the harder the hit, the bigger the jolt. */
+  hitPlate(pid: number, amount: number): void {
+    const plate = this.plates.get(pid);
+    if (!plate) return;
+    plate.style.setProperty('--jolt', `${Math.min(18, 5 + amount * 1.6)}px`);
+    plate.classList.remove('struck');
+    void plate.offsetWidth;
+    plate.classList.add('struck');
+    window.setTimeout(() => plate.classList.remove('struck'), 650);
+  }
+
   private buildPlate(p: PlayerState): HTMLDivElement {
     const plate = h('div', 'plate');
     const portrait = h('div', 'portrait');

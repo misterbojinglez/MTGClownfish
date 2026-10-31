@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 
 // Camera framing measured from Arena's battlefield scenes (docs/arena-reference.md).
 export const CAMERA_FOV = 34;
@@ -46,6 +47,8 @@ export class Stage {
   readonly cameraRig = new THREE.Group();
   private readonly composer: EffectComposer;
   private readonly bloom: UnrealBloomPass;
+  private readonly hitPass: ShaderPass;
+  private hitAmt = 0;
   private readonly tickers = new Set<(dt: number, t: number) => void>();
   private readonly clock = new THREE.Clock();
   private tableMaterial!: THREE.ShaderMaterial;
@@ -83,6 +86,31 @@ export class Stage {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.45, 0.35, 1.02);
     this.composer.addPass(this.bloom);
+    this.hitPass = new ShaderPass({
+      uniforms: { tDiffuse: { value: null }, uAmt: { value: 0 }, uCenter: { value: new THREE.Vector2(0.5, 0.5) } },
+      vertexShader: /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse; uniform float uAmt; uniform vec2 uCenter; varying vec2 vUv;
+        void main() {
+          vec2 dir = vUv - uCenter;
+          vec2 off = dir * uAmt * 0.03;
+          vec3 col = vec3(0.0);
+          for (int i = 0; i < 6; i++) {
+            vec2 uv = vUv - dir * uAmt * 0.05 * (float(i) / 5.0);
+            col.r += texture2D(tDiffuse, uv + off).r;
+            col.g += texture2D(tDiffuse, uv).g;
+            col.b += texture2D(tDiffuse, uv - off).b;
+          }
+          col /= 6.0;
+          float lum = dot(col, vec3(0.299, 0.587, 0.114));
+          col = mix(col, vec3(lum) * vec3(1.15, 0.85, 0.82), clamp(uAmt * 0.3, 0.0, 0.35));
+          float vig = smoothstep(0.55, 1.05, length((vUv - 0.5) * vec2(1.25, 1.0)) * 1.4);
+          col = mix(col, col * vec3(0.9, 0.18, 0.14) + vec3(0.22, 0.0, 0.0), vig * clamp(uAmt, 0.0, 1.0) * 0.75);
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+    });
+    this.hitPass.enabled = false;
+    this.composer.addPass(this.hitPass);
     this.composer.addPass(new OutputPass());
 
     window.addEventListener('resize', () => this.resize());
@@ -105,6 +133,18 @@ export class Stage {
       cam.updateProjectionMatrix();
     };
     gsap.timeline().to(st, { z: peak, duration: 0.08, ease: 'power2.out', onUpdate: apply }).to(st, { z: 1, duration: 0.45, ease: 'power2.inOut', onUpdate: apply });
+  }
+
+  /**
+   * A blow that rattles the picture: colour splits and smears outward from where it landed, the frame
+   * drains toward red at the edges, and it all snaps back. strength ~0.2–1.2; at = screen point (0–1, y up).
+   */
+  hitPulse(strength: number, at?: { x: number; y: number }): void {
+    if (strength > this.hitAmt) {
+      this.hitAmt = strength;
+      if (at) this.hitPass.uniforms.uCenter.value.set(at.x, at.y);
+      else this.hitPass.uniforms.uCenter.value.set(0.5, 0.5);
+    }
   }
 
   /** Glide the camera to a view (seconds; 0 = cut). Yaw takes the short way round. */
@@ -212,6 +252,14 @@ export class Stage {
     this.tableMaterial.uniforms.uTime.value = t;
     for (const fn of this.tickers) fn(dt, t);
 
+    if (this.hitAmt > 0.002) {
+      this.hitPass.enabled = true;
+      this.hitPass.uniforms.uAmt.value = this.hitAmt;
+      this.hitAmt *= Math.pow(0.004, dt);
+    } else if (this.hitPass.enabled) {
+      this.hitAmt = 0;
+      this.hitPass.enabled = false;
+    }
     cameraPosition(this.view, this.basePos);
     // fog starts beyond whatever the camera is framing, however far back it has pulled
     const fog = this.scene.fog as THREE.Fog;

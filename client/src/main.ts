@@ -15,6 +15,7 @@ const table = new Table(stage);
 const hud = new Hud();
 const director = new CameraDirector(stage);
 table.onOpponentCast = (card, who) => hud.revealCast(card, `${who} casts ${card.name}`, 2200);
+table.onPlayerHit = (pid, amount) => hud.hitPlate(pid, amount);
 // ?bridge=7778 points the client at another bridge instance (used for automated testing)
 const bridgePort = new URLSearchParams(location.search).get('bridge') ?? '7777';
 const bridge = new Bridge(`ws://127.0.0.1:${bridgePort}`);

@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
-import { avatarAnchor, computeLayout, libraryAnchor, seatAt, seatRotation, type Placement } from '../scene/layout';
+import { avatarAnchor, computeLayout, libraryAnchor, seatAt, seatFrames, seatRotation, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx } from '../scene/fx';
+import { Magic } from '../scene/magic';
 import { sfx } from '../audio';
 import type { Stage } from '../scene/stage';
 import { cardBackTexture } from '../scene/textures';
@@ -64,8 +65,11 @@ export class Table {
   private lifeShown = new Map<number, { value: number; base: number; at: number }>();
   /** Set by the app: shows an opponent's spell and resolves when the player has seen it. */
   onOpponentCast: ((card: CardState, who: string) => Promise<void>) | null = null;
+  /** Set by the app: a player took damage (their plate reacts). */
+  onPlayerHit: ((pid: number, amount: number) => void) | null = null;
 
   private readonly fx: Fx;
+  private readonly magic: Magic;
   private readonly arrows: Arrows;
   private readonly libraries = new Map<number, THREE.Mesh>();
   private readonly flying = new Set<number>();
@@ -77,6 +81,7 @@ export class Table {
 
   constructor(private readonly stage: Stage) {
     this.fx = new Fx(stage);
+    this.magic = new Magic(stage);
     this.arrows = new Arrows(stage);
     stage.onTick((dt) => {
       for (const c of this.cards.values()) c.tick(dt);
@@ -180,9 +185,51 @@ export class Table {
     }
 
     tasks.push(this.playEvents(msg.events, snapshots).finally(releaseDeaths));
+    if (prev) this.resolutions(prev, state, msg.events, snapshots);
     this.refreshHighlights();
     this.refreshArrows();
     await Promise.all(tasks);
+  }
+
+  /**
+   * Spells and abilities that left the stack: their colours fly from the source to each target (damage
+   * has its own bolt), and an untargeted spell blooms over its caster's side of the table.
+   */
+  private resolutions(prev: GameState, state: GameState, events: GameEvent[], snaps: Map<number, Snapshot>): void {
+    const still = new Set(state.stack.map((x) => x.id));
+    const damaged = new Set<string>();
+    for (const e of events) {
+      if (e.event === 'CardDamaged') damaged.add(`c${(e.card as Ref)?.card}`);
+      if (e.event === 'PlayerDamaged') damaged.add(`p${(e.target as Ref)?.player}`);
+    }
+    for (const item of prev.stack) {
+      if (still.has(item.id) || item.source == null) continue;
+      const colors = state.cards[item.source]?.colors ?? prev.cards[item.source]?.colors;
+      const snap = snaps.get(item.source);
+      const from = snap ? new THREE.Vector3().setFromMatrixPosition(snap.world) : this.cardWorld(item.source);
+      let aimed = false;
+      for (const t of item.targets) {
+        if (t?.card != null && !damaged.has(`c${t.card}`)) {
+          const to = this.layoutWorld(t.card);
+          if (from && to) void this.magic.bolt(from, to, colors, 0.45 / this.timeScale, item.ability ? 0.6 : 1);
+          aimed = true;
+        } else if (t?.player != null && !damaged.has(`p${t.player}`)) {
+          const to = this.playerWorld(t.player);
+          if (from && to) void this.magic.bolt(from, to, colors, 0.45 / this.timeScale, item.ability ? 0.6 : 1);
+          aimed = true;
+        } else if (t) {
+          aimed = true;
+        }
+      }
+      if (!aimed && !item.ability && item.controller != null) {
+        const card = state.cards[item.source];
+        // permanents get their entrance on landing; this is for instants and sorceries
+        if (card && card.zone !== 'Battlefield' && card.zone !== 'Stack') {
+          const seat = seatFrames(state, this.localId).find((f) => f.playerId === item.controller);
+          if (seat) this.magic.burst(seat.center.clone().setY(0.2), colors, 1.1);
+        }
+      }
+    }
   }
 
   /** Re-place everything without animation pacing (hover, selection changes). */
@@ -351,7 +398,10 @@ export class Table {
           root.position.copy(curve.getPoint(Math.min(1, st.t)));
           root.quaternion.slerpQuaternions(startQuat, endQuat, Math.min(1, st.t));
           root.scale.setScalar(startScale + (endScaleV.x - startScale) * st.t);
-          if (to === 'Stack' || from === 'Stack') this.fx.trail(root.position, trailColor, 0.3);
+          if (to === 'Stack' || from === 'Stack') {
+            this.fx.trail(root.position, trailColor, 0.22);
+            this.magic.trail(root.position, obj.state.colors, 0.8);
+          }
         },
         onComplete: () => {
           this.flying.delete(obj.id);
@@ -365,6 +415,8 @@ export class Table {
             if (s.land) sfx.land(this.panOf(end));
             else sfx.etb(s.colors, s.power ?? 0, this.panOf(end));
             this.fx.etb(end, colorFor(s.colors), p.scale * (s.creature ? 1 : 0.7));
+            // anything cast arrives in its colours; bigger creatures make a bigger entrance
+            if (!s.land && from === 'Stack') this.magic.burst(end, s.colors, s.creature ? 0.8 + Math.min(0.8, (s.power ?? 0) / 6) : 0.65);
             if (s.creature && (s.power ?? 0) >= 5) this.stage.addShake(0.35);
           }
           else if (to === 'Graveyard' || to === 'Exile' || to === 'Command') sfx.place(this.panOf(end));
@@ -559,10 +611,14 @@ export class Table {
       const key = targetCard != null && srcId != null ? [srcId, targetCard].sort().join('-') : `p${srcId}`;
       if (!slots.has(key)) slots.set(key, slots.size);
       const delay = (slots.get(key)! * 0.42) / ts;
+      const srcPos = src ? src.root.getWorldPosition(new THREE.Vector3()) : null;
       const onHit = () => {
         const heavy = Math.min(1, amount / 6);
         this.fx.impact(targetPos, targetPlayer != null ? '#ff5a3a' : '#ffb35a', Math.min(10, amount * 1.3));
         this.fx.shockwave(targetPos, targetPlayer != null ? '#ff6a3a' : '#ffc36a', heavy);
+        // the striker's colours burst on contact, and the blow draws blood
+        if (src) this.magic.burst(targetPos, src.state.colors, 0.6 + heavy * 0.5);
+        this.magic.wound(targetPos, amount, srcPos, targetPlayer != null);
         sfx.hit(amount, targetPlayer != null, this.panOf(targetPos));
         this.hitStop(0.1 + heavy * 0.12);
         if (amount >= 4) this.stage.punch(heavy);
@@ -570,13 +626,16 @@ export class Table {
           this.showLifeLoss(targetPlayer, amount);
           this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage', true);
           this.stage.addShake(Math.min(1.1, 0.25 + amount * 0.08));
-          if (targetPlayer === this.localId) this.hurtFlash(heavy);
+          this.playerHit(targetPlayer, amount, targetPos);
         } else if (targetCard != null) {
           this.floatAtCard(targetCard, `−${amount}`, true);
           const t = this.cards.get(targetCard);
           if (t) {
             t.hurt();
             this.wobble(t);
+            if (srcPos) this.knock(t, srcPos, amount);
+            const ang = srcPos ? Math.atan2(targetPos.x - srcPos.x, targetPos.z - srcPos.z) + 0.6 : Math.random() * 6;
+            this.magic.slash(targetPos, 2.2 + Math.min(1.5, amount * 0.2), ang);
           }
           this.stage.addShake(Math.min(0.6, 0.1 + amount * 0.05));
         }
@@ -671,6 +730,32 @@ export class Table {
     });
   }
 
+  /** A player takes damage: their plate recoils; for you, the whole picture lurches and reddens. */
+  private playerHit(pid: number, amount: number, at: THREE.Vector3): void {
+    const heavy = Math.min(1, amount / 6);
+    this.onPlayerHit?.(pid, amount);
+    const v = at.clone().project(this.stage.camera);
+    const screen = { x: v.x * 0.5 + 0.5, y: v.y * 0.5 + 0.5 };
+    if (pid === this.localId) {
+      this.hurtFlash(heavy);
+      this.stage.hitPulse(0.45 + heavy * 0.75, screen);
+      this.stage.punch(0.4 + heavy * 0.6);
+    } else {
+      this.stage.hitPulse(0.15 + heavy * 0.35, screen);
+    }
+  }
+
+  /** A struck card rocks back, away from the blow, and springs upright. */
+  private knock(obj: CardObject, from: THREE.Vector3, amount: number): void {
+    const at = obj.root.getWorldPosition(new THREE.Vector3());
+    const away = at.clone().sub(from).setY(0).normalize().multiplyScalar(2).add(at);
+    const local = obj.root.worldToLocal(away);
+    const len = Math.hypot(local.x, local.y) || 1;
+    const k = Math.min(0.75, 0.25 + amount * 0.06);
+    gsap.killTweensOf(obj.body.rotation, 'x,y');
+    gsap.fromTo(obj.body.rotation, { x: (-local.y / len) * k, y: (local.x / len) * k }, { x: 0, y: 0, duration: 0.7 / this.timeScale, ease: 'elastic.out(1.1, 0.3)' });
+  }
+
   private wobble(obj: CardObject): void {
     gsap.fromTo(obj.body.rotation, { z: 0.12 }, { z: 0, duration: 0.5 / this.timeScale, ease: 'elastic.out(1.2, 0.35)' });
   }
@@ -680,6 +765,7 @@ export class Table {
       gsap.fromTo(obj.body.position, { z: 0 }, { z: 0.9, duration: 0.18 / this.timeScale, yoyo: true, repeat: 1, ease: 'sine.out', onComplete: resolve });
       const at = obj.root.getWorldPosition(new THREE.Vector3());
       this.fx.flash(at, colorFor(obj.state.colors), 2, 0.4);
+      this.magic.burst(at, obj.state.colors, 0.4);
       sfx.ability(obj.state.colors, this.panOf(at));
     });
   }
@@ -692,12 +778,22 @@ export class Table {
     const to = targetPlayer != null ? this.playerWorld(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
     const amount = e.amount as number;
     if (from && to) sfx.zap(this.cards.get(srcId!)?.state.colors, this.panOf(from));
-    if (from && to) await this.fx.bolt(from, to, colorFor(this.cards.get(srcId!)?.state.colors), 0.45 / this.timeScale);
+    const colors = srcId != null ? (this.cards.get(srcId)?.state.colors ?? this.state?.cards[srcId]?.colors) : undefined;
+    if (from && to) await this.magic.bolt(from, to, colors, 0.5 / this.timeScale, 0.8 + Math.min(0.8, amount / 6));
     if (to) sfx.hit(amount, targetPlayer != null, this.panOf(to));
+    if (to) this.magic.wound(to, amount, from, targetPlayer != null);
     if (targetPlayer != null) {
-      this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage');
+      this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage', amount >= 4);
       this.stage.addShake(Math.min(0.8, 0.1 + amount * 0.05));
-    } else if (targetCard != null) this.floatAtCard(targetCard, `−${amount}`);
+      this.playerHit(targetPlayer, amount, to!);
+    } else if (targetCard != null) {
+      this.floatAtCard(targetCard, `−${amount}`);
+      const t = this.cards.get(targetCard);
+      if (t && from) {
+        t.hurt();
+        this.knock(t, from, amount);
+      }
+    }
   }
 
   /** Combat declarations and taps show up as card flags flipping; one sound per kind per update. */
