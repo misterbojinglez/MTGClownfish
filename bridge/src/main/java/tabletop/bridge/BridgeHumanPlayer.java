@@ -33,6 +33,62 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             super(game, player, lobby);
         }
 
+        /**
+         * Forge's "pass when there's nothing to do" ignores mana abilities, so a main phase whose only option
+         * is a sacrifice outlet that makes mana (Soldevi Adnate, Ashnod's Altar) was passed straight through.
+         * Sacrificing something is a real decision, so in your own main phase with an empty stack, when such an
+         * ability is usable, auto-pass is held for this priority.
+         */
+        @Override
+        public List<SpellAbility> chooseSpellAbilityToPlay() {
+            final boolean hold = sacrificeOutletReady();
+            final forge.gamemodes.match.YieldController yc = getYieldController();
+            if (hold) {
+                yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
+            }
+            try {
+                return super.chooseSpellAbilityToPlay();
+            } finally {
+                if (hold) {
+                    yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");
+                }
+            }
+        }
+
+        /** Your main phase, nothing on the stack, and a mana ability you could use that sacrifices another permanent. */
+        private boolean sacrificeOutletReady() {
+            try {
+                final Game game = getGame();
+                final Player me = getPlayer();
+                if (!game.getPhaseHandler().isPlayerTurn(me) || !game.getPhaseHandler().getPhase().isMain() || !game.getStack().isEmpty()) {
+                    return false;
+                }
+                for (final forge.game.card.Card c : me.getCardsIn(forge.game.zone.ZoneType.Battlefield)) {
+                    for (final SpellAbility ma : c.getManaAbilities()) {
+                        if (ma.getPayCosts() == null) {
+                            continue;
+                        }
+                        boolean sacrificesOther = false;
+                        for (final forge.game.cost.CostPart part : ma.getPayCosts().getCostParts()) {
+                            if (part instanceof forge.game.cost.CostSacrifice && !part.payCostFromSource()) {
+                                sacrificesOther = true;
+                            }
+                        }
+                        if (!sacrificesOther) {
+                            continue;
+                        }
+                        ma.setActivatingPlayer(me);
+                        if (ma.canPlay() && forge.game.cost.CostPayment.canPayAdditionalCosts(ma.getPayCosts(), ma, false)) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (final RuntimeException ignored) {
+                // mid-update; fall back to Forge's own judgement
+            }
+            return false;
+        }
+
         @Override
         public void orderAndPlaySimultaneousSa(final List<SpellAbility> activePlayerSAs) {
             // targets are chosen as each trigger goes on the stack; note which ones need one
