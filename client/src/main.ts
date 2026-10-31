@@ -1,5 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
+import gsap from 'gsap';
 import { Bridge } from './net';
 import type { CardState, RequestMsg, ServerMsg, UpdateMsg } from './protocol';
 import { stackKey } from './scene/layout';
@@ -32,11 +33,38 @@ const PHASE_DWELL = 0.32;
 const queue: ServerMsg[] = [];
 let draining = false;
 
+/** queued updates (back to back, no decision between) at which the client stops animating each one */
+const CATCHUP_AT = 24;
+/** the newest updates still played out when catching up */
+const KEEP_ANIMATED = 6;
+
+/**
+ * Several updates as one: card changes merged in order (each update carries only what changed), everything
+ * else from the newest. Only the newest one's events are kept, plus the last turn start so the camera
+ * still knows whose turn it is.
+ */
+function mergeUpdates(msgs: UpdateMsg[]): UpdateMsg {
+  const last = msgs[msgs.length - 1];
+  const cards: UpdateMsg['state']['cards'] = {};
+  for (const m of msgs) Object.assign(cards, m.state.cards);
+  const events = [...last.events];
+  const turnBegan = msgs.flatMap((m) => m.events).filter((e) => e.event === 'TurnBegan').pop();
+  if (turnBegan && !events.includes(turnBegan)) events.unshift(turnBegan);
+  return { ...last, events, state: { ...last.state, cards } };
+}
+
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;
   while (queue.length) {
-    const msg = queue.shift()!;
+    let msg = queue.shift()!;
+    // far behind (a big board's turns produce updates faster than they can be shown): jump ahead to the
+    // newest few, applying everything in between at once, instead of falling further behind all game
+    if (msg.type === 'update') {
+      let run = 0;
+      while (run < queue.length && queue[run].type === 'update') run++;
+      if (run >= CATCHUP_AT) msg = mergeUpdates([msg, ...(queue.splice(0, run - KEEP_ANIMATED) as UpdateMsg[])]);
+    }
     const backlog = queue.filter((m) => m.type === 'update').length;
     // play at normal speed unless well behind, and never rush past what is happening
     table.timeScale = Math.min(2.5, 1 + Math.max(0, backlog - 8) / 20);
@@ -438,4 +466,4 @@ bridge.connect();
 showMenu();
 
 // dev-only hook so the headless driver (scratch tooling) can read state and act like a player
-if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, sfx, director, queue: () => ({ pending: queue.length, draining }), autoPayArmed: () => performance.now() < autoPayUntil };
+if (import.meta.env.DEV) (window as unknown as { __debug: unknown }).__debug = { table, bridge, input, stage, sfx, director, gsap, queue: () => ({ pending: queue.length, draining }), autoPayArmed: () => performance.now() < autoPayUntil };
