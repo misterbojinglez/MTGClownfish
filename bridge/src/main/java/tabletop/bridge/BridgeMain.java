@@ -148,10 +148,12 @@ public final class BridgeMain {
 
         gui = new SocketGuiGame(session);
         match = GuiBase.getInterface().hostMatch();
+        GameRecord.begin(gameType.name(), players.size());
         match.setStartGameHook(() -> match.getGame().subscribeToEvents(new Object() {
             @Subscribe
             public void receiveGameEvent(final GameEvent event) {
                 gui.onGameEvent(event);
+                GameRecord.onEvent(match.getGame(), event);
             }
         }));
         final GameRules rules = new GameRules(gameType);

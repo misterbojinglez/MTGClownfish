@@ -77,12 +77,13 @@ async function flush(): Promise<void> {
   }
   // set/number misses (promos, Forge-only set codes) get one retry by name
   for (const [k, { card, waiters }] of misses) {
-    if (card.token || !card.name) {
+    if (!card.name) {
       resolved.set(k, null);
       waiters.forEach((w) => w(null));
       continue;
     }
-    const r = await byName(card.name);
+    // a token is either a copy of a real card (Offspring, clones: same name) or a token printing
+    const r = card.token ? ((await byName(card.name)) ?? (await byTokenName(card.name))) : await byName(card.name);
     resolved.set(k, r);
     waiters.forEach((w) => w(r));
   }
@@ -101,6 +102,23 @@ async function byName(name: string): Promise<Resolved | null> {
     const res = await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(frontName(name))}`);
     if (!res.ok) return null;
     return pickImages(await res.json(), name);
+  } catch {
+    return null;
+  }
+}
+
+/** The newest token printing with this name ("Soldier", "Treasure"), when Forge didn't say which. */
+async function byTokenName(name: string): Promise<Resolved | null> {
+  const clean = frontName(name).replace(/\s+Token$/i, '').trim();
+  const wait = Math.max(0, lastApiCall + 120 - performance.now());
+  if (wait) await new Promise((r) => setTimeout(r, wait));
+  lastApiCall = performance.now();
+  try {
+    const q = encodeURIComponent(`!"${clean}" is:token`);
+    const res = await fetch(`https://api.scryfall.com/cards/search?q=${q}&order=released&dir=desc&unique=art`);
+    if (!res.ok) return null;
+    const data = (await res.json()).data ?? [];
+    return data.length ? pickImages(data[0], clean) : null;
   } catch {
     return null;
   }

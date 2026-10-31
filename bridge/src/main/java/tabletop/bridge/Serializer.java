@@ -159,8 +159,10 @@ public final class Serializer {
         }
         final CardStateView s = c.getCurrentState();
         o.addProperty("name", s.getName());
-        o.addProperty("set", s.getSetCode());
-        o.addProperty("cn", collectorNumber(s.getName(), s.getSetCode()));
+        // tokens are printed in their set's token product (e.g. FIN → TFIN on Scryfall)
+        final String[] tokenPrint = tokenPrinting(s.getImageKey());
+        o.addProperty("set", tokenPrint != null ? tokenPrint[0] : s.getSetCode());
+        o.addProperty("cn", tokenPrint != null ? tokenPrint[1] : collectorNumber(s.getName(), s.getSetCode()));
         o.addProperty("imageKey", s.getImageKey());
         o.addProperty("faceDown", c.isFaceDown());
         o.addProperty("state", s.getState() == null ? null : s.getState().name());
@@ -212,6 +214,51 @@ public final class Serializer {
         }
         collectorNumbers.put(key, cn);
         return cn.isEmpty() ? null : cn;
+    }
+
+    private static final java.util.Map<String, String[]> tokenPrints = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * A token's image key is "t:name|SET[|number]". Its art lives in the set's token product on Scryfall:
+     * returns {token set code, collector number}, or null when Forge doesn't know a printing.
+     */
+    static String[] tokenPrinting(final String imageKey) {
+        if (imageKey == null || !imageKey.startsWith("t:")) {
+            return null;
+        }
+        final String[] cached = tokenPrints.get(imageKey);
+        if (cached != null) {
+            return cached.length == 0 ? null : cached;
+        }
+        String[] out = new String[0];
+        try {
+            String key = imageKey.substring(2);
+            if (key.endsWith(forge.ImageKeys.BACKFACE_POSTFIX)) {
+                key = key.substring(0, key.length() - forge.ImageKeys.BACKFACE_POSTFIX.length());
+            }
+            final String[] parts = key.split("\\|");
+            if (parts.length >= 2) {
+                final forge.card.CardEdition ed = StaticData.instance().getEditions().get(parts[1]);
+                if (ed != null && ed.getTokensCode() != null) {
+                    String cn = parts.length > 2 ? parts[2] : null;
+                    if (cn == null || cn.isEmpty()) {
+                        for (final forge.card.CardEdition.EditionEntry e : ed.getTokens().get(parts[0])) {
+                            if (e.collectorNumber() != null && !e.collectorNumber().isEmpty()) {
+                                cn = e.collectorNumber();
+                                break;
+                            }
+                        }
+                    }
+                    if (cn != null && !cn.isEmpty()) {
+                        out = new String[] {ed.getTokensCode(), cn.replace("\u2607", "")};
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // unknown edition or malformed key: the client falls back to a search by name
+        }
+        tokenPrints.put(imageKey, out);
+        return out.length == 0 ? null : out;
     }
 
     private static JsonObject counters(final Multiset<CounterType> counters) {
