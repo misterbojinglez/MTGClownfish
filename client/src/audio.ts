@@ -76,19 +76,29 @@ class AudioEngine {
     } catch {
       /* storage unavailable: defaults */
     }
-    // browsers only allow audio after a gesture
+    // Browsers only allow audio after a gesture, and they disagree on which events count: Chrome
+    // accepts pointerdown, but Safari/WebKit only unlocks media on click / pointerup / touchend / key
+    // events. A context created or resumed in a non-qualifying event stays suspended, so listen to all
+    // of them and keep retrying until it is actually running.
     const unlock = () => this.unlock();
-    window.addEventListener('pointerdown', unlock, { capture: true });
-    window.addEventListener('keydown', unlock, { capture: true });
+    for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'click', 'touchend', 'keydown', 'keyup']) {
+      window.addEventListener(ev, unlock, { capture: true, passive: true });
+    }
   }
 
   private unlock(): void {
     if (this.ctx && this.ctx.state !== 'closed') {
-      // suspended by the browser, or interrupted (output device changed, machine slept): wake it again
-      if (this.ctx.state !== 'running') void this.ctx.resume().catch(() => undefined);
+      // suspended (no qualifying gesture yet), or interrupted (output device changed, machine slept): wake it
+      if (this.ctx.state !== 'running') {
+        void this.ctx.resume().catch(() => undefined);
+        this.kick();
+      }
       return;
     }
-    const ctx = new AudioContext();
+    const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return;
+    const ctx = new Ctor();
+    if (import.meta.env.DEV) ctx.addEventListener('statechange', () => console.info('[audio]', ctx.state));
     this.ctx = ctx;
     this.master = ctx.createGain();
     this.master.gain.value = this.muted ? 0 : this.volume;
@@ -119,6 +129,22 @@ class AudioEngine {
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     this.startAmbient();
+    if (ctx.state !== 'running') void ctx.resume().catch(() => undefined);
+    this.kick();
+  }
+
+  /** WebKit unlocks a context when a source starts inside a gesture: play one silent sample. */
+  private kick(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch {
+      /* ignore */
+    }
   }
 
   private save(): void {
