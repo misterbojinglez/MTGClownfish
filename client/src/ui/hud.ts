@@ -56,6 +56,8 @@ export class Hud {
   private stackKey = '';
   private promptSourceKey = '';
   private readonly okBtn = h('button', 'main-btn');
+  /** the OK button currently means "choose nothing" (an optional target with none picked) */
+  private skipping = false;
   private readonly cancelBtn = h('button', 'sub-btn');
   private readonly phaseBar = h('div', 'phase-bar');
   private readonly turnLabel = h('div', 'turn-label');
@@ -161,7 +163,7 @@ export class Hud {
         this.handlers.passTurn();
       } else if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
-        if (!this.okBtn.disabled) this.handlers.ok();
+        if (!this.okBtn.disabled && !this.skipping) this.handlers.ok();
       } else if (e.key === 'Escape' || e.key === 'z') {
         if (!this.cancelBtn.disabled) this.handlers.cancel();
       }
@@ -234,7 +236,8 @@ export class Hud {
       this.promptSourceKey = key;
       this.promptSource.replaceChildren(...(src ? [this.sourceHeader(src, state)] : []));
     }
-    let msg = tidyMessage(prompt.message ?? '');
+    // without Forge's bracketed context notes ("[Added once: Summon: Bahamut]", "[Zone Changer: …]")
+    let msg = tidyMessage((prompt.message ?? '').replace(/[ \t]*\[[^\]\n]*:[^\]\n]*\]/g, ''));
     // Forge's status line counts game turns; show the active player's own count instead
     const active = state?.players.find((p) => p.id === state.activePlayer);
     if (active?.turns != null) msg = msg.replace(/^Turn: \d+ \((.+?)\)$/m, (_m, who: string) => `Turn: ${active.turns} (${who})`);
@@ -247,9 +250,14 @@ export class Hud {
     this.promptText.textContent = msg;
     const ok = prompt.ok;
     const cancel = prompt.cancel;
-    this.okBtn.textContent = ok?.label || 'OK';
+    // "up to one target" and other choices where nothing is allowed: until something is picked, OK means
+    // choosing nothing. Say so, drop the "your move" glow, and keep Space/Enter from doing it by accident
+    // (passing through a pile of triggers would otherwise skip Summon: Bahamut's destroy).
+    this.skipping = !!ok?.enabled && SKIPPABLE_INPUTS.has(prompt.input ?? '') && sel.min === 0 && sel.chosen.length === 0 && (sel.cards.length > 0 || sel.targets.length > 0);
+    this.okBtn.textContent = this.skipping ? 'Choose nothing' : ok?.label || 'OK';
     this.okBtn.disabled = !ok?.enabled || waiting;
-    this.okBtn.classList.toggle('glow', !!ok?.enabled && !waiting);
+    this.okBtn.classList.toggle('glow', !!ok?.enabled && !waiting && !this.skipping);
+    this.okBtn.classList.toggle('skip', this.skipping);
     this.okBtn.classList.toggle('end-turn', /end turn|pass/i.test(ok?.label ?? '') || /^OK$/i.test(ok?.label ?? ''));
     this.cancelBtn.textContent = cancel?.label || 'Cancel';
     this.cancelBtn.style.visibility = cancel?.enabled && !waiting ? 'visible' : 'hidden';
@@ -916,6 +924,9 @@ function ptBreakdown(c: CardState): HTMLElement[] {
 function choiceLabel(text: string): string {
   return tidyMessage(text.replace(/\s*\[[^\]]*:[^\]]*\]\s*$/, ''));
 }
+
+/** Forge inputs where picking nothing can be a legal answer that's easy to give by accident. */
+const SKIPPABLE_INPUTS = new Set(['InputSelectTargets', 'InputSelectCardsFromList', 'InputSelectEntitiesFromList']);
 
 function tidyMessage(text: string): string {
   return text.replace(/ \(\d+\)/g, '').trim();

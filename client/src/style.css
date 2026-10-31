@@ -164,6 +164,18 @@ button {
   box-shadow: 0 0 22px rgba(58, 166, 255, 0.6), 0 6px 20px rgba(0, 0, 0, 0.55);
 }
 
+/* the prompt's OK when it would mean "choose nothing": looks like a secondary action, not the next step */
+.main-btn.skip:not(:disabled) {
+  border-color: var(--gold-dim);
+  background: linear-gradient(180deg, rgba(42, 35, 64, 0.92), rgba(21, 17, 31, 0.92));
+  color: var(--text);
+}
+
+.main-btn.skip:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: linear-gradient(180deg, rgba(42, 35, 64, 0.92), rgba(21, 17, 31, 0.92));
+}
+
 .main-btn.wide,
 .sub-btn.wide {
   min-width: calc(var(--h) * 3.4);
