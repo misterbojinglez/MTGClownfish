@@ -35,6 +35,12 @@ export interface CardState {
   cantBlock?: boolean;
   power?: number;
   toughness?: number;
+  /** battlefield creatures: P/T before counters and other modifiers (printed, or set by an effect) */
+  basePower?: number;
+  baseToughness?: number;
+  /** how much of the P/T comes from counters (present only when non-zero) */
+  counterPower?: number;
+  counterToughness?: number;
   loyalty?: string;
   counters?: Record<string, number>;
   attachedTo?: number | null;

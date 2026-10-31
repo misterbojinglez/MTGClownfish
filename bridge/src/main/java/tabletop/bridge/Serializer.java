@@ -205,6 +205,7 @@ public final class Serializer {
         if (s.isCreature() || s.hasPrintedPT()) {
             o.addProperty("power", s.getPower());
             o.addProperty("toughness", s.getToughness());
+            ptBreakdown(o, c);
         }
         if (s.isPlaneswalker()) {
             o.addProperty("loyalty", s.getLoyalty());
@@ -213,6 +214,35 @@ public final class Serializer {
         o.addProperty("attachedTo", c.getAttachedTo() == null ? null : c.getAttachedTo().getId());
         o.addProperty("colors", s.getColors() == null ? "" : s.getColors().toString());
         return o;
+    }
+
+    /**
+     * Where a battlefield creature's P/T comes from: its base (printed, or set by an effect like
+     * "becomes a 4/4"), plus counters, plus until-end-of-turn boosts, so the client can show buffs and
+     * debuffs at a glance. Omitted off the battlefield, where P/T is just the printed value.
+     */
+    private static void ptBreakdown(final JsonObject o, final CardView c) {
+        if (c.getZone() != forge.game.zone.ZoneType.Battlefield) {
+            return;
+        }
+        try {
+            final forge.game.Game game = SocketGuiGame.liveGame;
+            final forge.game.card.Card real = game == null ? null : game.findById(c.getId());
+            if (real == null || !real.isCreature()) {
+                return;
+            }
+            final forge.game.card.Card.StatBreakdown p = real.getNetPowerBreakdown();
+            final forge.game.card.Card.StatBreakdown t = real.getNetToughnessBreakdown();
+            o.addProperty("basePower", p.currentValue);
+            o.addProperty("baseToughness", t.currentValue);
+            if (p.bonusFromCounters != 0 || t.bonusFromCounters != 0) {
+                o.addProperty("counterPower", p.bonusFromCounters);
+                o.addProperty("counterToughness", t.bonusFromCounters);
+            }
+            // whatever else changed it (anthems, auras, equipment, pump spells) lands in the remainder
+        } catch (final RuntimeException ignored) {
+            // the game moved on mid-read; the next update will say
+        }
     }
 
     private static String collectorNumber(final String name, final String set) {

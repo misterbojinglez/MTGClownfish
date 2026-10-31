@@ -62,6 +62,8 @@ export class Hud {
   private readonly zoom = h('div', 'zoom');
   private readonly zoomImg = h('img');
   private readonly zoomText = h('div', 'zoom-text');
+  /** where a battlefield creature's P/T comes from, when it differs from the printed card */
+  private readonly zoomStats = h('div', 'zoom-stats');
   private readonly plates = new Map<number, HTMLDivElement>();
   private readonly toasts = h('div', 'toasts');
   private readonly status = h('div', 'status');
@@ -81,7 +83,7 @@ export class Hud {
       pip.dataset.phase = key;
       this.phaseBar.append(pip);
     }
-    this.zoom.append(this.zoomImg, this.zoomText);
+    this.zoom.append(this.zoomImg, this.zoomText, this.zoomStats);
     this.root.append(this.promptBox, phaseWrap, this.zoom, this.toasts, this.status);
     this.okBtn.onclick = () => this.handlers.ok();
     this.cancelBtn.onclick = () => this.handlers.cancel();
@@ -503,6 +505,7 @@ export class Hud {
       return;
     }
     this.zoom.classList.toggle('right', side === 'right');
+    this.zoomStats.replaceChildren(...ptBreakdown(card));
     if (this.zoomFor === card.id) {
       this.zoom.classList.add('show');
       return;
@@ -620,7 +623,11 @@ export class Hud {
       if (req.source) panel.append(this.sourceHeader(req.source, state));
       const title = h('div', 'modal-title', tidyMessage(req.message ?? ''));
       panel.append(title);
-      if (req.caption && req.caption !== req.message) panel.append(h('div', 'modal-sub', req.caption));
+      // Forge's caption for trigger ordering is just "Resolve first"; say how the picking works instead
+      const caption = req.kind === 'order' && /^resolve first$/i.test(req.caption ?? '')
+        ? 'Click them in the order they should resolve: 1 resolves first.'
+        : req.caption;
+      if (caption && caption !== req.message) panel.append(h('div', 'modal-sub', caption));
       const done = (value: unknown) => {
         modal.classList.add('out');
         setTimeout(() => modal.remove(), 160);
@@ -678,15 +685,23 @@ export class Hud {
     const items: HTMLElement[] = [];
     const confirm = h('button', 'main-btn wide', reveal ? 'OK' : 'Confirm');
 
+    // when every option must be placed, the last one has nowhere else to go: fill it in
+    const answer = (): number[] => {
+      if (ordering && min === n && picked.length === n - 1) return [...picked, options.findIndex((_, i) => !picked.includes(i))];
+      return picked;
+    };
     const refresh = () => {
+      const full = answer();
       items.forEach((el, i) => {
-        const at = picked.indexOf(i);
+        const at = full.indexOf(i);
         el.classList.toggle('picked', at >= 0);
+        el.classList.toggle('implied', at >= 0 && !picked.includes(i));
         const badge = el.querySelector('.order-badge');
         if (badge) badge.textContent = ordering && at >= 0 ? String(at + 1) : '';
       });
-      confirm.disabled = !reveal && (picked.length < min || picked.length > max);
-      if (!reveal && max > 1) confirm.textContent = `Confirm (${picked.length}${max < n ? '/' + max : ''})`;
+      confirm.disabled = !reveal && (full.length < min || full.length > max);
+      if (ordering) confirm.textContent = 'Confirm order';
+      else if (!reveal && max > 1) confirm.textContent = picked.length ? `Confirm (${picked.length}${max < n ? '/' + max : ''})` : 'Confirm';
     };
 
     options.forEach((o: ChoiceOption, i) => {
@@ -694,9 +709,9 @@ export class Hud {
       let el: HTMLElement;
       if (hasCards && card?.visible) {
         el = this.cardThumb(card);
-        if (o.ability != null || (o.label && o.label !== card.name)) el.append(h('div', 'thumb-label', o.label));
+        if (o.ability != null || (o.label && o.label !== card.name)) el.append(h('div', 'thumb-label', choiceLabel(o.label)));
       } else {
-        el = h('button', 'choice-item', o.label);
+        el = h('button', 'choice-item', choiceLabel(o.label));
       }
       el.append(h('span', 'order-badge'));
       if (!reveal) {
@@ -728,11 +743,12 @@ export class Hud {
       row.append(skip);
     }
     if (ordering && min === n) {
-      const all = h('button', 'sub-btn wide', 'Keep this order');
+      const all = h('button', 'sub-btn wide', 'Keep as shown');
+      all.title = 'Resolve them left to right';
       all.onclick = () => done(options.map((_, i) => i));
       row.append(all);
     }
-    confirm.onclick = () => done(reveal ? [] : [...picked]);
+    confirm.onclick = () => done(reveal ? [] : [...answer()]);
     row.append(confirm);
     panel.append(row);
     refresh();
@@ -768,8 +784,8 @@ export class Hud {
       const row = h('div', 'dist-row');
       const label = h('div', 'dist-label', player ? `${player.name} (${player.life} life)` : card?.name ?? o.label);
       if (o.color) label.classList.add(`pip-${o.color}`, 'dist-color');
-      const minus = h('button', 'sub-btn', '−');
-      const plus = h('button', 'sub-btn', '+');
+      const minus = h('button', 'sub-btn icon', '−');
+      const plus = h('button', 'sub-btn icon', '+');
       minus.onclick = () => {
         if (shares[i] > min) shares[i]--;
         refresh();
@@ -861,6 +877,33 @@ export class Hud {
 }
 
 /** Forge tags card names with their object ids ("Island (70)"); players don't need those. */
+/** "5/5 · base 2/2 · counters +2/+2 · effects +1/+1", as coloured spans; empty when nothing changed. */
+function ptBreakdown(c: CardState): HTMLElement[] {
+  if (c.zone !== 'Battlefield' || !c.creature || c.power === undefined || c.basePower === undefined || c.baseToughness === undefined) return [];
+  const t = c.toughness ?? 0;
+  const dmg = c.damage ?? 0;
+  const cp = c.counterPower ?? 0;
+  const ct = c.counterToughness ?? 0;
+  const ep = c.power - c.basePower - cp;
+  const et = t - c.baseToughness - ct;
+  if (!cp && !ct && !ep && !et && !dmg) return [];
+  const sign = (n: number) => (n < 0 ? `−${-n}` : `+${n}`);
+  const tone = (a: number, b: number) => (a >= 0 && b >= 0 ? 'up' : a <= 0 && b <= 0 ? 'down' : '');
+  const out = [h('span', `zs-total ${tone(c.power - c.basePower, t - c.baseToughness - dmg)}`, `${c.power}/${t - dmg}`), h('span', 'zs-part', `base ${c.basePower}/${c.baseToughness}`)];
+  if (cp || ct) out.push(h('span', `zs-part ${tone(cp, ct)}`, `counters ${sign(cp)}/${sign(ct)}`));
+  if (ep || et) out.push(h('span', `zs-part ${tone(ep, et)}`, `effects ${sign(ep)}/${sign(et)}`));
+  if (dmg) out.push(h('span', 'zs-part down', `${dmg} damage`));
+  return out;
+}
+
+/**
+ * An option's text without Forge's trailing context, e.g. "… mill two cards. [Zone Changer: Massacre
+ * Wurm (84)]": the card art beside it already says which card it is.
+ */
+function choiceLabel(text: string): string {
+  return tidyMessage(text.replace(/\s*\[[^\]]*:[^\]]*\]\s*$/, ''));
+}
+
 function tidyMessage(text: string): string {
   return text.replace(/ \(\d+\)/g, '').trim();
 }

@@ -78,37 +78,78 @@ button {
 }
 
 .actions {
+  --btn-h: 56px;
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.main-btn {
-  min-width: 136px;
-  height: 56px;
-  padding: 0 26px;
-  border-radius: 28px;
-  border: 2px solid var(--gold);
-  background: linear-gradient(180deg, #2a2340, #15111f);
-  color: var(--text);
+/*
+ * Buttons come in two tiers.
+ * Action buttons (.main-btn primary, .sub-btn secondary) share height, font, radius and border width so
+ * they sit level in any row; only the fill says which is primary. The container sets the size through
+ * --btn-h: dialogs use the standard 44px, the in-game prompt and setup screen the large 56px.
+ * Toolbar pills (.chip, .view-btn, .seg) are the small tier: 30px, Inter.
+ */
+.main-btn,
+.sub-btn {
+  --h: var(--btn-h, 44px);
+  height: var(--h);
+  min-width: calc(var(--h) * 2.2);
+  padding: 0 calc(var(--h) * 0.45);
+  border-radius: calc(var(--h) / 2);
+  border: 2px solid var(--gold-dim);
   font-family: Cinzel, Georgia, serif;
   font-weight: 700;
-  font-size: 17px;
+  font-size: calc(var(--h) * 0.33);
   letter-spacing: 0.04em;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
-  transition: transform 0.12s, box-shadow 0.2s, opacity 0.2s;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  transition: transform 0.12s, box-shadow 0.2s, border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.main-btn:hover:not(:disabled),
+.sub-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.main-btn:focus-visible,
+.sub-btn:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+
+.main-btn {
+  border-color: #f0cf7c;
+  background: linear-gradient(180deg, #f0cf7c, #c49a3f);
+  color: #1b1405;
 }
 
 .main-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
+  background: linear-gradient(180deg, #f7dc96, #d1a84b);
 }
 
-.main-btn:disabled {
-  opacity: 0.45;
+.sub-btn {
+  background: linear-gradient(180deg, rgba(42, 35, 64, 0.92), rgba(21, 17, 31, 0.92));
+}
+
+.sub-btn:hover:not(:disabled) {
+  border-color: var(--gold);
+}
+
+/* disabled looks the same for both: flat, dim, no gold, so it never reads as the thing to press */
+.main-btn:disabled,
+.sub-btn:disabled {
+  border-color: rgba(138, 111, 53, 0.45);
+  background: rgba(20, 17, 28, 0.85);
+  color: rgba(169, 159, 140, 0.6);
+  box-shadow: none;
   cursor: default;
 }
 
-.main-btn.glow {
+.main-btn.glow:not(:disabled) {
   border-color: #ffc46a;
   background: linear-gradient(180deg, #ff9a2e, #c4581a);
   color: #1b0e04;
@@ -116,7 +157,7 @@ button {
   animation: breathe 1.6s ease-in-out infinite;
 }
 
-.main-btn.glow.end-turn {
+.main-btn.glow.end-turn:not(:disabled) {
   border-color: #9fd4ff;
   background: linear-gradient(180deg, #3aa6ff, #1a5fb0);
   color: #fff;
@@ -125,27 +166,22 @@ button {
 
 .main-btn.wide,
 .sub-btn.wide {
-  min-width: 150px;
+  min-width: calc(var(--h) * 3.4);
+}
+
+/* a square button holding one glyph (+, −) */
+.sub-btn.icon {
+  min-width: 0;
+  width: var(--h);
+  padding: 0;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: calc(var(--h) * 0.45);
 }
 
 @keyframes breathe {
   50% {
     box-shadow: 0 0 34px rgba(255, 170, 70, 0.9), 0 6px 20px rgba(0, 0, 0, 0.55);
   }
-}
-
-.sub-btn {
-  height: 42px;
-  padding: 0 18px;
-  border-radius: 21px;
-  border: 1px solid var(--gold-dim);
-  background: var(--panel);
-  color: var(--text);
-  font-weight: 600;
-}
-
-.sub-btn:hover:not(:disabled) {
-  border-color: var(--gold);
 }
 
 .prompt.waiting .prompt-text {
@@ -375,6 +411,49 @@ button {
   display: none;
 }
 
+/* sits just above the zoomed card (the card keeps its printed P/T), growing upward if it wraps */
+.zoom-stats {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.zoom-stats:empty {
+  display: none;
+}
+
+.zoom-stats span {
+  padding: 4px 9px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid rgba(214, 178, 94, 0.3);
+  color: var(--muted);
+}
+
+.zoom-stats .zs-total {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.zoom-stats .up {
+  color: var(--green);
+  border-color: rgba(95, 220, 120, 0.45);
+}
+
+.zoom-stats .down {
+  color: #ff8a7a;
+  border-color: rgba(255, 74, 58, 0.45);
+}
+
 /* ---- floating numbers & banners ---- */
 
 .float-text {
@@ -484,12 +563,14 @@ button {
 }
 
 .chip {
-  padding: 6px 12px;
-  border-radius: 14px;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 15px;
   border: 1px solid var(--gold-dim);
   background: var(--panel);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .chip:hover {
@@ -650,6 +731,9 @@ button {
   display: flex;
   gap: 12px;
   justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-top: 4px;
 }
 
 .modal-input {
@@ -739,8 +823,26 @@ button {
 
 .thumb-label {
   font-size: 12px;
-  padding: 4px 2px;
+  line-height: 1.35;
+  padding: 6px 4px 2px;
+  color: var(--muted);
+}
+
+.thumb.picked .thumb-label {
   color: var(--text);
+}
+
+/* filled in automatically (the last one left in an ordering): marked, but quieter than a real pick */
+.choice-item.implied,
+.thumb.implied {
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.implied .order-badge {
+  background: transparent;
+  border: 2px dashed var(--orange);
+  color: var(--orange);
 }
 
 .thumb-fallback {
@@ -881,10 +983,8 @@ button {
   border: 1px solid rgba(214, 178, 94, 0.3);
 }
 
-.dist-row .sub-btn {
-  width: 42px;
-  padding: 0;
-  font-size: 20px;
+.dist-row {
+  --btn-h: 38px;
 }
 
 .dist-color {
@@ -984,16 +1084,22 @@ button {
 .seg {
   display: inline-flex;
   border: 1px solid var(--gold-dim);
-  border-radius: 18px;
+  border-radius: 15px;
   overflow: hidden;
 }
 
 .seg button {
+  height: 30px;
   border: 0;
   background: transparent;
   color: var(--muted);
-  padding: 7px 16px;
+  padding: 0 16px;
+  font-size: 13px;
   font-weight: 600;
+}
+
+.seg button:hover:not(.on) {
+  color: var(--text);
 }
 
 .seg button.on {
@@ -1174,8 +1280,9 @@ button {
 }
 
 .setup-actions {
+  --btn-h: 52px;
   display: flex;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
 }
 

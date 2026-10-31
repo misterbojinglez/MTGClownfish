@@ -208,10 +208,14 @@ export class CardObject {
     const s = this.state;
     const onField = s.zone === 'Battlefield' && s.visible;
     const counters = Object.entries(s.counters ?? {}).filter(([, n]) => n > 0);
-    const pt = s.creature && s.power !== undefined ? `${s.power}/${(s.toughness ?? 0) - (s.damage ?? 0)}` : '';
+    const showPT = s.creature && s.power !== undefined;
+    const pt = showPT ? `${s.power}/${(s.toughness ?? 0) - (s.damage ?? 0)}` : '';
+    // which way each stat moved from its base: counters, anthems, pumps, -X/-X effects
+    const dp = showPT && s.basePower !== undefined ? s.power! - s.basePower : 0;
+    const dt = showPT && s.baseToughness !== undefined ? (s.toughness ?? 0) - s.baseToughness : 0;
     const loyalty = s.planeswalker ? String(s.loyalty ?? '') : '';
     const icons = onField ? keywordIcons(s) : [];
-    const key = `${onField}|${pt}|${loyalty}|${s.damage}|${counters.map(([k, n]) => k + n).join(',')}|${icons.map((i) => i.glyph).join('')}`;
+    const key = `${onField}|${pt}|${dp},${dt}|${loyalty}|${s.damage}|${counters.map(([k, n]) => k + n).join(',')}|${icons.map((i) => i.glyph).join('')}`;
     if (key === this.badgeKey) return;
     this.badgeKey = key;
     this.badge.visible = onField && (pt !== '' || loyalty !== '' || counters.length > 0 || icons.length > 0);
@@ -237,28 +241,57 @@ export class CardObject {
       g.textAlign = 'left';
     }
     if (counters.length) {
-      const label = counters.map(([k, n]) => (n > 1 ? `${n}× ${prettyCounter(k)}` : prettyCounter(k))).join('  ');
-      g.font = '600 26px Inter, sans-serif';
+      const label = counters.map(([k, n]) => (n > 1 ? `${prettyCounter(k)} ×${n}` : prettyCounter(k))).join('  ');
+      g.font = '700 26px Inter, sans-serif';
       const w = Math.min(Math.max(40, left - 8), g.measureText(label).width + 22);
-      g.fillStyle = 'rgba(20,16,30,0.86)';
+      // P/T counters take the colour of the way they push the creature
+      const tone = counterTone(counters);
+      // saturated: the table's lighting greys out dark tints
+      g.fillStyle = tone === 'up' ? '#1e9a46' : tone === 'down' ? '#c42a1e' : 'rgba(20,16,30,0.86)';
       roundRect(g, 4, 30, w, 50, 14);
       g.fill();
-      g.fillStyle = '#e8dcff';
+      g.fillStyle = tone ? '#ffffff' : '#e8dcff';
       g.fillText(label, 15, 64, w - 22);
     }
-    const value = pt || loyalty;
-    if (value) {
+    if (pt) {
       const damaged = (s.damage ?? 0) > 0;
-      g.fillStyle = s.planeswalker ? 'rgba(30,24,16,0.92)' : 'rgba(245,238,220,0.96)';
+      const shade = (d: number, hurt = false) => (hurt || d < 0 ? '#c0281c' : d > 0 ? '#16803a' : '#15110c');
+      const up = dp > 0 || dt > 0;
+      const down = dp < 0 || dt < 0 || damaged;
+      g.fillStyle = up && !down ? 'rgba(228,248,232,0.97)' : down && !up ? 'rgba(252,232,228,0.97)' : 'rgba(245,238,220,0.96)';
       roundRect(g, 160, 18, 92, 66, 16);
       g.fill();
-      g.strokeStyle = s.planeswalker ? '#d6b25e' : '#2a2117';
+      g.strokeStyle = up && !down ? '#1f9a48' : down && !up ? '#c0281c' : '#2a2117';
+      g.lineWidth = up !== down ? 6 : 4;
+      g.stroke();
+      // power and toughness coloured separately: a +2/-1 shows green over red
+      const [pw, tg] = pt.split('/');
+      g.font = '800 40px Inter, sans-serif';
+      const sw = g.measureText('/').width;
+      const pwW = g.measureText(pw).width;
+      const total = pwW + sw + g.measureText(tg).width;
+      const scale = Math.min(1, 80 / total);
+      g.save();
+      g.translate(206 - (total * scale) / 2, 66);
+      g.scale(scale, 1);
+      g.fillStyle = shade(dp);
+      g.fillText(pw, 0, 0);
+      g.fillStyle = '#15110c';
+      g.fillText('/', pwW, 0);
+      g.fillStyle = shade(dt, damaged);
+      g.fillText(tg, pwW + sw, 0);
+      g.restore();
+    } else if (loyalty) {
+      g.fillStyle = 'rgba(30,24,16,0.92)';
+      roundRect(g, 160, 18, 92, 66, 16);
+      g.fill();
+      g.strokeStyle = '#d6b25e';
       g.lineWidth = 4;
       g.stroke();
-      g.fillStyle = s.planeswalker ? '#f2e3b8' : damaged ? '#c0281c' : '#15110c';
+      g.fillStyle = '#f2e3b8';
       g.font = '800 40px Inter, sans-serif';
       g.textAlign = 'center';
-      g.fillText(value, 206, 66, 84);
+      g.fillText(loyalty, 206, 66, 84);
       g.textAlign = 'left';
     }
     this.badgeTex.needsUpdate = true;
@@ -341,10 +374,31 @@ export class CardObject {
   }
 }
 
+/**
+ * A P/T counter's two numbers, signed. The bridge sends Forge's counter names ("+1/+1", "-0/-1");
+ * enum-style keys ("P1P1", "M1M1") are understood too.
+ */
+function ptCounter(k: string): [number, number] | null {
+  let m = /^([+\-−])(\d+)\/([+\-−])(\d+)$/.exec(k);
+  if (!m) {
+    const e = /^([PM])(\d)([PM])(\d)$/.exec(k);
+    if (!e) return null;
+    m = [k, e[1] === 'P' ? '+' : '-', e[2], e[3] === 'P' ? '+' : '-', e[4]] as unknown as RegExpExecArray;
+  }
+  const v = (sign: string, n: string) => (sign === '+' ? 1 : -1) * Number(n);
+  return [v(m[1], m[2]), v(m[3], m[4])];
+}
+
+/** Whether a card's P/T counters push it up, down, or neither/both. */
+function counterTone(counters: [string, number][]): 'up' | 'down' | '' {
+  const signs = new Set(counters.map(([k]) => ptCounter(k)).filter((c): c is [number, number] => !!c).map(([p, t]) => Math.sign(p + t)).filter((v) => v !== 0));
+  return signs.size !== 1 ? '' : signs.has(1) ? 'up' : 'down';
+}
+
 function prettyCounter(k: string): string {
-  if (k === 'P1P1') return '+1/+1';
-  if (k === 'M1M1') return '−1/−1';
-  if (k === 'LOYALTY') return 'Loyalty';
+  const pt = ptCounter(k);
+  if (pt) return pt.map((n) => (n < 0 ? `−${-n}` : `+${n}`)).join('/');
+  if (k.toUpperCase() === 'LOYALTY') return 'Loyalty';
   return k.charAt(0) + k.slice(1).toLowerCase();
 }
 
