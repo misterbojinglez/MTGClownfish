@@ -77,7 +77,11 @@ public final class Serializer {
         // Forge's game turn counts every player's turns; players think in their own ("my third turn")
         try {
             final forge.game.player.Player real = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
-            if (real != null) { o.addProperty("turns", real.getTurn()); }
+            if (real != null) {
+                o.addProperty("turns", real.getTurn());
+                // what they could spend right now: untapped sources (net of activation costs) plus floating mana
+                o.addProperty("manaAvailable", forge.ai.ComputerUtilMana.getAvailableManaEstimate(real, true));
+            }
         } catch (RuntimeException ignored) {
             // view mid-update; the next snapshot carries it
         }

@@ -384,7 +384,19 @@ export class Hud {
         }
         lifeEl.dataset.init = '1';
       }
-      plate.querySelector('.counts')!.textContent = `✋ ${p.zones.Hand.length}   ▤ ${p.zones.LibraryCount}`;
+      const counts = plate.querySelector<HTMLDivElement>('.counts')!;
+      const avail = p.manaAvailable;
+      const countsText = `✋ ${p.zones.Hand.length}   ▤ ${p.zones.LibraryCount}`;
+      if (counts.dataset.v !== `${countsText}|${avail}`) {
+        counts.dataset.v = `${countsText}|${avail}`;
+        counts.replaceChildren(countsText);
+        if (avail != null) {
+          // what they could spend right now: untapped mana sources plus anything floating
+          const m = h('span', 'mana-avail', `◆ ${avail}`);
+          m.title = `${avail} mana available`;
+          counts.append(m);
+        }
+      }
       const extras: string[] = [];
       if (p.poison > 0) extras.push(`☠ ${p.poison}`);
       if (p.commanderDamage) {
@@ -498,14 +510,15 @@ export class Hud {
 
   // ---- zoom ---------------------------------------------------------------------------------------
 
-  showZoom(card: CardState | null, side: 'left' | 'right' = 'left'): void {
+  /** notes: extra chips above the card (how many are in a hovered stack) */
+  showZoom(card: CardState | null, side: 'left' | 'right' = 'left', notes: string[] = []): void {
     if (!card || !card.visible) {
       this.zoom.classList.remove('show');
       this.zoomFor = -1;
       return;
     }
     this.zoom.classList.toggle('right', side === 'right');
-    this.zoomStats.replaceChildren(...ptBreakdown(card));
+    this.zoomStats.replaceChildren(...notes.map((n) => h('span', 'zs-total', n)), ...ptBreakdown(card));
     if (this.zoomFor === card.id) {
       this.zoom.classList.add('show');
       return;

@@ -1,7 +1,8 @@
 import './style.css';
 import * as THREE from 'three';
 import { Bridge } from './net';
-import type { RequestMsg, ServerMsg, UpdateMsg } from './protocol';
+import type { CardState, RequestMsg, ServerMsg, UpdateMsg } from './protocol';
+import { stackKey } from './scene/layout';
 import { Stage } from './scene/stage';
 import { Table } from './game/table';
 import { Input } from './game/input';
@@ -343,7 +344,7 @@ const input = new Input(stage, table, {
     table.hoveredHand = inHand ? id : null;
     table.relayout(0.16);
     const card = id != null ? table.cards.get(id)?.state ?? null : null;
-    hud.showZoom(inHand ? null : card, 'left');
+    hud.showZoom(inHand ? null : card, 'left', card ? stackNotes(card) : []);
   },
 });
 
@@ -358,6 +359,28 @@ stage.onTick(() => {
   }
   hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers(), table.currentDefender());
 });
+
+/**
+ * How many cards a hovered battlefield stack holds ("5 in this stack"), and for lands how many of that land
+ * the player has in all, since tapped and untapped ones sit in separate stacks ("7 Swamps, 5 untapped").
+ */
+function stackNotes(card: CardState): string[] {
+  const s = table.state;
+  if (!s || card.zone !== 'Battlefield') return [];
+  const attached = (id: number) => Object.values(s.cards).filter((c) => c.attachedTo === id && c.zone === 'Battlefield').length;
+  const key = stackKey(card, attached(card.id));
+  if (key == null) return [];
+  const mine = (s.players.find((p) => p.id === card.controller)?.zones.Battlefield ?? []).map((id) => s.cards[id]).filter((c): c is CardState => !!c);
+  const inStack = mine.filter((c) => stackKey(c, attached(c.id)) === key).length;
+  const notes: string[] = [];
+  if (inStack > 1) notes.push(`${inStack} in this stack`);
+  if (card.land) {
+    const same = mine.filter((c) => c.name === card.name);
+    const untapped = same.filter((c) => !c.tapped).length;
+    if (same.length > inStack) notes.push(`${same.length} ${card.name}${same.length > 1 && !/s$/.test(card.name ?? '') ? 's' : ''}, ${untapped} untapped`);
+  }
+  return notes;
+}
 
 function openPile(pid: number | null, zone: 'Graveyard' | 'Exile'): void {
   const s = table.state;

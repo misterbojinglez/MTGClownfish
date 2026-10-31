@@ -1693,3 +1693,10 @@ button {
 .pile-viewer .thumb.usable {
   box-shadow: 0 0 0 2px #ffd34a, 0 0 18px rgba(255, 211, 74, 0.6);
 }
+
+/* mana a player could spend right now, on their plate's counts line */
+.mana-avail {
+  margin-left: 10px;
+  color: var(--gold);
+  font-weight: 700;
+}

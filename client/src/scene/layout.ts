@@ -219,7 +219,7 @@ function categorize(c: CardState): 'creatures' | 'lands' | 'other' {
 }
 
 /** Cards that look the same collapse into one stack, like Arena's land and token piles. */
-function stackKey(c: CardState, attachedCount: number): string | null {
+export function stackKey(c: CardState, attachedCount: number): string | null {
   if (attachedCount > 0 || c.attacking || c.blocking) return null;
   if (Object.values(c.counters ?? {}).some((n) => n > 0)) return null;
   if (!(c.land || c.token)) return null;

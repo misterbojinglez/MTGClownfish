@@ -52,6 +52,8 @@ export interface PlayerState {
   name: string;
   ai: boolean;
   life: number;
+  /** mana they could make right now: untapped sources (net of activation costs) plus floating mana */
+  manaAvailable?: number;
   /** turns this player has started (the game's turn number counts everyone's) */
   turns?: number;
   lost: boolean;
