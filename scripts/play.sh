@@ -8,7 +8,10 @@ JAR="$ROOT/bridge/target/forge-bridge-0.1.0.jar"
 [ -f "$JAR" ] || "$ROOT/scripts/build-engine.sh"
 [ -d "$ROOT/client/node_modules" ] || (cd "$ROOT/client" && npm install)
 
-"$JAVA_HOME/bin/java" -Xmx3g -Dforge.assets="$ROOT/engine/forge/forge-gui" -jar "$JAR" &
+# run from a copy: rebuilding the bridge while a game is running would otherwise pull classes out from under it
+RUN_JAR="$ROOT/bridge/target/run/forge-bridge.jar"
+mkdir -p "$(dirname "$RUN_JAR")" && cp "$JAR" "$RUN_JAR"
+"$JAVA_HOME/bin/java" -Xmx3g -Dforge.assets="$ROOT/engine/forge/forge-gui" -jar "$RUN_JAR" &
 BRIDGE=$!
 (cd "$ROOT/client" && npx vite --host 127.0.0.1) &
 VITE=$!
