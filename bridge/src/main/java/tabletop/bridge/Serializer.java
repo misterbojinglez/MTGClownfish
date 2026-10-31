@@ -176,6 +176,9 @@ public final class Serializer {
         o.addProperty("creature", s.isCreature());
         o.addProperty("land", s.isLand());
         o.addProperty("planeswalker", s.isPlaneswalker());
+        if (s.isCreature() && s.hasKeyword(forge.game.keyword.Keyword.FLYING)) {
+            o.addProperty("flying", true);
+        }
         if (s.isCreature() || s.hasPrintedPT()) {
             o.addProperty("power", s.getPower());
             o.addProperty("toughness", s.getToughness());

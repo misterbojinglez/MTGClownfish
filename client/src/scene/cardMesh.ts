@@ -105,6 +105,10 @@ export class CardObject {
   readonly root = new THREE.Group();
   /** Local wobble/lift layer so animations don't fight the layout transform on root. */
   readonly body = new THREE.Group();
+  /** Idle hover for flyers, under body so it never fights the strike and wobble tweens. */
+  private readonly lift = new THREE.Group();
+  private hoverH = 0;
+  onTable = false;
   readonly id: number;
   state: CardState;
   highlight: Highlight = 'none';
@@ -169,7 +173,8 @@ export class CardObject {
     this.badge.position.set(0, -CARD_H / 2 + 0.25, 0.02);
     this.badge.visible = false;
 
-    this.body.add(this.glow, this.edge, this.front, this.back, this.badge);
+    this.lift.add(this.glow, this.edge, this.front, this.back, this.badge);
+    this.body.add(this.lift);
     this.root.add(this.body);
     this.root.rotation.order = 'YXZ';
     this.root.userData.cardId = state.id;
@@ -246,6 +251,7 @@ export class CardObject {
    * printed card at its true colours, untouched by lighting or tone mapping.
    */
   setSpace(onTable: boolean): void {
+    this.onTable = onTable;
     for (const m of [this.front, this.back, this.edge]) m.castShadow = onTable;
     // screen-space cards draw in the overlay pass, after bloom/tone mapping, so their art keeps its true colour
     for (const m of [this.front, this.back, this.edge, this.badge]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
@@ -287,6 +293,21 @@ export class CardObject {
     const pulse = 0.78 + 0.22 * Math.sin(this.time * 4.2);
     this.glowMat.color.copy(color).multiplyScalar(this.glowStrength * pulse);
     this.glow.visible = this.glowStrength > 0.01;
+
+    // flyers float above the battlefield with a slow bob and sway (lower while tapped)
+    const s = this.state;
+    const flying = !!s.flying && s.zone === 'Battlefield' && s.visible && this.onTable;
+    const want = flying ? (s.tapped ? 1.0 : 2.2) : 0;
+    this.hoverH += (want - this.hoverH) * Math.min(1, dt * 3);
+    if (this.hoverH > 0.002) {
+      const k = this.hoverH;
+      this.lift.position.z = k + Math.sin(this.time * 1.7) * 0.11 * k;
+      this.lift.rotation.x = Math.sin(this.time * 1.1 + 0.6) * 0.045 * k;
+      this.lift.rotation.y = Math.cos(this.time * 0.9) * 0.05 * k;
+    } else if (this.lift.position.z !== 0) {
+      this.lift.position.set(0, 0, 0);
+      this.lift.rotation.set(0, 0, 0);
+    }
   }
 
   get meshes(): THREE.Object3D[] {

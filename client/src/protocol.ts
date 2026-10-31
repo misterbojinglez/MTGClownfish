@@ -27,6 +27,8 @@ export interface CardState {
   creature?: boolean;
   land?: boolean;
   planeswalker?: boolean;
+  /** a creature with flying (hovers above the table) */
+  flying?: boolean;
   power?: number;
   toughness?: number;
   loyalty?: string;

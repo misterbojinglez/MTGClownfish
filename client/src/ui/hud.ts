@@ -788,6 +788,60 @@ export class Hud {
     refresh();
   }
 
+  /**
+   * Browse a pile (graveyard, exile): every card, newest first. Cards you could use right now glow and
+   * can be clicked. Closes on the button, a click outside, or Escape.
+   */
+  showPile(title: string, cards: CardState[], usable: Set<number>, onUse: (id: number) => void): void {
+    document.querySelector('.pile-viewer')?.remove();
+    const modal = h('div', 'modal pile-viewer');
+    const panel = h('div', 'modal-panel');
+    panel.append(h('div', 'modal-title', `${title} · ${cards.length}`));
+    const close = () => {
+      modal.remove();
+      this.showZoom(null);
+      window.removeEventListener('keydown', onKey, true);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    if (cards.length === 0) {
+      panel.append(h('div', 'modal-sub', 'Empty'));
+    } else {
+      const list = h('div', 'choice-cards pile');
+      if (cards.length > 8) list.classList.add('many');
+      for (const c of [...cards].reverse()) {
+        const t = this.cardThumb(c);
+        if (usable.has(c.id)) {
+          t.classList.add('usable');
+          t.title = 'Use this card';
+          t.onclick = () => {
+            close();
+            onUse(c.id);
+          };
+        } else {
+          t.classList.add('inert');
+        }
+        list.append(t);
+      }
+      panel.append(list);
+    }
+    const row = h('div', 'modal-buttons');
+    const done = h('button', 'main-btn wide', 'Close');
+    done.onclick = close;
+    row.append(done);
+    panel.append(row);
+    modal.append(panel);
+    modal.onclick = (e) => {
+      if (e.target === modal) close();
+    };
+    this.root.append(modal);
+  }
+
   private cardThumb(card: CardState): HTMLElement {
     const el = h('button', 'thumb');
     const img = h('img');

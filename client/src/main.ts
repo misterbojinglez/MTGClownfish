@@ -217,6 +217,13 @@ hud.bind({
 
 const input = new Input(stage, table, {
   clickCard: (id, button) => {
+    // a graveyard or exile card you can't use right now opens that whole pile
+    const pileCard = table.state?.cards[id];
+    const usableNow = table.selection.cards.includes(id) || table.selection.actionable.includes(id);
+    if (button === 1 && pileCard && (pileCard.zone === 'Graveyard' || pileCard.zone === 'Exile') && !usableNow) {
+      openPile(pileCard.owner ?? pileCard.controller, pileCard.zone);
+      return;
+    }
     const stackItem = table.stackItemFor(id);
     const targetsStack = stackItem != null && table.selection.targets.some((t) => t?.stack === stackItem);
     if (targetsStack) {
@@ -274,6 +281,16 @@ stage.onTick(() => {
   }
   hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers(), table.currentDefender());
 });
+
+function openPile(pid: number | null, zone: 'Graveyard' | 'Exile'): void {
+  const s = table.state;
+  const p = s?.players.find((x) => x.id === pid);
+  if (!s || !p) return;
+  const cards = p.zones[zone].map((id) => s.cards[id]).filter((c): c is NonNullable<typeof c> => !!c);
+  const usable = new Set([...table.selection.cards, ...table.selection.actionable].filter((id) => p.zones[zone].includes(id)));
+  const whose = p.id === table.localId ? 'Your' : `${p.name}'s`;
+  hud.showPile(`${whose} ${zone === 'Graveyard' ? 'graveyard' : 'exile'}`, cards, usable, (id) => bridge.act({ action: 'card', id }));
+}
 
 // ---- camera views (multiplayer) ----
 function refreshViewBar(): void {
