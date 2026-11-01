@@ -37,6 +37,29 @@ let draining = false;
 const CATCHUP_AT = 24;
 /** the newest updates still played out when catching up */
 const KEEP_ANIMATED = 6;
+/** seconds the outcome of combat damage holds on screen */
+const COMBAT_RESULT_HOLD = 1.0;
+
+/** events the player should see happen: updates carrying them are never folded into a catch-up */
+const SHOWN_EVENTS = new Set(['PlayerDamaged', 'CardDamaged', 'PlayerLivesChanged', 'SpellAbilityCast', 'TurnBegan']);
+
+/** Whether an update shows something happening, rather than routine bookkeeping. */
+function worthSeeing(m: UpdateMsg): boolean {
+  for (const e of m.events) {
+    if (SHOWN_EVENTS.has(e.event)) return true;
+    if (e.event === 'CardChangeZone') {
+      const from = (e.from as { zone?: string } | null)?.zone;
+      const to = (e.to as { zone?: string } | null)?.zone;
+      if (from === 'Battlefield' || to === 'Battlefield' || to === 'Stack') return true;
+    }
+  }
+  // attackers or blockers being declared show up as cards newly attacking or blocking
+  for (const c of Object.values(m.state.cards)) {
+    const was = table.state?.cards[c.id];
+    if ((c.attacking && !was?.attacking) || (c.blocking && !was?.blocking)) return true;
+  }
+  return false;
+}
 
 /**
  * Several updates as one: card changes merged in order (each update carries only what changed), everything
@@ -60,14 +83,22 @@ async function drain(): Promise<void> {
     let msg = queue.shift()!;
     // far behind (a big board's turns produce updates faster than they can be shown): jump ahead to the
     // newest few, applying everything in between at once, instead of falling further behind all game
-    if (msg.type === 'update') {
+    // Only routine updates are folded (phase steps, priority passes, bookkeeping); anything worth seeing
+    // (combat, damage, life, casts, creatures arriving or dying) always plays out.
+    if (msg.type === 'update' && !worthSeeing(msg)) {
       let run = 0;
       while (run < queue.length && queue[run].type === 'update') run++;
-      if (run >= CATCHUP_AT) msg = mergeUpdates([msg, ...(queue.splice(0, run - KEEP_ANIMATED) as UpdateMsg[])]);
+      if (run >= CATCHUP_AT) {
+        let quiet = 0;
+        while (quiet < run - KEEP_ANIMATED && !worthSeeing(queue[quiet] as UpdateMsg)) quiet++;
+        if (quiet > 0) msg = mergeUpdates([msg, ...(queue.splice(0, quiet) as UpdateMsg[])]);
+      }
     }
     const backlog = queue.filter((m) => m.type === 'update').length;
-    // play at normal speed unless well behind, and never rush past what is happening
-    table.timeScale = Math.min(2.5, 1 + Math.max(0, backlog - 8) / 20);
+    // play at normal speed unless well behind, never rush past what is happening, and combat damage always
+    // at full length: it's what the player most needs to take in
+    const combatHit = msg.type === 'update' && msg.events.some((e) => (e.event === 'PlayerDamaged' && e.combat) || e.event === 'CardDamaged');
+    table.timeScale = combatHit ? 1 : Math.min(1.75, 1 + Math.max(0, backlog - 8) / 30);
     const phaseBefore = table.state ? `${table.state.turn}|${table.state.phase}` : '';
     const started = performance.now();
     try {
@@ -77,6 +108,8 @@ async function drain(): Promise<void> {
     }
     // every step of the turn gets a beat on screen, even when nothing happens in it (end of combat, end
     // step, the next player's untap and upkeep), so the turn visibly passes instead of jumping
+    // the result of combat damage stays up for a moment (life totals, deaths) before the game moves on
+    if (combatHit) await new Promise((r) => setTimeout(r, COMBAT_RESULT_HOLD * 1000));
     if (msg.type === 'update' && table.state && `${table.state.turn}|${table.state.phase}` !== phaseBefore) {
       const dwell = PHASE_DWELL / table.timeScale - (performance.now() - started) / 1000;
       if (dwell > 0.01) await new Promise((r) => setTimeout(r, dwell * 1000));
