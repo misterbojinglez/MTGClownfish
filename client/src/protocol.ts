@@ -68,6 +68,10 @@ export interface PlayerState {
     Command: number[];
     Hand: number[];
     LibraryCount: number;
+    /** the top card of the library, when this player may see it (Bolas's Citadel, Future Sight) */
+    LibraryTop?: number;
+    /** that top card can be played right now */
+    LibraryTopPlayable?: boolean;
   };
   commanderDamage?: Record<string, number>;
   commanders?: number[];

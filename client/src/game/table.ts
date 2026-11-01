@@ -312,6 +312,7 @@ export class Table {
     const ids = new Set<number>();
     for (const p of state.players) {
       for (const z of ['Battlefield', 'Graveyard', 'Exile', 'Command', 'Hand'] as const) p.zones[z].forEach((id) => ids.add(id));
+      if (p.zones.LibraryTop != null) ids.add(p.zones.LibraryTop);
     }
     for (const s of state.stack) if (s.source != null && !s.ability) ids.add(s.source);
     return ids;
@@ -948,6 +949,8 @@ export class Table {
     }
     const autoPay = new Set(sel.actionable.filter((id, i) => sel.actionable.indexOf(id) !== i));
     const actionable = new Set(sel.actionable);
+    // a playable top of library (Forge's own scan doesn't look there)
+    for (const p of s.players) if (p.zones.LibraryTopPlayable && p.zones.LibraryTop != null) actionable.add(p.zones.LibraryTop);
     const top = s.stack[0];
     const targeted = new Set((top?.targets ?? []).map((r) => r?.card).filter((x): x is number => x != null));
     for (const [id, obj] of this.cards) {

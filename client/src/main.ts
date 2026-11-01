@@ -391,7 +391,7 @@ const input = new Input(stage, table, {
     // tapping a land for mana (picking colours up front) doesn't
     const c = table.cards.get(id)?.state;
     const paying = table.prompt.input?.startsWith('InputPayMana');
-    if (c && !paying && button === 1 && !c.land && (table.isLocalHand(id) || c.zone === 'Battlefield' || c.zone === 'Command')) {
+    if (c && !paying && button === 1 && !c.land && (table.isLocalHand(id) || c.zone === 'Battlefield' || c.zone === 'Command' || c.zone === 'Library')) {
       armAutoPay();
     }
     bridge.act({ action: 'card', id, button });

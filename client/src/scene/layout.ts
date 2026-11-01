@@ -329,6 +329,13 @@ export function computeLayout(
       });
     };
     const pileScale = seat.local ? 0.7 : 0.55;
+    // a top of library its owner may look at sits face up on the library pile (same height as the pile mesh)
+    if (p.zones.LibraryTop != null) {
+      const height = Math.max(0.001, Math.min(1.4, p.zones.LibraryCount * 0.019));
+      const rot = flat.clone();
+      rot.y = seat.rotY;
+      out.set(p.zones.LibraryTop, { space: 'table', pos: seatToWorld(seat, seat.piles.library.clone().setY(height + 0.02)), rot, scale: pileScale, faceUp: true, order: 0 });
+    }
     pile(p.zones.Graveyard, seat.piles.graveyard, pileScale, true);
     pile(p.zones.Exile, seat.piles.exile, pileScale, true);
     if (seat.local) {

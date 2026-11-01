@@ -105,6 +105,22 @@ public final class Serializer {
         }
         zones.add(ZoneType.Hand.name(), zone(p.getHand(), mayView, cards));
         zones.addProperty("LibraryCount", p.getZoneSize(ZoneType.Library));
+        // the top card, when this player may see it (Bolas's Citadel, Future Sight, a card played with the top
+        // revealed): sent like any visible card, and whether its owner could play it right now
+        final CardView top = p.getLibrary().isEmpty() ? null : p.getLibrary().get(0);
+        if (top != null && mayView.test(top)) {
+            zones.addProperty("LibraryTop", top.getId());
+            putCard(cards, top, mayView);
+            try {
+                final forge.game.player.Player owner = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
+                final forge.game.card.Card real = gv.getGame() == null ? null : gv.getGame().findById(top.getId());
+                if (owner != null && real != null && !owner.isAI() && playableNow(real, owner)) {
+                    zones.addProperty("LibraryTopPlayable", true);
+                }
+            } catch (final RuntimeException ignored) {
+                // mid-update; the next snapshot says
+            }
+        }
         o.add("zones", zones);
 
         if (gv.isCommander() && p.getCommanders() != null) {
@@ -389,6 +405,24 @@ public final class Serializer {
         sel.actionable().forEach(c -> actionable.add(c.getId()));
         o.add("actionable", actionable);
         return o;
+    }
+
+    /**
+     * Whether a player could play this card right now: a land drop or a spell/ability they can afford and
+     * target (Forge's own available-actions test, which only looks at hand and battlefield).
+     */
+    public static boolean playableNow(final forge.game.card.Card card, final forge.game.player.Player player) {
+        for (final forge.game.spellability.SpellAbility sa : card.getAllPossibleAbilities(player, true)) {
+            if (sa.isManaAbility()) {
+                continue;
+            }
+            final boolean affordable = sa.getPayCosts() == null || !sa.getPayCosts().hasManaCost()
+                    || forge.ai.ComputerUtilMana.canPayManaCost(sa, player, 0, false);
+            if (affordable && forge.ai.ComputerUtilAbility.isFullyTargetable(sa)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Whether every mana ability of this card has a sacrifice in its cost (Lotus Petal, Treasure, Phyrexian Altar). */

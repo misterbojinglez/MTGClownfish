@@ -41,7 +41,7 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
          */
         @Override
         public List<SpellAbility> chooseSpellAbilityToPlay() {
-            final boolean hold = sacrificeOutletReady();
+            final boolean hold = sacrificeOutletReady() || libraryTopPlayable();
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {
                 yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
@@ -52,6 +52,24 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 if (hold) {
                     yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");
                 }
+            }
+        }
+
+        /**
+         * The top of your library is a card you may play right now (Bolas's Citadel, Future Sight): Forge's
+         * pass-when-nothing-to-do never looks in the library, so it would pass right by it.
+         */
+        private boolean libraryTopPlayable() {
+            try {
+                final Player me = getPlayer();
+                final forge.game.zone.PlayerZone lib = me.getZone(forge.game.zone.ZoneType.Library);
+                if (lib == null || lib.isEmpty()) {
+                    return false;
+                }
+                final forge.game.card.Card top = lib.get(0);
+                return top.getView().canBeShownTo(me.getView()) && Serializer.playableNow(top, me);
+            } catch (final RuntimeException ignored) {
+                return false;
             }
         }
 
