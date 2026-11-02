@@ -207,6 +207,12 @@ public final class Serializer {
                 kws.add(k.toString());
             }
         }
+        // prepared (Strixhaven): a copy of the card's spell waits in exile to be cast; clicking the card casts it
+        final CardView preparedSpell = c.getZone() == ZoneType.Battlefield ? c.getPreparedSpell() : null;
+        if (preparedSpell != null) {
+            kws.add("Prepared");
+            o.addProperty("preparedSpell", preparedSpell.getCurrentState() == null ? null : preparedSpell.getCurrentState().getName());
+        }
         if (!kws.isEmpty()) {
             o.add("keywords", kws);
         }

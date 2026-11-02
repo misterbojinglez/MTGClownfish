@@ -514,6 +514,7 @@ stage.onTick(() => {
 function stackNotes(card: CardState): string[] {
   const s = table.state;
   if (!s || card.zone !== 'Battlefield') return [];
+  if (card.preparedSpell) return [`Prepared: ${card.preparedSpell} (click to cast)`];
   const attached = (id: number) => Object.values(s.cards).filter((c) => c.attachedTo === id && c.zone === 'Battlefield').length;
   const key = stackKey(card, attached(card.id));
   if (key == null) return [];

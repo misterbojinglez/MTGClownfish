@@ -173,7 +173,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         if ("InputPassPriority".equals(currentInputName()) && getGameController() instanceof forge.player.PlayerControllerHuman pch) {
             try {
                 final JsonArray actionable = selection.getAsJsonArray("actionable");
-                for (final Integer id : BridgeHumanPlayer.readyX) {
+                for (final Integer id : BridgeHumanPlayer.readyCards()) {
                     if (!actionable.contains(new com.google.gson.JsonPrimitive(id))) {
                         actionable.add(id);
                     }
@@ -444,6 +444,11 @@ public class SocketGuiGame extends AbstractGuiGame {
     /** Tell the client something it should show the player (a toast). */
     void tell(final String text) {
         notice("message", text);
+    }
+
+    /** The Forge input class showing now (InputPassPriority, InputAttack…), or null. */
+    String currentInputSimpleName() {
+        return currentInputName();
     }
 
     private String currentInputName() {

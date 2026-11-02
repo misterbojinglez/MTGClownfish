@@ -22,6 +22,7 @@ import forge.interfaces.IGameController;
 import forge.localinstance.properties.ForgePreferences;
 import forge.model.FModel;
 import forge.player.GamePlayerUtil;
+import forge.game.zone.ZoneType;
 import forge.trackable.TrackableTypes;
 import forge.util.ITriggerEvent;
 
@@ -344,7 +345,17 @@ public final class BridgeMain {
             }
             case "cancel" -> controller.selectButtonCancel();
             case "card" -> {
-                final CardView card = tracker.getObj(TrackableTypes.CardViewType, id);
+                CardView card = tracker.getObj(TrackableTypes.CardViewType, id);
+                // a prepared permanent: with priority, a click casts its waiting spell copy (which sits in exile,
+                // out of sight); in combat or a selection the click stays with the creature. Asked of the game
+                // itself: the tracked view can still describe the card as it was on the stack.
+                if (id != null && click.getButton() == 1 && "InputPassPriority".equals(gui.currentInputSimpleName())) {
+                    final forge.game.Game game = gui.getGameView().getGame();
+                    final forge.game.card.Card real = game == null ? null : game.findById(id);
+                    if (real != null && real.isInZone(ZoneType.Battlefield) && real.isPrepared() && real.getPreparedSpell() != null) {
+                        card = real.getPreparedSpell().getView();
+                    }
+                }
                 if (card != null) { controller.selectCard(card, null, click); }
             }
             case "player" -> {

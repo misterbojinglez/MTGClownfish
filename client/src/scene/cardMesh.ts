@@ -428,6 +428,8 @@ const KEYWORD_ICONS: Record<string, KeywordIcon> = {
   Hexproof: { glyph: '◈', bg: '#2f6fb0', fg: '#fff' },
   Indestructible: { glyph: '◆', bg: '#9aa0aa', fg: '#1a1d22' },
   Defender: { glyph: '▣', bg: '#6c6255', fg: '#fff' },
+  // prepared (Strixhaven): its spell is ready to cast — click the card
+  Prepared: { glyph: '✦', bg: '#7a3fd0', fg: '#f3e6ff' },
 };
 
 /** Small badges for keywords, and a red no-entry mark on a creature that can't block. */

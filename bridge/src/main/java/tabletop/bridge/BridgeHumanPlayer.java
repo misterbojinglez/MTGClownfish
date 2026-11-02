@@ -27,6 +27,15 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
     static volatile java.util.Set<Integer> readyX = java.util.Set.of();
     /** the top card of your library, when you could play it right now (Bolas's Citadel), else -1 */
     static volatile int playableTop = -1;
+    /** your prepared permanents whose waiting spell copy you could cast right now (Emeritus of Woe) */
+    static volatile java.util.Set<Integer> preparedReady = java.util.Set.of();
+
+    /** battlefield cards Forge's scan misses that you could use now: X-targeted abilities, prepared spells */
+    static java.util.Set<Integer> readyCards() {
+        final java.util.Set<Integer> all = new java.util.HashSet<>(readyX);
+        all.addAll(preparedReady);
+        return all;
+    }
 
     BridgeHumanPlayer(final String name) {
         super(name);
@@ -55,7 +64,8 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             // game thread: safe to evaluate abilities here; updates sent while you hold priority read these
             readyX = java.util.Set.copyOf(readyXNow());
             playableTop = libraryTopPlayable();
-            final boolean hold = sacrificeOutletReady() || playableTop >= 0 || (!readyX.isEmpty() && getGame().getStack().isEmpty());
+            preparedReady = java.util.Set.copyOf(preparedNow());
+            final boolean hold = sacrificeOutletReady() || playableTop >= 0 || !preparedReady.isEmpty() || (!readyX.isEmpty() && getGame().getStack().isEmpty());
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {
                 yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
@@ -67,6 +77,22 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                     yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");
                 }
             }
+        }
+
+        /** Prepared permanents whose spell copy (in exile, cast by permission) you could cast right now. */
+        private java.util.List<Integer> preparedNow() {
+            final java.util.List<Integer> ids = new java.util.ArrayList<>();
+            try {
+                for (final forge.game.card.Card c : getPlayer().getCardsIn(forge.game.zone.ZoneType.Battlefield)) {
+                    final forge.game.card.Card spell = c.isPrepared() ? c.getPreparedSpell() : null;
+                    if (spell != null && Serializer.playableNow(spell, getPlayer())) {
+                        ids.add(c.getId());
+                    }
+                }
+            } catch (final RuntimeException ignored) {
+                // can't tell; Forge's own scan stands
+            }
+            return ids;
         }
 
         /** Abilities whose target depends on X (Chthonian Nightmare) with a legal target for some X you could pay. */
