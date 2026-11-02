@@ -17,6 +17,17 @@ import java.util.List;
  */
 final class BridgeHumanPlayer extends LobbyPlayerHuman {
 
+    /*
+     * Asking Forge what can be played (getAllPossibleAbilities) re-runs static abilities and freezes the game's
+     * change tracker, so it must only happen on the game thread: done off it (while sending updates), it
+     * collided with the AI's own evaluation and killed the game thread (the game hung "Waiting for…").
+     * These are worked out each time you get priority, on the game thread, and read when updates are sent.
+     */
+    /** your battlefield cards with an X-targeted ability ready to use (Chthonian Nightmare) */
+    static volatile java.util.Set<Integer> readyX = java.util.Set.of();
+    /** the top card of your library, when you could play it right now (Bolas's Citadel), else -1 */
+    static volatile int playableTop = -1;
+
     BridgeHumanPlayer(final String name) {
         super(name);
     }
@@ -41,7 +52,10 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
          */
         @Override
         public List<SpellAbility> chooseSpellAbilityToPlay() {
-            final boolean hold = sacrificeOutletReady() || libraryTopPlayable() || xAbilityReady();
+            // game thread: safe to evaluate abilities here; updates sent while you hold priority read these
+            readyX = java.util.Set.copyOf(readyXNow());
+            playableTop = libraryTopPlayable();
+            final boolean hold = sacrificeOutletReady() || playableTop >= 0 || (!readyX.isEmpty() && getGame().getStack().isEmpty());
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {
                 yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
@@ -55,12 +69,12 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             }
         }
 
-        /** An ability whose target depends on X (Chthonian Nightmare) that has a legal target for some X you could pay. */
-        private boolean xAbilityReady() {
+        /** Abilities whose target depends on X (Chthonian Nightmare) with a legal target for some X you could pay. */
+        private java.util.List<Integer> readyXNow() {
             try {
-                return !getGame().getStack().isEmpty() ? false : !Serializer.readyXAbilities(getPlayer()).isEmpty();
+                return Serializer.readyXAbilities(getPlayer());
             } catch (final RuntimeException ignored) {
-                return false;
+                return java.util.List.of();
             }
         }
 
@@ -68,17 +82,17 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
          * The top of your library is a card you may play right now (Bolas's Citadel, Future Sight): Forge's
          * pass-when-nothing-to-do never looks in the library, so it would pass right by it.
          */
-        private boolean libraryTopPlayable() {
+        private int libraryTopPlayable() {
             try {
                 final Player me = getPlayer();
                 final forge.game.zone.PlayerZone lib = me.getZone(forge.game.zone.ZoneType.Library);
                 if (lib == null || lib.isEmpty()) {
-                    return false;
+                    return -1;
                 }
                 final forge.game.card.Card top = lib.get(0);
-                return top.getView().canBeShownTo(me.getView()) && Serializer.playableNow(top, me);
+                return top.getView().canBeShownTo(me.getView()) && Serializer.playableNow(top, me) ? top.getId() : -1;
             } catch (final RuntimeException ignored) {
-                return false;
+                return -1;
             }
         }
 

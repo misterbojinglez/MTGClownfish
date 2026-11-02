@@ -161,7 +161,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         if ("InputPassPriority".equals(currentInputName()) && getGameController() instanceof forge.player.PlayerControllerHuman pch) {
             try {
                 final JsonArray actionable = selection.getAsJsonArray("actionable");
-                for (final Integer id : Serializer.readyXAbilities(pch.getPlayer())) {
+                for (final Integer id : BridgeHumanPlayer.readyX) {
                     if (!actionable.contains(new com.google.gson.JsonPrimitive(id))) {
                         actionable.add(id);
                     }

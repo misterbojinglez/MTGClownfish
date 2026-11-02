@@ -80,7 +80,7 @@ public final class Serializer {
             if (real != null) {
                 o.addProperty("turns", real.getTurn());
                 // what they could spend right now: untapped sources (net of activation costs) plus floating mana
-                o.addProperty("manaAvailable", forge.ai.ComputerUtilMana.getAvailableManaEstimate(real, true));
+                o.addProperty("manaAvailable", manaAvailable(real));
             }
         } catch (RuntimeException ignored) {
             // view mid-update; the next snapshot carries it
@@ -112,9 +112,8 @@ public final class Serializer {
             zones.addProperty("LibraryTop", top.getId());
             putCard(cards, top, mayView);
             try {
-                final forge.game.player.Player owner = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
-                final forge.game.card.Card real = gv.getGame() == null ? null : gv.getGame().findById(top.getId());
-                if (owner != null && real != null && !owner.isAI() && playableNow(real, owner)) {
+                // worked out on the game thread when you got priority (see BridgeHumanPlayer)
+                if (!p.isAI() && BridgeHumanPlayer.playableTop == top.getId()) {
                     zones.addProperty("LibraryTopPlayable", true);
                 }
             } catch (final RuntimeException ignored) {
@@ -405,6 +404,60 @@ public final class Serializer {
         sel.actionable().forEach(c -> actionable.add(c.getId()));
         o.add("actionable", actionable);
         return o;
+    }
+
+    /**
+     * Mana a player could make right now, read without evaluating anything (this runs off the game thread):
+     * each untapped source's best mana ability that costs only {T} or nothing (skipping summoning-sick
+     * creatures that need to tap), plus floating mana. Sacrifice outlets and abilities that cost mana aren't counted.
+     */
+    static int manaAvailable(final forge.game.player.Player player) {
+        int total = player.getManaPool().totalMana();
+        for (final forge.game.card.Card c : player.getCardsIn(ZoneType.Battlefield).threadSafeIterable()) {
+            int best = 0;
+            for (final forge.game.spellability.SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.cost.Cost cost = ma.getPayCosts();
+                boolean ok = true;
+                boolean taps = false;
+                if (cost != null) {
+                    for (final forge.game.cost.CostPart part : cost.getCostParts()) {
+                        if (part instanceof forge.game.cost.CostTap) {
+                            taps = true;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                }
+                if (!ok || (taps && (c.isTapped() || (c.isCreature() && c.isSick())))) {
+                    continue;
+                }
+                try {
+                    int made = 0;
+                    for (forge.game.spellability.SpellAbility part = ma; part != null; part = part.getSubAbility()) {
+                        if (part.getManaPart() == null) {
+                            continue;
+                        }
+                        // "Produced$ W W" makes two; "Amount$ 2" multiplies (Sol Ring)
+                        final String produced = part.getParamOrDefault("Produced", "1").trim();
+                        final int symbols = produced.startsWith("Combo") || produced.startsWith("Any") ? 1 : Math.max(1, produced.split("\\s+").length);
+                        made += symbols * Math.max(1, parseAmount(part.getParamOrDefault("Amount", "1")));
+                    }
+                    best = Math.max(best, made);
+                } catch (final RuntimeException ignored) {
+                    best = Math.max(best, 1);
+                }
+            }
+            total += best;
+        }
+        return total;
+    }
+
+    private static int parseAmount(final String amount) {
+        try {
+            return Integer.parseInt(amount.trim());
+        } catch (final NumberFormatException e) {
+            return 1; // "X" and the like: at least one
+        }
     }
 
     /**
