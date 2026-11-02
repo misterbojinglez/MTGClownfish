@@ -1712,3 +1712,11 @@ button {
   color: var(--gold);
   font-weight: 700;
 }
+
+/* an attacker being dragged onto this player (wins over the targetable pulse) */
+.plate.aim,
+.plate.targetable.aim {
+  animation: none;
+  box-shadow: 0 0 0 3px #ff4a3a, 0 0 28px rgba(255, 74, 58, 0.75);
+  transform: translate(-50%, -50%) scale(1.06);
+}

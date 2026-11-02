@@ -420,6 +420,66 @@ const input = new Input(stage, table, {
   clickTable: (pid) => {
     if (table.targetablePlayers().has(pid)) pickPlayer(pid);
   },
+  // ---- dragging attackers onto players/planeswalkers and blockers onto attackers (Arena style) ----
+  aimKind: (id) => {
+    const c = table.state?.cards[id];
+    if (!c || c.zone !== 'Battlefield' || !c.creature || c.controller !== table.localId) return null;
+    if (table.isDeclaringAttack() && (!c.tapped || c.attacking)) return 'attack';
+    if (table.isDeclaringBlock() && !c.tapped && !c.attacking) return 'block';
+    return null;
+  },
+  aimTarget: (kind, _from, cardId, plate, point) => {
+    const s = table.state;
+    if (!s) return null;
+    const opponent = (pid: number | null | undefined) => pid != null && pid !== table.localId && !s.players.find((p) => p.id === pid)?.lost;
+    if (kind === 'block') {
+      // blockers go onto attacking creatures
+      const c = cardId != null ? s.cards[cardId] : undefined;
+      return c?.attacking ? { card: cardId! } : null;
+    }
+    if (plate != null) return opponent(plate) ? { player: plate } : null;
+    if (cardId != null) {
+      const c = s.cards[cardId];
+      if (c && c.zone === 'Battlefield' && opponent(c.controller)) {
+        // a planeswalker or battle is attacked itself; any other card of theirs means them
+        return /Planeswalker|Battle/.test(c.typeLine ?? '') ? { card: cardId } : { player: c.controller! };
+      }
+    }
+    const side = point ? table.playerAt(point) : null;
+    return opponent(side) ? { player: side! } : null;
+  },
+  aimMove: (kind, from, target, point) => {
+    if (!point && !target) {
+      table.showAim(null, null, kind, null);
+      hud.aimPlate(null);
+      return;
+    }
+    const to = target && 'player' in target ? table.playerWorld(target.player) : target && 'card' in target ? table.cardWorld(target.card) : point;
+    table.showAim(from, to, kind, target && 'card' in target ? target.card : null);
+    hud.aimPlate(target && 'player' in target ? target.player : null);
+  },
+  aimDrop: (kind, from, target) => {
+    const s = table.state;
+    if (!s) return;
+    if (kind === 'attack') {
+      const engaged = s.combat?.find((a) => a.attacker === from);
+      const same = engaged && ('player' in target ? engaged.defender?.player === target.player : engaged.defender?.card === target.card);
+      if (same) return;
+      // Forge attacks the "current defender": take the creature out if it's attacking elsewhere, pick the
+      // defender, then send it in
+      if (s.cards[from]?.attacking) bridge.act({ action: 'card', id: from });
+      bridge.act('player' in target ? { action: 'player', id: target.player } : { action: 'card', id: target.card });
+      bridge.act({ action: 'card', id: from });
+      attackGroup = [];
+    } else if ('card' in target) {
+      // Forge blocks the "current attacker": pick the attacker, then the blocker (unless it already blocks it)
+      const already = s.combat?.find((a) => a.attacker === target.card)?.blockers.includes(from);
+      if (already) return;
+      bridge.act({ action: 'card', id: target.card });
+      bridge.act({ action: 'card', id: from });
+    }
+    sfx.click();
+  },
   hover: (id) => {
     const inHand = id != null && table.isLocalHand(id);
     if (inHand && id !== table.hoveredHand) sfx.hover();

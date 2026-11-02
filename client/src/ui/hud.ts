@@ -290,7 +290,9 @@ export class Hud {
       msg += sel.max > 1 ? `\n(${picked}/${sel.max} selected)` : '';
     }
     if (sel.targets.some((t) => t?.player !== undefined)) msg += '\n(Click a player\'s portrait or their side of the table)';
-    else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Click your creatures and an opponent\'s portrait or side of the table, in either order)';
+    else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Drag a creature onto an opponent or their planeswalker, or click your creatures and then who to attack)';
+    else if (prompt.input === 'InputAttack') msg += '\n(Click your creatures, or drag one onto a planeswalker to attack it)';
+    else if (prompt.input === 'InputBlock') msg += '\n(Drag a creature onto an attacker to block it)';
     this.promptText.textContent = msg;
     const ok = prompt.ok;
     const cancel = prompt.cancel;
@@ -541,6 +543,7 @@ export class Hud {
 
   private buildPlate(p: PlayerState): HTMLDivElement {
     const plate = h('div', 'plate');
+    plate.dataset.pid = String(p.id);
     const portrait = h('div', 'portrait');
     portrait.textContent = p.name.slice(0, 1).toUpperCase();
     portrait.style.setProperty('--hue', String((p.id * 97) % 360));
@@ -549,6 +552,11 @@ export class Hud {
     plate.append(portrait, h('div', 'life'), info);
     plate.onclick = () => this.handlers.player(p.id);
     return plate;
+  }
+
+  /** Light up the plate an attacker is being dragged onto (null clears it). */
+  aimPlate(playerId: number | null): void {
+    for (const [pid, plate] of this.plates) plate.classList.toggle('aim', pid === playerId);
   }
 
   plateRect(playerId: number): DOMRect | null {

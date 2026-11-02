@@ -71,6 +71,9 @@ export class Table {
   private readonly fx: Fx;
   private readonly magic: Magic;
   private readonly arrows: Arrows;
+  /** the arrow drawn while dragging an attacker or blocker toward its target */
+  private readonly aimArrows: Arrows;
+  private aimCard: number | null = null;
   private readonly libraries = new Map<number, THREE.Mesh>();
   private readonly flying = new Set<number>();
   /** cards in flight, resolving when each lands (effects on a card wait for it to arrive) */
@@ -85,6 +88,7 @@ export class Table {
     this.fx = new Fx(stage);
     this.magic = new Magic(stage);
     this.arrows = new Arrows(stage);
+    this.aimArrows = new Arrows(stage);
     stage.onTick((dt) => {
       for (const c of this.cards.values()) c.tick(dt);
     });
@@ -1090,6 +1094,22 @@ export class Table {
 
   isDeclaringAttack(): boolean {
     return this.prompt.input === 'InputAttack';
+  }
+
+  isDeclaringBlock(): boolean {
+    return this.prompt.input === 'InputBlock';
+  }
+
+  /** Draw the drag arrow from a creature to a point (snapped to the target when there is one), or clear it. */
+  showAim(from: number | null, to: THREE.Vector3 | null, kind: 'attack' | 'block', targetCard: number | null): void {
+    const start = from != null ? this.cardWorld(from) : null;
+    this.aimArrows.set(start && to ? [{ from: start, to, color: kind === 'attack' ? '#ff4a3a' : '#7fc4ff' }] : []);
+    if (targetCard !== this.aimCard) {
+      const was = this.aimCard;
+      this.aimCard = targetCard;
+      if (was != null) this.refreshHighlights();
+      if (targetCard != null) this.cards.get(targetCard)?.setHighlight('target');
+    }
   }
 
   /** The player your attackers are currently aimed at (Forge's current defender), while declaring. */

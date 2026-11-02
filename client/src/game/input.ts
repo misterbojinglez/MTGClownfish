@@ -2,8 +2,19 @@ import * as THREE from 'three';
 import type { Stage } from '../scene/stage';
 import type { Table } from './table';
 
+/** What an attacker or blocker is being dragged onto. */
+export type AimTarget = { player: number } | { card: number };
+
 export interface InputHandlers {
   clickCard(id: number, button: number): void;
+  /** whether a press on this card starts an attack/block drag (your creature, while declaring) */
+  aimKind?(id: number): 'attack' | 'block' | null;
+  /** the legal target under the pointer for this drag, if any: a card hit, a plate, or a spot on the table */
+  aimTarget?(kind: 'attack' | 'block', from: number, card: number | null, plate: number | null, table: THREE.Vector3 | null): AimTarget | null;
+  /** the drag was released on a target */
+  aimDrop?(kind: 'attack' | 'block', from: number, target: AimTarget): void;
+  /** the drag moved: where to draw the arrow (null target: follow the pointer) */
+  aimMove?(kind: 'attack' | 'block', from: number, target: AimTarget | null, point: THREE.Vector3 | null): void;
   /** a click on empty table: the player whose side it is */
   clickTable(playerId: number): void;
   hover(id: number | null): void;
@@ -18,6 +29,8 @@ export class Input {
   private readonly ndc = new THREE.Vector2();
   private hovered: number | null = null;
   private drag: { id: number; startY: number; startX: number; moved: boolean; grab: THREE.Vector3; depth: number } | null = null;
+  /** dragging a line from an attacker to its target, or a blocker to an attacker (Arena style) */
+  private aim: { id: number; kind: 'attack' | 'block'; startX: number; startY: number; moved: boolean; target: AimTarget | null } | null = null;
 
   constructor(
     private readonly stage: Stage,
@@ -48,6 +61,14 @@ export class Input {
   }
 
   private onMove(e: PointerEvent): void {
+    if (this.aim) {
+      const a = this.aim;
+      if (Math.hypot(e.clientX - a.startX, e.clientY - a.startY) > 10) a.moved = true;
+      if (!a.moved) return;
+      a.target = this.aimTargetAt(e, a);
+      this.handlers.aimMove?.(a.kind, a.id, a.target, this.tablePoint(e.clientX, e.clientY));
+      return;
+    }
     if (this.drag) {
       const dy = this.drag.startY - e.clientY;
       if (Math.hypot(dy, e.clientX - this.drag.startX) > 24) this.drag.moved = true;
@@ -89,6 +110,12 @@ export class Input {
       }
       return;
     }
+    // your creature while declaring attackers or blockers: a drag aims it, a click works as before
+    const kind = e.button === 0 ? this.handlers.aimKind?.(id) ?? null : null;
+    if (kind) {
+      this.aim = { id, kind, startX: e.clientX, startY: e.clientY, moved: false, target: null };
+      return;
+    }
     if (e.button === 0 && this.table.isLocalHand(id)) {
       const obj = this.table.cards.get(id)!;
       const depth = -obj.root.position.z;
@@ -102,6 +129,17 @@ export class Input {
   }
 
   private onUp(e: PointerEvent): void {
+    const a = this.aim;
+    if (a) {
+      this.aim = null;
+      this.handlers.aimMove?.(a.kind, a.id, null, null);
+      if (!a.moved) this.handlers.clickCard(a.id, 1);
+      else {
+        const target = this.aimTargetAt(e, a);
+        if (target) this.handlers.aimDrop?.(a.kind, a.id, target);
+      }
+      return;
+    }
     const d = this.drag;
     if (!d) return;
     this.drag = null;
@@ -110,6 +148,14 @@ export class Input {
     const play = !d.moved || dy > window.innerHeight * 0.12;
     this.table.endDrag(d.id, play);
     if (play) this.handlers.clickCard(d.id, 1);
+  }
+
+  /** The legal target under the pointer for an aim drag: a player's plate, a card, or their side of the table. */
+  private aimTargetAt(e: PointerEvent, a: { id: number; kind: 'attack' | 'block' }): AimTarget | null {
+    const plateEl = document.elementsFromPoint(e.clientX, e.clientY).find((el) => (el as HTMLElement).dataset?.pid != null) as HTMLElement | undefined;
+    const plate = plateEl ? Number(plateEl.dataset.pid) : null;
+    const card = plate == null ? this.pick(e) : null;
+    return this.handlers.aimTarget?.(a.kind, a.id, card === a.id ? null : card, plate, this.tablePoint(e.clientX, e.clientY)) ?? null;
   }
 
   /** Where the cursor meets the table top. */
