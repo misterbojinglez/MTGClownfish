@@ -61,6 +61,11 @@ export class Bridge {
 
   /** deck: optional "4 Forest" per line list for the local player (others get precons) */
   /** names: what to call each seat (index 0 is you; opponents can be named) */
+  /** Stop the current game (leaving for the main menu). */
+  endGame(): void {
+    this.send({ type: 'endGame' });
+  }
+
   start(format: 'constructed' | 'commander', players: number, deck?: string, decks?: (SeatDeckSpec | null)[], names?: string[]): void {
     this.send({ type: 'start', format, players, ...(deck ? { deck } : {}), ...(decks ? { decks } : {}), ...(names ? { names } : {}) });
   }

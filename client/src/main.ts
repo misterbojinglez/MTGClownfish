@@ -148,6 +148,7 @@ async function handle(msg: ServerMsg): Promise<void> {
       hud.loading(`Shuffling up…\n${msg.decks.join('  vs  ')}`);
       break;
     case 'gameStarted':
+      inGame = true;
       table.reset();
       director.reset();
       hud.setStack(null, -1);
@@ -157,9 +158,11 @@ async function handle(msg: ServerMsg): Promise<void> {
       hud.closeOverlay();
       break;
     case 'update':
+      if (!inGame) break;
       await applyUpdate(msg);
       break;
     case 'request':
+      if (!inGame) break;
       await answer(msg);
       break;
     case 'notice':
@@ -287,6 +290,23 @@ function startGame(setup: GameSetup): void {
 
 const deckSetup = new DeckSetup(document.getElementById('hud')!, bridge);
 
+/** Whether a game is on: once you've left one, its last updates are ignored until the next game starts. */
+let inGame = false;
+
+/** Leave the game: stop it on the bridge, clear the table, and go back to the main menu. */
+function exitToMenu(): void {
+  inGame = false;
+  bridge.endGame();
+  queue.length = 0;
+  table.reset();
+  director.reset();
+  hud.resetPlayers();
+  hud.setStack(null, -1);
+  hud.closeOverlay();
+  document.querySelectorAll('.modal').forEach((m) => m.remove());
+  showMenu();
+}
+
 function showMenu(): void {
   hud.menu(async (format, players, title) => {
     const setup = await deckSetup.open(format, players, title);
@@ -345,6 +365,7 @@ hud.bind({
   },
   passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
   concede: () => bridge.act({ action: 'concede' }),
+  exitToMenu: () => exitToMenu(),
 });
 
 const input = new Input(stage, table, {

@@ -71,6 +71,13 @@ public final class BridgeMain {
         final String type = msg.has("type") ? msg.get("type").getAsString() : "";
         switch (type) {
             case "start" -> new Thread(() -> startGame(msg), "bridge-start").start();
+            // leaving for the main menu: stop the game so the AIs don't play on in the background
+            case "endGame" -> new Thread(() -> {
+                if (match != null && match.getGame() != null && !match.getGame().isGameOver()) {
+                    session.cancelPending();
+                    match.endCurrentGame();
+                }
+            }, "bridge-end").start();
             case "validateDeck" -> new Thread(() -> validateDeck(msg), "bridge-deck").start();
             case "listPrecons" -> new Thread(() -> listPrecons(msg), "bridge-precons").start();
             // test tooling only: set up a board from Forge's game-state text (-Dbridge.dev=true)

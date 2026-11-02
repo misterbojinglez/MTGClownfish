@@ -45,6 +45,8 @@ export interface HudHandlers {
   player(id: number): void;
   passTurn(): void;
   concede(): void;
+  /** leave the game for the main menu */
+  exitToMenu(): void;
 }
 
 export class Hud {
@@ -95,7 +97,7 @@ export class Hud {
     pass.title = 'Pass priority until end of turn (Shift+Enter)';
     pass.onclick = () => this.handlers.passTurn();
     const concede = h('button', 'chip danger', 'Concede');
-    concede.onclick = () => confirm('Concede this game?') && this.handlers.concede();
+    concede.onclick = () => this.leaveMenu();
     // sound menu: everything, or effects and music separately, plus volume
     const sound = h('button', 'chip', 'Sound');
     const soundWrap = h('div', 'sound-wrap');
@@ -219,10 +221,52 @@ export class Hud {
     this.closeOverlay();
     const ov = h('div', `overlay gameover ${won ? 'won' : 'lost'}`);
     ov.append(h('h1', '', won ? 'Victory' : 'Defeat'), h('p', 'sub', winner ? `${winner} wins` : 'Draw'));
+    const row = h('div', 'setup-actions');
+    const menu = h('button', 'sub-btn wide', 'Main menu');
+    menu.onclick = () => this.handlers.exitToMenu();
     const again = h('button', 'main-btn wide', 'Play again');
     again.onclick = onAgain;
-    ov.append(again);
+    row.append(menu, again);
+    ov.append(row);
     this.root.append(ov);
+  }
+
+  /** The Concede chip: concede and keep watching, leave for the main menu, or carry on. */
+  private leaveMenu(): void {
+    if (document.querySelector('.modal.leave')) return;
+    const modal = h('div', 'modal leave');
+    const panel = h('div', 'modal-panel');
+    panel.append(h('div', 'modal-title', 'Leave this game?'), h('div', 'modal-sub', 'Conceding lets the others play on; you can watch. Exiting ends the game.'));
+    const row = h('div', 'modal-buttons');
+    const close = () => {
+      modal.classList.add('out');
+      setTimeout(() => modal.remove(), 160);
+      window.removeEventListener('keydown', onKey, true);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    const stay = h('button', 'sub-btn wide', 'Keep playing');
+    stay.onclick = close;
+    const concede = h('button', 'sub-btn wide', 'Concede');
+    concede.onclick = () => {
+      close();
+      this.handlers.concede();
+    };
+    const exit = h('button', 'main-btn wide', 'Exit to main menu');
+    exit.onclick = () => {
+      close();
+      this.handlers.exitToMenu();
+    };
+    row.append(stay, concede, exit);
+    panel.append(row);
+    modal.append(panel);
+    modal.onclick = (e) => e.target === modal && close();
+    window.addEventListener('keydown', onKey, true);
+    this.root.append(modal);
   }
 
   // ---- prompt -------------------------------------------------------------------------------------
