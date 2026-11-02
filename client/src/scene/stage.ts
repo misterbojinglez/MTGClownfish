@@ -434,44 +434,110 @@ export class Stage {
   }
 
   /** Slow drifting embers for atmosphere. */
+  /**
+   * Embers: sparks rising off the arena floor, drifting on a light breeze, flickering and cooling from
+   * white-gold to deep red before they die. They spawn where the floor painting had its (now removed)
+   * painted embers: mostly the outer stone and rune ring, clusters by the two torches, few over the
+   * battlefields. Spawn points live in the painting's own coordinates and go through the same mapping as
+   * the floor (uFloorRect), so they stay put on the painting whatever the table layout.
+   */
   private buildMotes(): void {
-    const count = 320;
-    const pos = new Float32Array(count * 3);
+    const count = 900;
+    const uv = new Float32Array(count * 2);
     const seed = new Float32Array(count);
+    const kind = new Float32Array(count);
+    // the painting's torches (u, v from the bottom) and its ritual ring centre
+    const torches = [[0.085, 0.975], [0.89, 0.985]];
+    const ringU = 0.5025;
     for (let i = 0; i < count; i++) {
-      pos[i * 3] = (Math.random() - 0.5) * 90;
-      pos[i * 3 + 1] = Math.random() * 14;
-      pos[i * 3 + 2] = (Math.random() - 0.5) * 64;
-      seed[i] = Math.random() * 100;
+      let u = 0;
+      let v = 0;
+      const r = Math.random();
+      if (r < 0.14) {
+        // by a torch
+        const t = torches[i % 2];
+        u = t[0] + (Math.random() - 0.5) * 0.06;
+        v = t[1] - Math.random() * 0.1;
+      } else {
+        // anywhere on the floor, kept mostly to the outer stone: rejection-sample against distance from the ring
+        for (let tries = 0; tries < 12; tries++) {
+          u = Math.random();
+          v = Math.random();
+          const dx = (u - ringU) * FLOOR_ASPECT;
+          const dy = v - FLOOR_RING_V;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (Math.random() < Math.min(1, Math.max(0.08, (d - 0.42) * 2.2))) break;
+        }
+      }
+      uv[i * 2] = u;
+      uv[i * 2 + 1] = v;
+      seed[i] = Math.random();
+      // 1 in 20 is a big soft out-of-focus ember
+      kind[i] = Math.random() < 0.05 ? 1 : 0;
     }
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    // positions are computed in the shader; the attribute only sizes the draw
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    geo.setAttribute('spawn', new THREE.BufferAttribute(uv, 2));
     geo.setAttribute('seed', new THREE.BufferAttribute(seed, 1));
+    geo.setAttribute('kind', new THREE.BufferAttribute(kind, 1));
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
-      uniforms: { uTime: { value: 0 } },
+      uniforms: {
+        uTime: { value: 0 },
+        uFloorRect: this.tableMaterial.uniforms.uFloorRect,
+      },
       vertexShader: /* glsl */ `
-        attribute float seed; uniform float uTime; varying float vA;
+        attribute vec2 spawn; attribute float seed; attribute float kind;
+        uniform float uTime; uniform vec4 uFloorRect;
+        varying float vAlpha; varying vec3 vColor; varying float vSoft;
         void main() {
-          vec3 p = position;
-          float t = uTime * 0.15 + seed;
-          p.y = mod(p.y + uTime * 0.25 + seed, 14.0);
-          p.x += sin(t * 1.3) * 1.5; p.z += cos(t) * 1.2;
-          vA = smoothstep(0.0, 2.0, p.y) * smoothstep(14.0, 9.0, p.y) * (0.5 + 0.5 * sin(seed * 7.0 + uTime * 2.0));
+          // each ember loops through a life of 3-7 s, starting at a different moment
+          float life = mix(3.0, 7.0, fract(seed * 7.13));
+          float age = fract(uTime / life + seed);
+          float cycle = floor(uTime / life + seed);
+          // a new spot each life, near its spawn point
+          vec2 jitter = vec2(fract(sin(cycle * 12.9898 + seed * 78.233) * 43758.5453), fract(sin(cycle * 39.346 + seed * 11.135) * 24634.6345)) - 0.5;
+          vec2 uv = spawn + jitter * 0.03;
+          vec3 p = vec3(uFloorRect.x + (uv.x - 0.5) * uFloorRect.z, 0.05, uFloorRect.y + (${FLOOR_RING_V.toFixed(3)} - uv.y) * uFloorRect.w);
+          // rise, speeding up a little; drift with the breeze and swirl more as it climbs
+          float rise = mix(1.6, 3.2, fract(seed * 3.7));
+          p.y += age * life * rise * (0.8 + 0.4 * age);
+          float t = uTime * mix(0.6, 1.4, fract(seed * 5.1)) + seed * 40.0;
+          p.x += age * 2.4 + sin(t * 1.3) * (0.4 + 1.6 * age) + sin(t * 3.1 + seed) * 0.25;
+          p.z += cos(t * 0.9) * (0.3 + 1.2 * age) - age * 0.8;
+          // quick flare in, long fade out, flicker throughout
+          float flicker = 0.62 + 0.38 * sin(uTime * mix(9.0, 17.0, fract(seed * 9.3)) + seed * 60.0);
+          vAlpha = smoothstep(0.0, 0.06, age) * pow(1.0 - age, 1.6) * flicker;
+          // cools from white-gold to orange to ember red
+          vColor = mix(vec3(1.0, 0.68, 0.28), vec3(1.0, 0.38, 0.08), smoothstep(0.0, 0.45, age));
+          vColor = mix(vColor, vec3(0.65, 0.1, 0.04), smoothstep(0.45, 1.0, age));
+          vSoft = kind;
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
-          gl_PointSize = 90.0 / -mv.z;
+          // sized for a camera 40-90 units away: sparks a few pixels across, soft embers much larger
+          float size = kind > 0.5 ? 2400.0 : mix(380.0, 720.0, fract(seed * 13.7)) * (1.0 - 0.45 * age);
+          gl_PointSize = size / -mv.z;
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */ `
-        varying float vA;
+        varying float vAlpha; varying vec3 vColor; varying float vSoft;
         void main() {
           float d = length(gl_PointCoord - 0.5);
-          gl_FragColor = vec4(vec3(1.0, 0.62, 0.3) * 1.6, smoothstep(0.5, 0.0, d) * vA * 0.7);
+          // sparks: a warm core in an orange halo; out-of-focus ones: a faint deep-orange disc
+          if (vSoft > 0.5) {
+            gl_FragColor = vec4(vec3(1.0, 0.42, 0.12) * 1.1, smoothstep(0.5, 0.3, d) * 0.11 * vAlpha);
+            return;
+          }
+          float halo = pow(smoothstep(0.5, 0.0, d), 2.2) * 0.75;
+          float core = smoothstep(0.1, 0.0, d);
+          vec3 col = mix(vColor * 1.15, mix(vColor, vec3(1.0, 0.85, 0.6), 0.45) * 1.4, core);
+          gl_FragColor = vec4(col, (halo + core * 0.8) * vAlpha);
         }`,
     });
     const motes = new THREE.Points(geo, mat);
+    motes.frustumCulled = false;
     this.scene.add(motes);
     this.onTick((_, t) => (mat.uniforms.uTime.value = t));
   }
