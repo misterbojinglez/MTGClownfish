@@ -41,7 +41,7 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
          */
         @Override
         public List<SpellAbility> chooseSpellAbilityToPlay() {
-            final boolean hold = sacrificeOutletReady() || libraryTopPlayable();
+            final boolean hold = sacrificeOutletReady() || libraryTopPlayable() || xAbilityReady();
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {
                 yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
@@ -52,6 +52,15 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 if (hold) {
                     yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");
                 }
+            }
+        }
+
+        /** An ability whose target depends on X (Chthonian Nightmare) that has a legal target for some X you could pay. */
+        private boolean xAbilityReady() {
+            try {
+                return !getGame().getStack().isEmpty() ? false : !Serializer.readyXAbilities(getPlayer()).isEmpty();
+            } catch (final RuntimeException ignored) {
+                return false;
             }
         }
 
@@ -105,6 +114,51 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 // mid-update; fall back to Forge's own judgement
             }
             return false;
+        }
+
+        /**
+         * Forge starts an ability without checking that every cost can be paid, and pays costs one at a time;
+         * when a later one turns out impossible, its rollback doesn't undo them all. Chthonian Nightmare with no
+         * creature to sacrifice went back to your hand and did nothing. So a cost that can't be paid (other than
+         * mana, which the payment prompt handles, and amounts that depend on X, not chosen yet) stops the
+         * ability before it starts, and the player is told which cost.
+         */
+        @Override
+        public boolean playChosenSpellAbility(final SpellAbility chosenSa) {
+            final String blocked = unpayableCost(chosenSa);
+            if (blocked != null) {
+                final String name = chosenSa.getHostCard() == null ? "That" : chosenSa.getHostCard().getName();
+                if (getGui() instanceof SocketGuiGame gui) {
+                    gui.tell(name + ": can't pay \"" + blocked + "\" right now.");
+                }
+                return false;
+            }
+            return super.playChosenSpellAbility(chosenSa);
+        }
+
+        /** The first non-mana cost of this ability that can't be paid now, or null. */
+        private String unpayableCost(final SpellAbility sa) {
+            try {
+                if (sa == null || sa.getPayCosts() == null) {
+                    return null;
+                }
+                sa.setActivatingPlayer(getPlayer());
+                for (final forge.game.cost.CostPart part : sa.getPayCosts().getCostParts()) {
+                    if (part instanceof forge.game.cost.CostPartMana) {
+                        continue;
+                    }
+                    final String amount = part.getAmount();
+                    if (amount != null && amount.contains("X")) {
+                        continue;
+                    }
+                    if (!part.canPay(sa, getPlayer(), false)) {
+                        return part.toString();
+                    }
+                }
+            } catch (final RuntimeException ignored) {
+                // can't tell; let Forge decide
+            }
+            return null;
         }
 
         @Override

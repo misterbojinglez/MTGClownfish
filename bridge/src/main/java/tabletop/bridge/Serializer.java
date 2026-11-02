@@ -425,6 +425,43 @@ public final class Serializer {
         return false;
     }
 
+    /**
+     * Battlefield cards of this player with an activated ability whose targets depend on X (Chthonian
+     * Nightmare: a creature card with mana value X). Forge's available-actions test checks targets with X = 0
+     * and so misses them; here every X the player could choose is tried.
+     */
+    public static java.util.List<Integer> readyXAbilities(final forge.game.player.Player player) {
+        final java.util.List<Integer> ids = new java.util.ArrayList<>();
+        for (final forge.game.card.Card c : player.getCardsIn(ZoneType.Battlefield)) {
+            for (final forge.game.spellability.SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
+                if (sa.isManaAbility() || !sa.usesTargeting() || sa.getPayCosts() == null || !sa.getPayCosts().hasXInAnyCostPart()) {
+                    continue;
+                }
+                final Integer before = sa.getXManaCostPaid();
+                try {
+                    final org.apache.commons.lang3.Range<Integer> range = forge.game.ability.AbilityUtils.getAnnouncementBounds(sa, "X");
+                    final int max = Math.min(range.getMaximum(), 20);
+                    for (int x = Math.max(0, range.getMinimum()); x <= max; x++) {
+                        sa.setXManaCostPaid(x);
+                        if (sa.getTargetRestrictions().getAllCandidates(sa).size() >= Math.max(1, sa.getTargetRestrictions().getMinTargets(c, sa))
+                                && forge.game.cost.CostPayment.canPayAdditionalCosts(sa.getPayCosts(), sa, false)) {
+                            ids.add(c.getId());
+                            break;
+                        }
+                    }
+                } catch (final RuntimeException ignored) {
+                    // can't tell for this one
+                } finally {
+                    sa.setXManaCostPaid(before);
+                }
+                if (ids.contains(c.getId())) {
+                    break;
+                }
+            }
+        }
+        return ids;
+    }
+
     /** Whether every mana ability of this card has a sacrifice in its cost (Lotus Petal, Treasure, Phyrexian Altar). */
     public static boolean manaCostsSacrifice(final forge.game.card.Card card) {
         if (card == null || card.getManaAbilities().isEmpty()) {

@@ -157,6 +157,19 @@ public class SocketGuiGame extends AbstractGuiGame {
         // always the input Forge holds right now, so the client can never be stuck answering an old one
         promptOut.addProperty("inputId", currentInputId());
         final JsonObject selection = Serializer.selection(getSelection());
+        // abilities Forge's scan misses because their targets depend on X: highlight them as playable too
+        if ("InputPassPriority".equals(currentInputName()) && getGameController() instanceof forge.player.PlayerControllerHuman pch) {
+            try {
+                final JsonArray actionable = selection.getAsJsonArray("actionable");
+                for (final Integer id : Serializer.readyXAbilities(pch.getPlayer())) {
+                    if (!actionable.contains(new com.google.gson.JsonPrimitive(id))) {
+                        actionable.add(id);
+                    }
+                }
+            } catch (final RuntimeException ignored) {
+                // mid-update; the next one says
+            }
+        }
 
         // Forge refreshes the view many times per step (priority passing between players, zone bookkeeping);
         // most refreshes change nothing the player can see. Skip those, or the client's queue backs up and
