@@ -55,11 +55,19 @@ public class SocketGuiGame extends AbstractGuiGame {
     /** Called on the game thread for every engine event, so the snapshot matches the moment it describes. */
     public void onGameEvent(final GameEvent event) {
         synchronized (snapshotLock) {
-            pendingEvents.add(Serializer.event(event));
+            final JsonObject json = Serializer.event(event);
+            pendingEvents.add(json);
             // Forge reports each creature's damage separately; hold damage until the next other event so a
-            // whole combat damage step (attackers and blockers striking at once) reaches the client together
+            // whole combat damage step (attackers and blockers striking at once), or a sweeper hitting every
+            // creature, reaches the client together
             if (event instanceof GameEventCardDamaged || event instanceof GameEventPlayerDamaged) {
+                holdingDamage = true;
                 scheduleFallbackFlush();
+                return;
+            }
+            // the bookkeeping Forge fires after each hit (stats changed, zones, priority) joins the held damage
+            // instead of sending it one creature at a time
+            if (holdingDamage && NOISE_EVENTS.contains(json.has("event") ? json.get("event").getAsString() : "")) {
                 return;
             }
             flushLocked();
@@ -90,7 +98,11 @@ public class SocketGuiGame extends AbstractGuiGame {
         }
     }
 
+    /** damage events are waiting to go out together (see onGameEvent) */
+    private boolean holdingDamage;
+
     private void flushLocked() {
+        holdingDamage = false;
         if (getGameView() == null) {
             return;
         }
@@ -310,10 +322,20 @@ public class SocketGuiGame extends AbstractGuiGame {
     @Override public void updatePhase(final boolean saveState) { flush(); }
     @Override public void updateTurn(final PlayerView player) { flush(); }
     @Override public void updateStack() { flush(); }
-    @Override public void updateZones(final Iterable<PlayerZoneUpdate> zonesToUpdate) { flush(); }
-    @Override public void updateCards(final Iterable<CardView> cards) { flush(); }
-    @Override public void updateManaPool(final Iterable<PlayerView> manaPoolUpdate) { flush(); }
-    @Override public void updateLives(final Iterable<PlayerView> livesUpdate) { flush(); }
+    // view refreshes Forge makes after each hit wait while damage is being gathered (see onGameEvent);
+    // the snapshot is taken when it goes out, so nothing is lost
+    @Override public void updateZones(final Iterable<PlayerZoneUpdate> zonesToUpdate) { flushUnlessGatheringDamage(); }
+    @Override public void updateCards(final Iterable<CardView> cards) { flushUnlessGatheringDamage(); }
+    @Override public void updateManaPool(final Iterable<PlayerView> manaPoolUpdate) { flushUnlessGatheringDamage(); }
+    @Override public void updateLives(final Iterable<PlayerView> livesUpdate) { flushUnlessGatheringDamage(); }
+
+    private void flushUnlessGatheringDamage() {
+        synchronized (snapshotLock) {
+            if (!holdingDamage) {
+                flushLocked();
+            }
+        }
+    }
     @Override public void refreshField() { flush(); }
 
     @Override

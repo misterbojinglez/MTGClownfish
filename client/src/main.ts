@@ -97,7 +97,7 @@ async function drain(): Promise<void> {
     const backlog = queue.filter((m) => m.type === 'update').length;
     // play at normal speed unless well behind, never rush past what is happening, and combat damage always
     // at full length: it's what the player most needs to take in
-    const combatHit = msg.type === 'update' && msg.events.some((e) => (e.event === 'PlayerDamaged' && e.combat) || e.event === 'CardDamaged');
+    const combatHit = msg.type === 'update' && msg.events.some((e) => table.isCombatDamage(e));
     table.timeScale = combatHit ? 1 : Math.min(1.75, 1 + Math.max(0, backlog - 8) / 30);
     const phaseBefore = table.state ? `${table.state.turn}|${table.state.phase}` : '';
     const started = performance.now();

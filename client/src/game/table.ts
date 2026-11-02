@@ -531,12 +531,13 @@ export class Table {
     const s = this.state!;
     const jobs: Promise<void>[] = [];
     const combatHits: GameEvent[] = [];
+    const spellHits: GameEvent[] = [];
     for (const e of events) {
       switch (e.event) {
         case 'PlayerDamaged':
         case 'CardDamaged':
-          if (e.combat || e.event === 'CardDamaged') combatHits.push(e);
-          else jobs.push(this.spellDamage(e));
+          if (this.isCombatDamage(e)) combatHits.push(e);
+          else spellHits.push(e);
           break;
         case 'PlayerLivesChanged': {
           const pid = (e.player as Ref)?.player;
@@ -596,7 +597,64 @@ export class Table {
       }
     }
     if (combatHits.length) jobs.push(this.combat(combatHits));
+    // one source hitting many things at once (Blasphemous Act, Earthquake) lands everywhere together;
+    // a burn spell or two still flies its bolt to each target
+    const bySource = new Map<string, GameEvent[]>();
+    for (const e of spellHits) {
+      const key = String((e.source as Ref)?.card ?? 'none');
+      bySource.set(key, [...(bySource.get(key) ?? []), e]);
+    }
+    for (const group of bySource.values()) {
+      if (group.length >= 3) jobs.push(this.sweep(group));
+      else for (const e of group) jobs.push(this.spellDamage(e));
+    }
     await Promise.all(jobs);
+  }
+
+  /**
+   * Combat damage comes from an attacking or blocking creature. Forge flags it on player damage but not on
+   * creature damage, so that's read from the source; anything else (a sweeper, a burn spell) is spell damage.
+   */
+  isCombatDamage(e: GameEvent): boolean {
+    if (e.event === 'PlayerDamaged') return !!e.combat;
+    if (e.event !== 'CardDamaged') return false;
+    const src = (e.source as Ref)?.card;
+    const c = src != null ? this.state?.cards[src] : undefined;
+    return !!c && c.zone === 'Battlefield' && (!!c.attacking || !!c.blocking);
+  }
+
+  /** Damage from one source to many targets at once: every target is struck together, one sound, one punch. */
+  private async sweep(hits: GameEvent[]): Promise<void> {
+    const srcId = (hits[0].source as Ref)?.card;
+    const colors = srcId != null ? (this.cards.get(srcId)?.state.colors ?? this.state?.cards[srcId]?.colors) : undefined;
+    let biggest = 0;
+    const centre = new THREE.Vector3();
+    let n = 0;
+    for (const e of hits) {
+      const amount = e.amount as number;
+      const targetPlayer = (e.target as Ref)?.player;
+      const targetCard = (e.card as Ref)?.card;
+      const at = targetPlayer != null ? this.playerWorld(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
+      if (!at) continue;
+      biggest = Math.max(biggest, amount);
+      centre.add(at);
+      n++;
+      this.magic.burst(at, colors, 0.7);
+      this.magic.wound(at, amount, null, targetPlayer != null);
+      if (targetPlayer != null) {
+        this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage', amount >= 4);
+        this.playerHit(targetPlayer, amount, at);
+      } else if (targetCard != null) {
+        this.floatAtCard(targetCard, `−${amount}`);
+        this.cards.get(targetCard)?.hurt();
+      }
+    }
+    if (n === 0) return;
+    centre.multiplyScalar(1 / n);
+    sfx.hit(biggest, false, this.panOf(centre));
+    this.stage.punch(Math.min(1, biggest / 6));
+    this.stage.addShake(Math.min(1, 0.3 + n * 0.04));
+    await new Promise((r) => setTimeout(r, 650 / this.timeScale));
   }
 
   /**
