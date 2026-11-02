@@ -66,6 +66,11 @@ public final class BridgeMain {
 
         session = new Session(port, BridgeMain::onClientMessage);
         session.start();
+        // the shareable package: the bridge also serves the built client, so testers need only Java
+        final String clientDir = System.getProperty("client.dir");
+        if (clientDir != null) {
+            ClientServer.start(new File(clientDir).toPath(), Integer.parseInt(System.getProperty("client.port", "7780")));
+        }
     }
 
     private static void onClientMessage(final JsonObject msg) {
