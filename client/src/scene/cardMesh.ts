@@ -59,18 +59,22 @@ function glowTexture(): THREE.Texture {
 
 export type Highlight = 'none' | 'playable' | 'autoPay' | 'selectable' | 'chosen' | 'attacking' | 'blocking' | 'target';
 
+/**
+ * The design's frame language: playable green, picks in arcane blue (brighter once picked), attackers
+ * red ("aggressive"), blockers silver-blue, targets fiery orange, the auto-pay plan violet ("passive").
+ */
 const HIGHLIGHT_COLORS: Record<Highlight, THREE.Color> = {
   none: new THREE.Color(0, 0, 0),
-  playable: new THREE.Color('#3aa6ff').multiplyScalar(1.5),
-  autoPay: new THREE.Color('#7fd0ff').multiplyScalar(1.7),
-  selectable: new THREE.Color('#ffd34a').multiplyScalar(1.4),
-  chosen: new THREE.Color('#ff9a2e').multiplyScalar(1.8),
-  attacking: new THREE.Color('#ff4a3a').multiplyScalar(1.5),
-  blocking: new THREE.Color('#7fc4ff').multiplyScalar(1.7),
-  target: new THREE.Color('#ff5a5a').multiplyScalar(1.6),
+  playable: new THREE.Color('#4fe07a').multiplyScalar(1.5),
+  autoPay: new THREE.Color('#a565ff').multiplyScalar(1.7),
+  selectable: new THREE.Color('#4c9dff').multiplyScalar(1.6),
+  chosen: new THREE.Color('#9fd8ff').multiplyScalar(1.9),
+  attacking: new THREE.Color('#ff4a32').multiplyScalar(1.6),
+  blocking: new THREE.Color('#b9c8ff').multiplyScalar(1.6),
+  target: new THREE.Color('#ff7a26').multiplyScalar(1.9),
 };
 
-/** Plain hover (nothing to do with the card) is a soft neutral rim, so blue always means playable. */
+/** Plain hover (nothing to do with the card) is a soft neutral rim, so green always means playable. */
 const HOVER_COLOR = new THREE.Color('#fff4dc').multiplyScalar(0.7);
 
 /** Shared GLSL that eats the card away along noise with a glowing rim (death, exile). */
@@ -341,7 +345,10 @@ export class CardObject {
     const target = this.highlight === 'none' && !this.hovered ? 0 : 1;
     this.glowStrength += (target - this.glowStrength) * Math.min(1, dt * 10);
     const color = this.highlight === 'none' ? HOVER_COLOR : HIGHLIGHT_COLORS[this.highlight];
-    const pulse = 0.78 + 0.22 * Math.sin(this.time * 4.2);
+    // targets flicker like the design's fire frame; everything else breathes
+    const pulse = this.highlight === 'target'
+      ? 0.8 + 0.12 * Math.sin(this.time * 13.0) + 0.08 * Math.sin(this.time * 31.0 + 1.3)
+      : 0.78 + 0.22 * Math.sin(this.time * 4.2);
     this.glowMat.color.copy(color).multiplyScalar(this.glowStrength * pulse);
     this.glow.visible = this.glowStrength > 0.01;
 

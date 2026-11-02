@@ -1,5 +1,5 @@
 import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, ResolvingSource, Selection } from '../protocol';
-import { cardArtUrl, cardImageUrl, cardZoomUrl } from '../scene/textures';
+import { cardImageUrl, cardZoomUrl } from '../scene/textures';
 import { sfx } from '../audio';
 
 const PHASES: [string, string][] = [
@@ -45,6 +45,8 @@ export interface HudHandlers {
   player(id: number): void;
   passTurn(): void;
   concede(): void;
+  /** undo the last undoable action (a mana tap, a declaration) */
+  undo(): void;
   /** leave the game for the main menu */
   exitToMenu(): void;
 }
@@ -61,6 +63,7 @@ export class Hud {
   /** the OK button currently means "choose nothing" (an optional target with none picked) */
   private skipping = false;
   private readonly cancelBtn = h('button', 'sub-btn');
+  private readonly undoBtn = h('button', 'sub-btn undo-btn', 'Undo');
   private readonly phaseBar = h('div', 'phase-bar');
   private readonly turnLabel = h('div', 'turn-label');
   private readonly zoom = h('div', 'zoom');
@@ -76,9 +79,18 @@ export class Hud {
   private handlers!: HudHandlers;
 
   constructor() {
-    const actions = h('div', 'actions');
-    actions.append(this.cancelBtn, this.okBtn);
-    this.promptBox.append(this.stackPanel, this.promptSource, this.promptText, actions);
+    // the button column at the bottom right: Pass Turn, Undo, then the prompt's own pair (secondary, OK)
+    const pass = h('button', 'main-btn pass-btn', 'Pass Turn');
+    pass.title = 'Pass priority until end of turn (Shift+Enter)';
+    pass.onclick = () => this.handlers.passTurn();
+    const undo = this.undoBtn;
+    undo.title = 'Undo the last thing you did, where the rules allow (Z while paying)';
+    undo.onclick = () => this.handlers.undo();
+    const pair = h('div', 'actions');
+    pair.append(this.cancelBtn, this.okBtn);
+    const column = h('div', 'action-column');
+    column.append(pass, undo, pair);
+    this.promptBox.append(this.promptSource, this.promptText, column);
     const phaseWrap = h('div', 'phase-wrap');
     phaseWrap.append(this.turnLabel, this.phaseBar);
     for (const key of PHASE_GROUPS) {
@@ -88,14 +100,11 @@ export class Hud {
       this.phaseBar.append(pip);
     }
     this.zoom.append(this.zoomImg, this.zoomText, this.zoomStats);
-    this.root.append(this.promptBox, phaseWrap, this.zoom, this.toasts, this.status);
+    this.root.append(this.promptBox, this.stackPanel, phaseWrap, this.zoom, this.toasts, this.status);
     this.okBtn.onclick = () => this.handlers.ok();
     this.cancelBtn.onclick = () => this.handlers.cancel();
 
     const menu = h('div', 'corner-menu');
-    const pass = h('button', 'chip', 'Pass turn');
-    pass.title = 'Pass priority until end of turn (Shift+Enter)';
-    pass.onclick = () => this.handlers.passTurn();
     const concede = h('button', 'chip danger', 'Concede');
     concede.onclick = () => this.leaveMenu();
     // sound menu: everything, or effects and music separately, plus volume
@@ -143,7 +152,7 @@ export class Hud {
     document.addEventListener('click', () => soundWrap.classList.remove('open'));
     soundWrap.append(sound, soundMenu);
     showSound();
-    menu.append(soundWrap, pass, concede);
+    menu.append(soundWrap, concede);
     // every button gets a soft click
     document.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest?.('button, .thumb')) sfx.click();
@@ -306,6 +315,10 @@ export class Hud {
     this.okBtn.classList.toggle('skip', this.skipping);
     this.okBtn.classList.toggle('end-turn', /end turn|pass/i.test(ok?.label ?? '') || /^OK$/i.test(ok?.label ?? ''));
     this.cancelBtn.textContent = cancel?.label || 'Cancel';
+    // "Alpha Strike" wears the purple-and-gold Attack style from the design sheet
+    this.cancelBtn.classList.toggle('attack-btn', /alpha strike/i.test(cancel?.label ?? ''));
+    // Forge sometimes offers Undo itself (your spell just went on the stack): don't show it twice
+    this.undoBtn.style.visibility = /^undo$/i.test(cancel?.label ?? '') && cancel?.enabled ? 'hidden' : 'visible';
     this.cancelBtn.style.visibility = cancel?.enabled && !waiting ? 'visible' : 'hidden';
     this.cancelBtn.disabled = !cancel?.enabled || waiting;
     this.promptBox.classList.toggle('waiting', waiting);
@@ -315,36 +328,47 @@ export class Hud {
    * What's on the stack, newest (next to resolve) first: each spell or ability with its card's art, so
    * it's clear which card every trigger comes from. Hover a row for the card.
    */
+  /**
+   * The Stack panel (from the design): each item as a card, the one that resolves next first and lit, with
+   * what it does written under the row. Hover a card for the full view.
+   */
   setStack(state: GameState | null, localId: number): void {
     const items = state?.stack ?? [];
-    const key = items.map((i) => `${i.id}:${i.source}`).join(',');
+    const key = items.map((i) => `${i.id}:${i.source}:${i.text}`).join(',');
     if (key === this.stackKey) return;
     this.stackKey = key;
     this.stackPanel.replaceChildren();
+    this.stackPanel.classList.toggle('show', !!state && items.length > 0);
     if (!state || items.length === 0) return;
-    const head = h('div', 'stack-head', items.length === 1 ? 'Stack · 1 item' : `Stack · ${items.length} items`);
-    this.stackPanel.append(head);
-    const shown = items.slice(0, 6);
+    const head = h('div', 'stack-head');
+    head.append(h('span', 'stack-title', 'The Stack'), h('span', 'stack-count', String(items.length)));
+    const row = h('div', 'stack-cards');
+    const shown = items.slice(0, 8);
     shown.forEach((item, i) => {
       const card = item.source != null ? state.cards[item.source] : undefined;
-      const row = h('div', `stack-row${i === 0 ? ' top' : ''}`);
-      const art = h('div', 'stack-art');
-      if (card?.visible) void cardArtUrl(card).then((url) => { if (url) art.style.backgroundImage = `url("${url}")`; });
-      const body = h('div', 'stack-body');
-      const name = card?.name ?? item.text.split(' - ')[0];
+      const name = card?.name ?? item.text.split(' - ')[0] ?? 'Effect';
       const kind = item.trigger ? 'Trigger' : item.ability ? 'Ability' : 'Spell';
       const who = item.controller === localId ? 'You' : state.players.find((p) => p.id === item.controller)?.name ?? '';
-      body.append(h('div', 'stack-name', name ?? 'Effect'), h('div', 'stack-kind', who ? `${kind} · ${who}` : kind));
-      const text = effectText(tidyMessage(item.text), name ?? '');
-      if (text && text !== name) body.append(h('div', 'stack-text', text));
-      row.append(art, body);
+      const text = effectText(tidyMessage(item.text), name);
+      const el = h('div', `stack-card ${item.trigger || item.ability ? 'ability' : 'spell'}${i === 0 ? ' top' : ''}`);
+      el.title = `${name} · ${kind}${who ? ` · ${who}` : ''}${text && text !== name ? `\n${text}` : ''}`;
+      const face = h('div', 'stack-face');
+      if (card?.visible) void cardImageUrl(card).then((url) => { if (url) face.style.backgroundImage = `url("${url}")`; });
+      else face.textContent = name;
+      el.append(face, h('div', 'stack-tag', who ? `${kind} · ${who}` : kind));
       if (card) {
-        row.onmouseenter = () => this.showZoom(card, 'right');
-        row.onmouseleave = () => this.showZoom(null);
+        el.onmouseenter = () => this.showZoom(card, 'right');
+        el.onmouseleave = () => this.showZoom(null);
       }
-      this.stackPanel.append(row);
+      row.append(el);
     });
-    if (items.length > shown.length) this.stackPanel.append(h('div', 'stack-more', `+ ${items.length - shown.length} more`));
+    if (items.length > shown.length) row.append(h('div', 'stack-more', `+${items.length - shown.length}`));
+    // what the next item to resolve does
+    const top = items[0];
+    const topCard = top.source != null ? state.cards[top.source] : undefined;
+    const topText = effectText(tidyMessage(top.text), topCard?.name ?? '');
+    this.stackPanel.append(head, row);
+    if (topText) this.stackPanel.append(h('div', 'stack-text', topText));
   }
 
   /** "Preordain · Spell" with its art and rules text: what is asking the current question. Hover for the card. */
@@ -407,15 +431,21 @@ export class Hud {
   // ---- player plates ------------------------------------------------------------------------------
 
   updatePlayers(state: GameState, localId: number, screen: Map<number, { x: number; y: number }>, targetable: Set<number>, defender: number | null = null): void {
-    const spots = this.placePlates(state, screen);
+    const spots = this.placePlates(state, screen, localId);
+    // seat colours in turn order from you: green, blue, purple (you're red)
+    const at = state.players.findIndex((p) => p.id === localId);
+    const seatOf = (pid: number) => {
+      const i = state.players.findIndex((p) => p.id === pid);
+      return ((i - at + state.players.length) % state.players.length) || 0;
+    };
     for (const p of state.players) {
       let plate = this.plates.get(p.id);
       if (!plate) {
-        plate = this.buildPlate(p);
+        plate = this.buildPlate(p, p.id === localId, seatOf(p.id));
         this.plates.set(p.id, plate);
         this.root.append(plate);
       }
-      const spot = spots.get(p.id);
+      const spot = p.id === localId ? undefined : spots.get(p.id);
       if (spot) {
         plate.style.left = `${spot.x}px`;
         plate.style.top = `${spot.y}px`;
@@ -440,16 +470,16 @@ export class Hud {
       }
       const counts = plate.querySelector<HTMLDivElement>('.counts')!;
       const avail = p.manaAvailable;
-      const countsText = `✋ ${p.zones.Hand.length}   ▤ ${p.zones.LibraryCount}`;
-      if (counts.dataset.v !== `${countsText}|${avail}`) {
-        counts.dataset.v = `${countsText}|${avail}`;
-        counts.replaceChildren(countsText);
-        if (avail != null) {
+      const key = `${p.zones.Hand.length}|${p.zones.LibraryCount}|${p.zones.Graveyard.length}|${avail}`;
+      if (counts.dataset.v !== key) {
+        counts.dataset.v = key;
+        counts.replaceChildren(
+          stat('hand', p.zones.Hand.length, `${p.zones.Hand.length} in hand`),
+          stat('grave', p.zones.Graveyard.length, `${p.zones.Graveyard.length} in graveyard`),
+          stat('library', p.zones.LibraryCount, `${p.zones.LibraryCount} in library`),
           // what they could spend right now: untapped mana sources plus anything floating
-          const m = h('span', 'mana-avail', `◆ ${avail}`);
-          m.title = `${avail} mana available`;
-          counts.append(m);
-        }
+          ...(avail != null ? [stat('mana', avail, `${avail} mana available`)] : []),
+        );
       }
       const extras: string[] = [];
       if (p.poison > 0) extras.push(`☠ ${p.poison}`);
@@ -473,13 +503,15 @@ export class Hud {
    * Plates sit on their seats. A seat out of view keeps its plate at the screen edge nearest to it,
    * above your hand and clear of the prompt, and plates never pile onto each other.
    */
-  private placePlates(state: GameState, screen: Map<number, { x: number; y: number }>): Map<number, { x: number; y: number; edge: boolean }> {
+  private placePlates(state: GameState, screen: Map<number, { x: number; y: number }>, localId: number): Map<number, { x: number; y: number; edge: boolean }> {
     const w = window.innerWidth;
     const hgt = window.innerHeight;
     const PW = 236;
-    const PH = 66;
+    const PH = 78;
     const out = new Map<number, { x: number; y: number; edge: boolean }>();
     for (const p of state.players) {
+      // your panel lives in the bottom-left corner
+      if (p.id === localId) continue;
       const pos = screen.get(p.id);
       if (!pos) continue;
       const inside = pos.x > PW / 2 && pos.x < w - PW / 2 && pos.y > 60 && pos.y < hgt - 40;
@@ -541,15 +573,25 @@ export class Hud {
     window.setTimeout(() => plate.classList.remove('struck'), 650);
   }
 
-  private buildPlate(p: PlayerState): HTMLDivElement {
-    const plate = h('div', 'plate');
+  /**
+   * A player's badge. Opponents: a life medallion ringed in their seat colour with a side panel of counts
+   * (the design's Player Status Badge). You: the "You (Player)" panel fixed at the bottom left, with your
+   * life on a red shield. Both keep .life / .counts / .extras / .mana, which updatePlayers fills in.
+   */
+  private buildPlate(p: PlayerState, local: boolean, seat: number): HTMLDivElement {
+    const plate = h('div', local ? 'plate you-panel' : `plate badge seat-${seat}`);
     plate.dataset.pid = String(p.id);
-    const portrait = h('div', 'portrait');
-    portrait.textContent = p.name.slice(0, 1).toUpperCase();
-    portrait.style.setProperty('--hue', String((p.id * 97) % 360));
     const info = h('div', 'plate-info');
-    info.append(h('div', 'pname', p.name), h('div', 'counts'), h('div', 'extras'), h('div', 'mana'));
-    plate.append(portrait, h('div', 'life'), info);
+    info.append(h('div', 'counts'), h('div', 'extras'), h('div', 'mana'));
+    if (local) {
+      const body = h('div', 'you-body');
+      body.append(h('div', 'life'), info);
+      plate.append(h('div', 'pname you-title', `${p.name === 'You' ? 'You' : p.name} (Player)`), body);
+    } else {
+      const medal = h('div', 'medal');
+      medal.append(h('div', 'pname', p.name), h('div', 'life'));
+      plate.append(medal, info);
+    }
     plate.onclick = () => this.handlers.player(p.id);
     return plate;
   }
@@ -975,6 +1017,22 @@ function ptBreakdown(c: CardState): HTMLElement[] {
  */
 function choiceLabel(text: string): string {
   return tidyMessage(text.replace(/\s*\[[^\]]*:[^\]]*\]\s*$/, ''));
+}
+
+/** Small line icons for the badge counts (inline SVG, so they render the same everywhere). */
+const STAT_ICONS: Record<string, string> = {
+  hand: '<path d="M4 6.5 11 4l3 11-7 2.5z" /><path d="M10 5.2 16 4l2.5 11.5-5 1" />',
+  grave: '<path d="M6 20V9a6 6 0 0 1 12 0v11z" /><path d="M4 20h16M12 9v6M9.5 11.5h5" />',
+  library: '<rect x="5" y="4" width="13" height="16" rx="1.5" /><path d="M8 4v16" />',
+  mana: '<path d="M12 3 19 12 12 21 5 12z" /><path d="M12 7 15.5 12 12 17 8.5 12z" />',
+};
+
+/** One count on a badge: icon + number, with a tooltip. */
+function stat(kind: string, n: number, title: string): HTMLElement {
+  const el = h('span', `stat stat-${kind}`);
+  el.title = title;
+  el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${STAT_ICONS[kind] ?? ''}</svg><b>${n}</b>`;
+  return el;
 }
 
 /** Forge inputs where picking nothing can be a legal answer that's easy to give by accident. */

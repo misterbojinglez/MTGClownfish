@@ -1,0 +1,856 @@
+/*
+ * The "arcane arena" redesign (New Design Reference). Loaded after style.css: style.css keeps layout and
+ * behaviour, this sheet carries the look — palette, typeface, phase tracker, buttons, badges, panels.
+ * Pieces the mock-ups don't show (dialogs, menus, toasts, deck setup) take the same materials:
+ * dark slate panels with gilt or silver rims, Alegreya for anything that's a label.
+ */
+
+:root {
+  --display: Alegreya, Georgia, 'Times New Roman', serif;
+  --slate-0: #0b0e14;
+  --slate-1: #141922;
+  --slate-2: #1f2633;
+  --slate-3: #2b3341;
+  --gilt: #d9b45f;
+  --gilt-hi: #f5dc9a;
+  --gilt-lo: #8a6a2c;
+  --silver: #c3c8d3;
+  --silver-lo: #6e7586;
+  --arc-blue: #3b8cff;
+  --arc-blue-hi: #a8d6ff;
+  --arc-purple: #a064ff;
+  --arc-purple-hi: #dcc2ff;
+  --arc-green: #59d97a;
+  --arc-red: #ec4a32;
+  /* a panel: slate with a faint top sheen */
+  --panel-fill: linear-gradient(180deg, rgba(34, 41, 54, 0.96), rgba(13, 16, 23, 0.96));
+}
+
+/* ---- typeface: every label that used Cinzel's all-caps now reads in Alegreya, mixed case ---- */
+.browser-title,
+.cast-caption,
+.deck-art,
+.float-text,
+.life,
+.menu-title,
+.modal-title,
+.overlay h1,
+.portrait,
+.seat-badge,
+.setup-head h2,
+.share,
+.source-name,
+.turn-banner,
+.turn-label,
+.main-btn,
+.sub-btn,
+.phase,
+.chip,
+.view-btn,
+.seg button,
+.pname,
+.stat {
+  font-family: var(--display);
+  font-variant: normal;
+  /* Alegreya's default old-style figures make "Main 1" read "Main ı": numbers stand upright */
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* ---- phase tracker: a gilt banner across the top, the current step lit in arcane blue ---- */
+.phase-wrap {
+  top: 6px;
+  height: auto;
+  flex-direction: column;
+  gap: 0;
+}
+
+.turn-label {
+  position: relative;
+  z-index: 1;
+  margin-bottom: -2px;
+  padding: 3px 34px 4px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--gilt-hi);
+  text-shadow: 0 1px 0 #000, 0 0 10px rgba(245, 220, 154, 0.35);
+  background: linear-gradient(180deg, #1c2536, #0d121c);
+  border: 2px solid var(--gilt);
+  border-bottom-color: transparent;
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.5);
+}
+
+.turn-label:empty {
+  display: none;
+}
+
+.turn-label:not(.mine) {
+  color: var(--silver);
+}
+
+.phase-bar {
+  position: relative;
+  gap: 2px;
+  padding: 4px 26px;
+  background: linear-gradient(180deg, #1b2639, #0d1320);
+  border: 2px solid var(--gilt);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 6px 22px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(245, 220, 154, 0.18);
+}
+
+/* blue arrowheads capping each end of the banner */
+.phase-bar::before,
+.phase-bar::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, #8fc6ff, #2b5fb8);
+  border: 2px solid var(--gilt);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.phase-bar::before {
+  left: -9px;
+}
+
+.phase-bar::after {
+  right: -9px;
+}
+
+.phase {
+  position: relative;
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 3px 11px;
+  border-radius: 6px;
+  background: transparent;
+  color: #d8bd7c;
+  text-shadow: 0 1px 0 #000;
+}
+
+.phase.on {
+  color: #e8f5ff;
+  background: linear-gradient(180deg, #3486ee, #163f8f);
+  border: 1px solid #9fd4ff;
+  box-shadow: 0 0 14px rgba(70, 160, 255, 0.85), inset 0 0 10px rgba(170, 220, 255, 0.35);
+  text-shadow: 0 0 8px rgba(170, 220, 255, 0.9);
+}
+
+/* the little pointer under the lit step */
+.phase.on::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  width: 8px;
+  height: 8px;
+  background: #2a6fd0;
+  border-right: 1px solid #9fd4ff;
+  border-bottom: 1px solid #9fd4ff;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* ---- buttons ----
+ * Primary (OK, confirm): glossy arcane blue with a gilt rim. Secondary (Undo, Cancel, the prompt's other
+ * choice): dark slate with a silver rim. Pass Turn and Attack: violet with gilt and a warm glow.
+ */
+.main-btn,
+.sub-btn {
+  font-weight: 700;
+  font-size: calc(var(--h) * 0.42);
+  letter-spacing: 0.01em;
+  border-width: 2px;
+}
+
+.main-btn {
+  border-color: var(--gilt);
+  background:
+    radial-gradient(120% 70% at 50% 0%, rgba(190, 225, 255, 0.55), transparent 60%),
+    linear-gradient(180deg, #4d9dff 0%, #1d5ad0 55%, #12357e 100%);
+  color: #f2f8ff;
+  text-shadow: 0 0 10px rgba(150, 205, 255, 0.95), 0 1px 1px rgba(0, 20, 60, 0.9);
+  box-shadow: 0 0 18px rgba(59, 140, 255, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -8px 14px rgba(0, 10, 50, 0.45);
+}
+
+.main-btn:hover:not(:disabled) {
+  background:
+    radial-gradient(120% 70% at 50% 0%, rgba(210, 235, 255, 0.65), transparent 60%),
+    linear-gradient(180deg, #62aaff 0%, #2566e0 55%, #163f90 100%);
+}
+
+.sub-btn {
+  border-color: var(--silver-lo);
+  background:
+    radial-gradient(120% 70% at 50% 0%, rgba(200, 210, 230, 0.12), transparent 60%),
+    linear-gradient(180deg, #2b313d, #12151c);
+  color: #cdd2dc;
+  text-shadow: 0 1px 1px #000;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.sub-btn:hover:not(:disabled) {
+  border-color: var(--silver);
+  color: #eef1f6;
+}
+
+.main-btn:disabled,
+.sub-btn:disabled {
+  border-color: rgba(110, 117, 134, 0.45);
+  background: linear-gradient(180deg, rgba(36, 41, 51, 0.9), rgba(16, 19, 25, 0.9));
+  color: rgba(195, 200, 211, 0.4);
+  text-shadow: none;
+  box-shadow: none;
+}
+
+/* your move: OK breathes */
+.main-btn.glow:not(:disabled),
+.main-btn.glow.end-turn:not(:disabled) {
+  border-color: var(--gilt-hi);
+  background:
+    radial-gradient(120% 70% at 50% 0%, rgba(200, 232, 255, 0.65), transparent 60%),
+    linear-gradient(180deg, #55a6ff 0%, #2162dc 55%, #133b88 100%);
+  color: #fff;
+  box-shadow: 0 0 26px rgba(70, 160, 255, 0.8), 0 0 6px rgba(255, 220, 150, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  animation: arcane-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes arcane-breathe {
+  50% {
+    box-shadow: 0 0 38px rgba(90, 175, 255, 1), 0 0 10px rgba(255, 220, 150, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  }
+}
+
+.pass-btn:not(:disabled),
+.attack-btn:not(:disabled) {
+  border-color: #f2c96a;
+  background:
+    radial-gradient(120% 70% at 50% 0%, rgba(240, 210, 255, 0.5), transparent 60%),
+    linear-gradient(180deg, #b47bff 0%, #7a3fd0 55%, #4b2190 100%);
+  color: #fff4dc;
+  text-shadow: 0 0 10px rgba(255, 210, 140, 0.7), 0 1px 1px rgba(40, 0, 60, 0.9);
+  box-shadow: 0 0 22px rgba(170, 100, 255, 0.6), 0 0 8px rgba(255, 196, 90, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.pass-btn:hover:not(:disabled),
+.attack-btn:hover:not(:disabled) {
+  border-color: var(--gilt-hi);
+  box-shadow: 0 0 30px rgba(185, 120, 255, 0.85), 0 0 12px rgba(255, 196, 90, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* "choose nothing" keeps the quiet secondary look */
+.main-btn.skip:not(:disabled),
+.main-btn.skip:hover:not(:disabled) {
+  border-color: var(--silver-lo);
+  background: linear-gradient(180deg, #2b313d, #12151c);
+  color: #cdd2dc;
+  text-shadow: 0 1px 1px #000;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+}
+
+/* dialogs' primary buttons share OK's blue */
+.main-btn:focus-visible,
+.sub-btn:focus-visible {
+  outline-color: var(--arc-blue-hi);
+}
+
+/* ---- the button column at the bottom right ---- */
+.prompt {
+  right: 22px;
+  bottom: 20px;
+  max-width: 360px;
+  gap: 10px;
+}
+
+.action-column {
+  --btn-h: 50px;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 10px;
+  justify-items: end;
+}
+
+.action-column > .pass-btn,
+.action-column > .undo-btn {
+  grid-column: 2;
+  width: 200px;
+}
+
+.action-column > .undo-btn {
+  --h: 42px;
+  height: 42px;
+}
+
+.action-column > .actions {
+  grid-column: 1 / span 2;
+  --btn-h: 50px;
+  gap: 10px;
+}
+
+.action-column .actions .main-btn {
+  width: 200px;
+}
+
+.action-column .actions .sub-btn {
+  min-width: 150px;
+}
+
+/* the prompt's message: a slate plaque with a gilt hairline */
+.prompt-text {
+  background: var(--panel-fill);
+  border: 1px solid rgba(217, 180, 95, 0.55);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  color: #e9e3d4;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(245, 220, 154, 0.12);
+}
+
+/* ---- top toolbar: camera views (left), sound and leaving (right) ---- */
+.chip,
+.view-btn,
+.seg button {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.chip,
+.view-btn {
+  height: 32px;
+  border-radius: 16px;
+  border: 1.5px solid var(--silver-lo);
+  background: linear-gradient(180deg, rgba(43, 49, 61, 0.92), rgba(18, 21, 28, 0.92));
+  color: #cdd2dc;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.chip:hover,
+.view-btn:hover {
+  border-color: var(--silver);
+  color: #fff;
+}
+
+.view-btn.on {
+  color: #1d1406;
+  background: linear-gradient(180deg, var(--gilt-hi), #c49a43);
+  border-color: var(--gilt-hi);
+}
+
+.view-btn.auto.on {
+  color: #eef6ff;
+  background: linear-gradient(180deg, #4d9dff, #1d5ad0);
+  border-color: var(--arc-blue-hi);
+}
+
+/* ---- panels: dialogs, menus, setup, toasts ---- */
+.modal-panel,
+.sound-menu,
+.toast,
+.status,
+.browser,
+.seat-row,
+.deck-tile,
+.menu-card {
+  background: var(--panel-fill);
+  border-color: rgba(217, 180, 95, 0.55);
+}
+
+.modal-panel {
+  border-width: 1.5px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7), 0 28px 80px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(245, 220, 154, 0.15);
+}
+
+.modal-title,
+.menu-title,
+.setup-head h2,
+.browser-title {
+  font-weight: 700;
+  color: var(--gilt-hi);
+  text-shadow: 0 1px 0 #000, 0 0 12px rgba(245, 220, 154, 0.25);
+}
+
+.modal-title {
+  font-size: 22px;
+}
+
+.menu-title {
+  font-size: 24px;
+}
+
+.overlay h1 {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.menu-card:hover,
+.deck-tile:hover {
+  border-color: var(--gilt-hi);
+  box-shadow: 0 0 22px rgba(217, 180, 95, 0.3);
+}
+
+.turn-banner {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+/* ---- player status badges (opponents): a life medallion in the seat colour, counts on a side panel ---- */
+.seat-1 { --seat: #4fd16d; --seat-hi: #c3f7cd; --seat-glow: rgba(79, 209, 109, 0.65); --seat-deep: #12321c; }
+.seat-2 { --seat: #4c9dff; --seat-hi: #c6e1ff; --seat-glow: rgba(76, 157, 255, 0.65); --seat-deep: #112443; }
+.seat-3 { --seat: #a565ff; --seat-hi: #e4d0ff; --seat-glow: rgba(165, 101, 255, 0.65); --seat-deep: #27154a; }
+
+.plate.badge,
+.plate.badge.active,
+.plate.badge.targetable,
+.plate.badge.defending,
+.plate.badge.aim {
+  gap: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  animation: none;
+}
+
+.medal {
+  position: relative;
+  z-index: 1;
+  width: 78px;
+  height: 78px;
+  flex: none;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 32%, var(--seat-deep), #090b10 78%);
+  border: 3px solid var(--seat);
+  box-shadow: 0 0 0 2px #07080c, 0 0 0 4px rgba(217, 180, 95, 0.55), 0 0 18px var(--seat-glow), inset 0 0 16px rgba(0, 0, 0, 0.75);
+  transition: box-shadow 0.25s;
+}
+
+.medal .pname {
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--seat-hi);
+  line-height: 1.1;
+}
+
+.medal .life {
+  min-width: 0;
+  font-size: 31px;
+  font-weight: 800;
+  line-height: 1;
+  color: #f6ecd2;
+  font-variant-numeric: lining-nums;
+  text-shadow: 0 2px 0 #000, 0 0 10px var(--seat-glow);
+}
+
+.badge .plate-info {
+  margin-left: -16px;
+  padding: 6px 12px 6px 24px;
+  min-height: 52px;
+  justify-content: center;
+  background: var(--panel-fill);
+  border: 1.5px solid var(--seat);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.badge .counts {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 10px;
+}
+
+.stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #d3d8e2;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.stat svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: #9aa2b3;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.stat-mana {
+  color: var(--gilt-hi);
+}
+
+.stat-mana svg {
+  stroke: var(--gilt);
+}
+
+/* whose turn, who holds priority, who can be picked, who's being attacked — all on the medallion */
+.badge.active .medal {
+  box-shadow: 0 0 0 2px #07080c, 0 0 0 4px var(--gilt-hi), 0 0 26px var(--seat-glow), inset 0 0 16px rgba(0, 0, 0, 0.75);
+}
+
+.badge.priority .medal {
+  box-shadow: 0 0 0 2px #07080c, 0 0 0 4px var(--arc-blue-hi), 0 0 26px rgba(70, 160, 255, 0.85), inset 0 0 16px rgba(0, 0, 0, 0.75);
+}
+
+.badge.targetable .medal {
+  animation: medal-call 1.2s ease-in-out infinite;
+}
+
+@keyframes medal-call {
+  0%, 100% { box-shadow: 0 0 0 2px #07080c, 0 0 0 4px var(--gilt-hi), 0 0 18px rgba(245, 220, 154, 0.6), inset 0 0 16px rgba(0, 0, 0, 0.75); }
+  50% { box-shadow: 0 0 0 2px #07080c, 0 0 0 5px var(--gilt-hi), 0 0 34px rgba(245, 220, 154, 0.95), inset 0 0 16px rgba(0, 0, 0, 0.75); }
+}
+
+.badge.defending .medal,
+.badge.aim .medal {
+  animation: none;
+  box-shadow: 0 0 0 2px #07080c, 0 0 0 4px var(--arc-red), 0 0 30px rgba(236, 74, 50, 0.9), inset 0 0 16px rgba(0, 0, 0, 0.75);
+}
+
+.badge.aim {
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+.plate.struck .medal {
+  animation: plate-flash 0.6s ease-out;
+}
+
+/* ---- You (Player): fixed at the bottom left, life on a red shield ---- */
+.plate.you-panel {
+  left: 14px !important;
+  top: auto !important;
+  bottom: 14px;
+  transform: none;
+  width: 236px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.you-title {
+  text-align: center;
+  font-family: var(--display);
+  font-size: 19px;
+  font-weight: 700;
+  color: #f3ead6;
+  padding: 2px 8px 3px;
+  background: linear-gradient(180deg, #232a37, #0f1219);
+  border: 1.5px solid var(--gilt);
+  border-radius: 6px 6px 0 0;
+  text-shadow: 0 1px 0 #000;
+}
+
+.you-body {
+  display: flex;
+  align-items: flex-start;
+  min-height: 84px;
+  background: var(--panel-fill);
+  border: 1.5px solid rgba(217, 180, 95, 0.5);
+  border-top: none;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+}
+
+.you-panel .life {
+  position: relative;
+  z-index: 1;
+  width: 92px;
+  height: 100px;
+  margin: 0 4px -18px 8px;
+  display: grid;
+  place-items: center;
+  padding-bottom: 12px;
+  font-size: 46px;
+  font-weight: 800;
+  color: #fff4e2;
+  font-variant-numeric: lining-nums;
+  text-shadow: 0 2px 0 #4a0b06, 0 0 12px rgba(255, 140, 100, 0.5);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 40%),
+    linear-gradient(180deg, #d9452c, #8c1a12);
+  clip-path: polygon(0 0, 100% 0, 100% 76%, 50% 100%, 0 76%);
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.6));
+}
+
+.you-panel .plate-info {
+  flex: 1;
+  padding: 10px 12px 8px 4px;
+  gap: 6px;
+}
+
+.you-panel .counts {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 6px 14px;
+}
+
+.you-panel .stat {
+  font-size: 19px;
+}
+
+.you-panel .stat svg {
+  width: 19px;
+  height: 19px;
+}
+
+.you-panel.priority .you-title {
+  border-color: var(--arc-blue-hi);
+  box-shadow: 0 0 16px rgba(70, 160, 255, 0.7);
+}
+
+.you-panel.targetable .you-body,
+.you-panel.targetable .you-title {
+  border-color: var(--gilt-hi);
+  box-shadow: 0 0 22px rgba(245, 220, 154, 0.7);
+}
+
+.plate.you-panel.targetable {
+  animation: none;
+  box-shadow: none;
+}
+
+.plate.you-panel.struck {
+  animation: you-jolt 0.6s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.plate.you-panel.struck .life {
+  animation: plate-flash 0.6s ease-out;
+}
+
+@keyframes you-jolt {
+  8% { transform: translate(var(--jolt), calc(var(--jolt) * -0.5)) rotate(-2deg); }
+  22% { transform: translate(calc(var(--jolt) * -0.7), calc(var(--jolt) * 0.3)) rotate(1.5deg); }
+  45% { transform: translate(calc(var(--jolt) * 0.3), 0); }
+  100% { transform: none; }
+}
+
+/* ---- The Stack: a violet-framed panel at the right, cards in a row, the next to resolve first and lit ---- */
+.stack-panel {
+  position: absolute;
+  right: 18px;
+  top: 30%;
+  width: auto;
+  max-width: min(560px, 46vw);
+  display: none;
+  flex-direction: column;
+  gap: 0;
+  align-self: auto;
+  background: linear-gradient(180deg, rgba(22, 20, 38, 0.95), rgba(10, 10, 18, 0.95));
+  border: 1.5px solid rgba(160, 100, 255, 0.85);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7), 0 0 26px rgba(140, 90, 255, 0.35), 0 18px 50px rgba(0, 0, 0, 0.6);
+}
+
+.stack-panel.show {
+  display: flex;
+}
+
+/* gilt corner brackets */
+.stack-panel::before,
+.stack-panel::after {
+  content: '';
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--gilt);
+  pointer-events: none;
+}
+
+.stack-panel::before {
+  left: 4px;
+  bottom: 4px;
+  border-right: none;
+  border-top: none;
+  border-radius: 0 0 0 6px;
+}
+
+.stack-panel::after {
+  right: 4px;
+  bottom: 4px;
+  border-left: none;
+  border-top: none;
+  border-radius: 0 0 6px 0;
+}
+
+.stack-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 12px 5px;
+  background: linear-gradient(180deg, rgba(40, 32, 70, 0.9), rgba(18, 16, 32, 0.9));
+  border-bottom: 1px solid rgba(160, 100, 255, 0.5);
+  border-radius: 6px 6px 0 0;
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+  color: inherit;
+}
+
+.stack-title {
+  font-family: var(--display);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--arc-purple-hi);
+  text-shadow: 0 0 10px rgba(160, 100, 255, 0.6);
+}
+
+.stack-count {
+  margin-left: auto;
+  font-family: var(--display);
+  font-variant-numeric: lining-nums;
+  font-size: 14px;
+  font-weight: 700;
+  color: #a99fc4;
+}
+
+.stack-cards {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px 8px;
+  overflow-x: auto;
+}
+
+.stack-card {
+  flex: none;
+  width: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: default;
+}
+
+.stack-face {
+  width: 96px;
+  aspect-ratio: 488 / 680;
+  border-radius: 6px;
+  background: #15131f center / cover no-repeat;
+  border: 2px solid rgba(120, 110, 150, 0.6);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  font-family: var(--display);
+  font-size: 12px;
+  text-align: center;
+  color: #d8d0ea;
+}
+
+.stack-card.ability .stack-face {
+  border-color: rgba(165, 101, 255, 0.85);
+  box-shadow: 0 0 12px rgba(165, 101, 255, 0.5), 0 6px 14px rgba(0, 0, 0, 0.6);
+}
+
+.stack-card.top .stack-face {
+  border-color: var(--arc-blue-hi);
+  box-shadow: 0 0 16px rgba(80, 170, 255, 0.85), 0 6px 14px rgba(0, 0, 0, 0.6);
+}
+
+.stack-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #b4abcc;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stack-card.top .stack-tag {
+  color: var(--arc-blue-hi);
+}
+
+.stack-more {
+  align-self: center;
+  padding: 0 6px;
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
+  color: #a99fc4;
+}
+
+.stack-text {
+  padding: 0 16px 12px;
+  max-width: 420px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #e4def0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---- the game HUD only exists during a game: menus and setup show over the bare arena ---- */
+body:not(.in-game) .phase-wrap,
+body:not(.in-game) .prompt,
+body:not(.in-game) .corner-menu,
+body:not(.in-game) .view-bar,
+body:not(.in-game) .stack-panel,
+body:not(.in-game) .plate {
+  display: none !important;
+}
+
+/* the "Attacking" tag over the defending player's badge */
+.plate.defending::after {
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  background: linear-gradient(180deg, #f0583c, #a82418);
+  border: 1px solid #ffb08f;
+  box-shadow: 0 0 12px rgba(236, 74, 50, 0.7);
+}
+
+.plate.badge.defending::after {
+  top: -26px;
+  left: 39px;
+}
+
+/* ---- dialogs: picks in arcane blue, like the design's Selected frame ---- */
+.choice-item.picked,
+.thumb.picked {
+  border-color: var(--arc-blue-hi);
+  box-shadow: 0 0 18px rgba(80, 170, 255, 0.8);
+}
+
+.order-badge {
+  background: linear-gradient(180deg, #5aa8ff, #1d5ad0);
+  color: #fff;
+  border: 1.5px solid var(--gilt-hi);
+  font-family: var(--display);
+  font-variant-numeric: lining-nums;
+}
+
+.implied .order-badge {
+  background: rgba(13, 18, 30, 0.9);
+  border: 2px dashed var(--arc-blue-hi);
+  color: var(--arc-blue-hi);
+}
+
+/* the hover zoom's P/T notes sit under the card (the top-left belongs to a player's badge) */
+.zoom-stats {
+  bottom: auto;
+  top: calc(100% + 10px);
+}

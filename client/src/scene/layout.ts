@@ -66,7 +66,7 @@ export const HAND = {
   distance: 26,
   baseY: -7.15,
   radius: 45,
-  fitAngle: 30,
+  fitAngle: 24,
   maxDelta: 3.6,
   scale: 0.98,
   overlapTilt: -7,

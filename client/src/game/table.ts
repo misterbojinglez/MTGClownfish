@@ -3,7 +3,7 @@ import gsap from 'gsap';
 import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
 import { avatarAnchor, computeLayout, libraryAnchor, seatAt, seatFrames, seatRotation, type Placement } from '../scene/layout';
-import { Arrows, colorFor, floatText, Fx } from '../scene/fx';
+import { Arrows, colorFor, floatText, Fx, type LinkMark } from '../scene/fx';
 import { Magic } from '../scene/magic';
 import { sfx } from '../audio';
 import type { Stage } from '../scene/stage';
@@ -74,6 +74,8 @@ export class Table {
   /** the arrow drawn while dragging an attacker or blocker toward its target */
   private readonly aimArrows: Arrows;
   private aimCard: number | null = null;
+  /** spells on the stack that have tucked away into the Stack panel (hidden until they leave the stack) */
+  private readonly tucked = new Set<number>();
   private readonly libraries = new Map<number, THREE.Mesh>();
   private readonly flying = new Set<number>();
   /** cards in flight, resolving when each lands (effects on a card wait for it to arrive) */
@@ -97,6 +99,7 @@ export class Table {
   reset(): void {
     for (const c of this.cards.values()) c.dispose();
     this.cards.clear();
+    this.tucked.clear();
     for (const m of this.libraries.values()) m.removeFromParent();
     this.libraries.clear();
     this.state = null;
@@ -187,7 +190,15 @@ export class Table {
       if (!target) continue;
       const before = snapshots.get(id);
       const zoneChanged = before && before.zone !== obj.state.zone;
-      if (zoneChanged) tasks.push(this.fly(obj, before.zone, obj.state.zone, target));
+      // the Stack panel shows what's on the stack: a spell flies toward it, then tucks away into it;
+      // leaving the stack, it shows again on its way to wherever it goes
+      if (obj.state.zone !== 'Stack' && this.tucked.delete(id)) {
+        gsap.killTweensOf(obj.root.scale);
+        obj.root.visible = true;
+        obj.root.scale.setScalar(target.scale);
+      }
+      if (zoneChanged && obj.state.zone === 'Stack') tasks.push(this.fly(obj, before.zone, obj.state.zone, target).then(() => this.tuckIntoStack(obj)));
+      else if (zoneChanged) tasks.push(this.fly(obj, before.zone, obj.state.zone, target));
       else if (fromLibrary.has(id)) tasks.push(this.fly(obj, 'Library' as ZoneName, obj.state.zone, target));
       else if (!this.flying.has(id)) this.settle(obj, target, before ? 0.28 : 0);
     }
@@ -337,8 +348,23 @@ export class Table {
     return m;
   }
 
+  /** A spell that reached the stack shrinks away into the Stack panel (which shows it from then on). */
+  private tuckIntoStack(obj: CardObject): void {
+    if (obj.state.zone !== 'Stack') return;
+    // from here on, reflows leave it alone (see settle) until it leaves the stack
+    this.tucked.add(obj.id);
+    gsap.killTweensOf(obj.root.scale);
+    gsap.to(obj.root.scale, {
+      x: 0.01, y: 0.01, z: 0.01, duration: 0.35 / this.timeScale, delay: 0.25 / this.timeScale, ease: 'power2.in',
+      onComplete: () => {
+        if (obj.state.zone === 'Stack') obj.root.visible = false;
+      },
+    });
+  }
+
   /** Tween a card to its placement within its current space (reflow, tap, hover). */
   private settle(obj: CardObject, p: Placement, duration: number): void {
+    if (this.tucked.has(obj.id) && obj.state.zone === 'Stack') return;
     obj.setSpace(p.space === 'table');
     const parent = this.parentFor(p.space);
     if (obj.root.parent !== parent) parent.attach(obj.root);
@@ -1033,13 +1059,13 @@ export class Table {
   private refreshArrows(): void {
     const s = this.state;
     if (!s) return;
-    const arrows: { from: THREE.Vector3; to: THREE.Vector3; color: string }[] = [];
+    const arrows: { from: THREE.Vector3; to: THREE.Vector3; color: string; mark?: LinkMark }[] = [];
     for (const a of s.combat ?? []) {
       const from = this.layoutWorld(a.attacker);
       if (!from) continue;
       const pid = a.defender?.player;
       const to = pid != null ? this.playerWorld(pid) : a.defender?.card != null ? this.layoutWorld(a.defender.card) : null;
-      if (to && a.blockers.length === 0) arrows.push({ from, to, color: '#ff4a3a' });
+      if (to && a.blockers.length === 0) arrows.push({ from, to, color: '#ff5a2a', mark: 'fire' });
       for (const b of a.blockers) {
         const bw = this.layoutWorld(b);
         if (bw) arrows.push({ from: bw, to: from, color: '#7fc4ff' });
@@ -1050,7 +1076,9 @@ export class Table {
       const from = this.layoutWorld(top.source);
       for (const t of top.targets) {
         const to = t?.card != null ? this.layoutWorld(t.card) : t?.player != null ? this.playerWorld(t.player) : null;
-        if (from && to) arrows.push({ from, to, color: '#ffcf4a' });
+        // the design's target links: blue for a spell, violet for an ability or trigger
+        const ability = !!top.ability || !!top.trigger;
+        if (from && to) arrows.push({ from, to, color: ability ? '#b07aff' : '#4ea8ff', mark: ability ? 'sigil-violet' : 'sigil-blue' });
       }
     }
     this.arrows.set(arrows);
@@ -1103,7 +1131,7 @@ export class Table {
   /** Draw the drag arrow from a creature to a point (snapped to the target when there is one), or clear it. */
   showAim(from: number | null, to: THREE.Vector3 | null, kind: 'attack' | 'block', targetCard: number | null): void {
     const start = from != null ? this.cardWorld(from) : null;
-    this.aimArrows.set(start && to ? [{ from: start, to, color: kind === 'attack' ? '#ff4a3a' : '#7fc4ff' }] : []);
+    this.aimArrows.set(start && to ? [{ from: start, to, color: kind === 'attack' ? '#ff5a2a' : '#7fc4ff' }] : []);
     if (targetCard !== this.aimCard) {
       const was = this.aimCard;
       this.aimCard = targetCard;

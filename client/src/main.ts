@@ -1,4 +1,5 @@
 import './style.css';
+import './theme.css';
 import * as THREE from 'three';
 import gsap from 'gsap';
 import { Bridge } from './net';
@@ -149,6 +150,8 @@ async function handle(msg: ServerMsg): Promise<void> {
       break;
     case 'gameStarted':
       inGame = true;
+      // the game HUD (phase tracker, buttons, stack) only shows during a game
+      document.body.classList.add('in-game');
       table.reset();
       director.reset();
       hud.setStack(null, -1);
@@ -296,6 +299,7 @@ let inGame = false;
 /** Leave the game: stop it on the bridge, clear the table, and go back to the main menu. */
 function exitToMenu(): void {
   inGame = false;
+  document.body.classList.remove('in-game');
   bridge.endGame();
   queue.length = 0;
   table.reset();
@@ -365,6 +369,7 @@ hud.bind({
   },
   passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
   concede: () => bridge.act({ action: 'concede' }),
+  undo: () => bridge.act({ action: 'undo' }),
   exitToMenu: () => exitToMenu(),
 });
 

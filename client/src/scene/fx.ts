@@ -284,12 +284,19 @@ export class Arrows {
     stage.onTick((_, t) => (this.material.uniforms.uTime.value = t));
   }
 
-  set(arrows: { from: THREE.Vector3; to: THREE.Vector3; color: string }[]): void {
+  set(arrows: { from: THREE.Vector3; to: THREE.Vector3; color: string; mark?: LinkMark }[]): void {
     for (const child of [...this.group.children]) {
       child.removeFromParent();
-      (child as THREE.Mesh).geometry.dispose();
+      const mesh = child as THREE.Mesh;
+      mesh.geometry.dispose();
+      // marks carry their own material (the ribbons share one)
+      if (mesh.material !== this.material) (mesh.material as THREE.Material).dispose();
     }
-    for (const a of arrows) this.group.add(this.build(a.from, a.to, a.color));
+    for (const a of arrows) {
+      this.group.add(this.build(a.from, a.to, a.color));
+      // the design's target-link marks: a fire ring where an attack lands, a sigil under a spell's target
+      if (a.mark) this.group.add(linkMark(a.mark, a.to));
+    }
   }
 
   private build(from: THREE.Vector3, to: THREE.Vector3, color: string): THREE.Mesh {
@@ -330,6 +337,99 @@ export class Arrows {
     mesh.frustumCulled = false;
     return mesh;
   }
+}
+
+/** What marks the end of a target link: an attack's fire ring, a spell's blue sigil, an ability's violet one. */
+export type LinkMark = 'fire' | 'sigil-blue' | 'sigil-violet';
+
+const markTextures = new Map<LinkMark, THREE.Texture>();
+
+/** Draw a mark once: a flaming ring, or a ringed hexagram with runes, glowing on black (added additively). */
+function markTexture(kind: LinkMark): THREE.Texture {
+  const cached = markTextures.get(kind);
+  if (cached) return cached;
+  const size = 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const g = cv.getContext('2d')!;
+  const c = size / 2;
+  g.translate(c, c);
+  if (kind === 'fire') {
+    // a ring of flame: a hot core stroke with ragged licks around it
+    for (let i = 0; i < 90; i++) {
+      const a = (i / 90) * Math.PI * 2;
+      const r = 92 + Math.sin(i * 1.7) * 6;
+      const len = 10 + Math.random() * 22;
+      const grad = g.createLinearGradient(Math.cos(a) * r, Math.sin(a) * r, Math.cos(a) * (r + len), Math.sin(a) * (r + len));
+      grad.addColorStop(0, 'rgba(255,170,60,0.9)');
+      grad.addColorStop(1, 'rgba(255,60,20,0)');
+      g.strokeStyle = grad;
+      g.lineWidth = 6;
+      g.beginPath();
+      g.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+      g.lineTo(Math.cos(a + 0.05) * (r + len), Math.sin(a + 0.05) * (r + len));
+      g.stroke();
+    }
+    g.shadowColor = 'rgba(255,120,40,1)';
+    g.shadowBlur = 18;
+    g.strokeStyle = 'rgba(255,200,120,1)';
+    g.lineWidth = 7;
+    g.beginPath();
+    g.arc(0, 0, 90, 0, Math.PI * 2);
+    g.stroke();
+  } else {
+    const col = kind === 'sigil-blue' ? '120,190,255' : '185,130,255';
+    g.shadowColor = `rgba(${col},1)`;
+    g.shadowBlur = 12;
+    g.strokeStyle = `rgba(${col},1)`;
+    g.lineWidth = 4;
+    for (const r of [112, 100, 46]) {
+      g.beginPath();
+      g.arc(0, 0, r, 0, Math.PI * 2);
+      g.stroke();
+    }
+    // hexagram: two triangles
+    g.lineWidth = 3.5;
+    for (const rot of [0, Math.PI / 3]) {
+      g.beginPath();
+      for (let k = 0; k <= 3; k++) {
+        const a = rot + (k / 3) * Math.PI * 2 - Math.PI / 2;
+        const x = Math.cos(a) * 98;
+        const y = Math.sin(a) * 98;
+        if (k === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    // rune ticks between the outer rings
+    g.lineWidth = 2;
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      g.beginPath();
+      g.moveTo(Math.cos(a) * 102, Math.sin(a) * 102);
+      g.lineTo(Math.cos(a + 0.08) * 110, Math.sin(a + 0.08) * 110);
+      g.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  markTextures.set(kind, tex);
+  return tex;
+}
+
+/** A target-link mark lying on the table at a point, slowly turning (the fire ring the other way). */
+function linkMark(kind: LinkMark, at: THREE.Vector3): THREE.Mesh {
+  const mat = new THREE.MeshBasicMaterial({ map: markTexture(kind), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95 });
+  const size = kind === 'fire' ? 4.6 : 4.2;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(at.x, 0.06, at.z);
+  mesh.renderOrder = 19;
+  const spin = kind === 'fire' ? -0.9 : 0.35;
+  mesh.onBeforeRender = () => {
+    mesh.rotation.z += spin * 0.016;
+  };
+  return mesh;
 }
 
 /** Damage / life numbers that pop at a screen position and drift up. */

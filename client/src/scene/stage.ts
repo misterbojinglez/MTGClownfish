@@ -11,6 +11,11 @@ export const CAMERA_FOV = 34;
 const CAMERA_POS = new THREE.Vector3(0, 47.5, 18);
 const CAMERA_TARGET = new THREE.Vector3(0, 0, 0.71);
 const DESIGN_ASPECT = 16 / 9;
+/** Where the arena floor painting's glowing ring sits: radius as a share of the image width, centre up from the bottom. */
+const FLOOR_RING_RADIUS = 0.121;
+const FLOOR_RING_V = 0.589;
+/** width / height of the floor painting */
+const FLOOR_ASPECT = 2752 / 1536;
 
 /**
  * Where the camera looks: a point on the table, the compass direction it looks from (yaw 0 = from your
@@ -203,6 +208,9 @@ export class Stage {
     u.uMats.value = list;
     u.uMatCount.value = Math.min(4, mats.length);
     u.uCircle.value.set(circle.x, circle.z, circle.r);
+    // the floor painting's glowing ring (12.1% of its width) lands on the table's ritual circle
+    const floorW = circle.r / FLOOR_RING_RADIUS;
+    u.uFloorRect.value.set(circle.x, circle.z, floorW, floorW / FLOOR_ASPECT);
     let minX = -34, maxX = 34, minZ = -26, maxZ = 26;
     for (const m of mats) {
       minX = Math.min(minX, m.x - 6);
@@ -329,6 +337,10 @@ export class Stage {
         uMats: { value: [new THREE.Vector4(-21.8, -0.6, 21.8, 10.6), new THREE.Vector4(-21.8, -12.6, 21.8, -1.9), new THREE.Vector4(), new THREE.Vector4()] },
         uMatCount: { value: 2 },
         uCircle: { value: new THREE.Vector3(0, -1.25, 9) },
+        // the painted arena floor: centre x/z of its ritual ring, and its world width/height
+        uFloor: { value: null as THREE.Texture | null },
+        uFloorRect: { value: new THREE.Vector4(0, -1.25, 9 / FLOOR_RING_RADIUS, 9 / FLOOR_RING_RADIUS / FLOOR_ASPECT) },
+        uHasFloor: { value: 0 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv; varying vec3 vWorld;
@@ -343,6 +355,9 @@ export class Stage {
         uniform vec4 uMats[4];
         uniform int uMatCount;
         uniform vec3 uCircle;
+        uniform sampler2D uFloor;
+        uniform vec4 uFloorRect;
+        uniform float uHasFloor;
         varying vec2 vUv; varying vec3 vWorld;
         float box(vec2 p, vec4 b) { return step(b.x, p.x) * step(p.x, b.z) * step(b.y, p.y) * step(p.y, b.w); }
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -368,6 +383,15 @@ export class Stage {
           float spokes = smoothstep(0.03, 0.0, abs(sin(atan(c.y, c.x) * 6.0 + uTime * 0.05))) * step(3.2, d) * step(d, 8.4);
           stone += (glyph + spokes * 0.35) * vec3(0.35, 0.24, 0.85) * 0.45 * pulse;
 
+          // the painted arena floor over the procedural stone, its ring on the table's circle; the painting
+          // fades into darker stone past its edges so the arena never ends in a hard line
+          if (uHasFloor > 0.5) {
+            vec2 fuv = vec2(0.5 + (p.x - uFloorRect.x) / uFloorRect.z, ${FLOOR_RING_V.toFixed(3)} - (p.y - uFloorRect.y) / uFloorRect.w);
+            vec3 floorCol = texture2D(uFloor, clamp(fuv, 0.0, 1.0)).rgb;
+            float inside = smoothstep(0.0, 0.06, fuv.x) * smoothstep(1.0, 0.94, fuv.x) * smoothstep(0.0, 0.08, fuv.y) * smoothstep(1.0, 0.92, fuv.y);
+            stone = mix(stone * 0.35, floorCol * 0.92, inside);
+          }
+
           // player mats: slightly darker inset with a thin gilt edge
           float mat = 0.0, edge = 0.0;
           for (int i = 0; i < 4; i++) {
@@ -376,18 +400,25 @@ export class Stage {
             mat = max(mat, m);
             edge = max(edge, m * (1.0 - box(p, uMats[i] + vec4(0.15, 0.15, -0.15, -0.15))));
           }
-          stone = mix(stone, stone * 0.72, mat * 0.6);
-          stone += edge * vec3(0.55, 0.42, 0.2) * 0.6;
+          stone = mix(stone, stone * 0.82, mat * 0.5);
+          stone += edge * vec3(0.62, 0.48, 0.24) * 0.75;
 
-          // light pool + vignette (wider for a multiplayer table)
-          vec2 lp = p - (uMatCount > 2 ? vec2(0.0) : vec2(-3.0, 2.0));
-          float pool = exp(-dot(lp, lp) * (uMatCount > 2 ? 0.0009 : 0.0022));
-          stone *= 0.55 + 0.9 * pool;
-          stone += vec3(0.05, 0.03, 0.01) * pool;
+          if (uHasFloor < 0.5) {
+            // light pool + vignette (wider for a multiplayer table)
+            vec2 lp = p - (uMatCount > 2 ? vec2(0.0) : vec2(-3.0, 2.0));
+            float pool = exp(-dot(lp, lp) * (uMatCount > 2 ? 0.0009 : 0.0022));
+            stone *= 0.55 + 0.9 * pool;
+            stone += vec3(0.05, 0.03, 0.01) * pool;
+          }
           gl_FragColor = vec4(stone, 1.0);
-          #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,
+    });
+    new THREE.TextureLoader().load('/table-floor.jpg', (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      this.tableMaterial.uniforms.uFloor.value = tex;
+      this.tableMaterial.uniforms.uHasFloor.value = 1;
     });
     const table = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), this.tableMaterial);
     table.rotation.x = -Math.PI / 2;
