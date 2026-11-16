@@ -77,6 +77,8 @@ export interface PlayerState {
   };
   commanderDamage?: Record<string, number>;
   commanders?: number[];
+  /** exiled cards (in anyone's exile) this player has been allowed to play: impulse draw, Tinybones' stash, adventures */
+  exilePlayable?: number[];
   /** commanders' combined colour identity in WUBRG order ("" colourless); absent outside Commander */
   identity?: string;
 }

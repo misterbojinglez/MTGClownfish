@@ -47,6 +47,19 @@ const OPP_REGIONS = {
 
 type Regions = typeof LOCAL_REGIONS;
 
+/**
+ * Your side while cards you may play from exile are laid out along the bottom of your mat: the lands and other
+ * permanents' row gets shorter to make room for the band (EXILE_STRIP).
+ */
+const LOCAL_REGIONS_WITH_EXILE = {
+  creatures: LOCAL_REGIONS.creatures,
+  lands: { rect: { x: 1.5, z: 5.3, w: 19.5, h: 2.9 }, scales: [0.8, 0.75, 0.7, 0.6, 0.5], gutter: 0.45 },
+  other: { rect: { x: -21, z: 5.3, w: 19.5, h: 2.9 }, scales: [0.8, 0.75, 0.7, 0.6, 0.5], gutter: 0.45 },
+} satisfies Record<string, RegionSpec>;
+
+/** The band along the bottom of your mat (just above your hand) for cards you may play from exile. */
+const EXILE_STRIP = { x: -19.5, z: 8.45, w: 40.5, h: 2.1, scale: 0.62, gutter: 0.4 };
+
 /** Pile anchors per seat (graveyard, exile, library, command). */
 const LOCAL_PILES = {
   library: new THREE.Vector3(23.4, 0, 6.6),
@@ -247,8 +260,12 @@ export function computeLayout(
   const seats = seatsFor(state, localId);
   const flat = new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ');
 
+  const localSeat = seats.find((s) => s.local);
+  const strip = localSeat ? (localSeat.player.exilePlayable ?? []).filter((id) => cards[id]?.zone === 'Exile') : [];
+
   for (const seat of seats) {
     const p = seat.player;
+    const regions: Regions = seat.local && strip.length ? LOCAL_REGIONS_WITH_EXILE : seat.regions;
     // ---- battlefield ----
     const attachments = new Map<number, number[]>();
     for (const id of p.zones.Battlefield) {
@@ -283,7 +300,7 @@ export function computeLayout(
     }
 
     for (const cat of ['creatures', 'lands', 'other'] as const) {
-      const region = seat.regions[cat];
+      const region = regions[cat];
       const cols = groups[cat];
       if (cols.length === 0) continue;
       const stackExtra = (col: Column) => Math.min(col.ids.length - 1, 3) * 0.32;
@@ -392,7 +409,37 @@ export function computeLayout(
     });
   });
 
+  // ---- cards you may play from exile, laid out along the bottom of your mat (wherever their owner's exile is) ----
+  if (localSeat && strip.length) {
+    const { start, step } = stripSpacing(strip.length);
+    strip.forEach((id, i) => {
+      const local = new THREE.Vector3(start + step * i, 0.03 + i * 0.004, EXILE_STRIP.z + EXILE_STRIP.h / 2);
+      const rot = flat.clone();
+      rot.y = localSeat.rotY;
+      out.set(id, { space: 'table', pos: seatToWorld(localSeat, local), rot, scale: EXILE_STRIP.scale, faceUp: true, order: i });
+    });
+  }
+
   return out;
+}
+
+/** The band's card centres: centred, spaced out, overlapping like a fanned row when there are too many. */
+function stripSpacing(n: number): { start: number; step: number } {
+  const w = CARD_W * EXILE_STRIP.scale;
+  const natural = n * w + (n - 1) * EXILE_STRIP.gutter;
+  const step = natural > EXILE_STRIP.w ? (EXILE_STRIP.w - w) / Math.max(1, n - 1) : w + EXILE_STRIP.gutter;
+  const start = EXILE_STRIP.x + (EXILE_STRIP.w - (step * (n - 1) + w)) / 2 + w / 2;
+  return { start, step };
+}
+
+/** Where the "Playable from exile" label sits (just above the band's first card), or null when it's empty. */
+export function exileStripAnchor(state: GameState, localId: number): THREE.Vector3 | null {
+  const seat = seatsFor(state, localId).find((s) => s.local);
+  const n = (seat?.player.exilePlayable ?? []).filter((id) => state.cards[id]?.zone === 'Exile').length;
+  if (!seat || n === 0) return null;
+  const { start } = stripSpacing(n);
+  const halfH = (CARD_H * EXILE_STRIP.scale) / 2;
+  return seatToWorld(seat, new THREE.Vector3(start - (CARD_W * EXILE_STRIP.scale) / 2, 0, EXILE_STRIP.z + EXILE_STRIP.h / 2 - halfH - 0.15));
 }
 
 /** Which of n fan slots lies nearest a hand card held at rig-space x (for reordering by drag). */

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import { Bridge } from './net';
 import type { CardState, GameState, RequestMsg, ServerMsg, UpdateMsg } from './protocol';
-import { stackKey } from './scene/layout';
+import { exileStripAnchor, stackKey } from './scene/layout';
 import { Stage } from './scene/stage';
 import { Table } from './game/table';
 import { Input, type AimTarget } from './game/input';
@@ -608,6 +608,19 @@ const input = new Input(stage, table, {
       }
       if (member) return;
     } else if (table.group.size) table.clearGroup();
+    // a card in your "playable from exile" band: played when it can be (or picked, when a choice wants it);
+    // otherwise the click does nothing (hover shows it), rather than opening its owner's exile pile
+    const meNow = table.state?.players.find((p) => p.id === table.localId);
+    if (meNow?.exilePlayable?.includes(id) && table.state?.cards[id]?.zone === 'Exile') {
+      if (button !== 1) return;
+      if (table.selection.actionable.includes(id)) {
+        armAutoPay();
+        bridge.act({ action: 'card', id, button });
+      } else if (table.selection.cards.includes(id)) {
+        bridge.act({ action: 'card', id, button });
+      }
+      return;
+    }
     // a graveyard or exile card you can't use right now opens that whole pile
     const pileCard = table.state?.cards[id];
     const usableNow = table.selection.cards.includes(id) || table.selection.actionable.includes(id);
@@ -748,7 +761,20 @@ stage.onTick(() => {
     if (w) screen.set(p.id, table.toScreen(new THREE.Vector3(w.x, w.y, w.z)));
   }
   hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers(), table.currentDefender());
+  // the "Playable from exile" label rides on the band's left end
+  const strip = inGame ? exileStripAnchor(table.shownState() ?? s, table.localId) : null;
+  if (strip) {
+    const at = table.toScreen(strip);
+    exileLabel.style.transform = `translate(${Math.round(at.x)}px, ${Math.round(at.y)}px) translateY(-100%)`;
+  }
+  exileLabel.classList.toggle('show', !!strip);
 });
+
+/** The label over the band of cards you may play from exile (Tinybones' stash, impulse draw). */
+const exileLabel = document.createElement('div');
+exileLabel.className = 'exile-label';
+exileLabel.textContent = 'Playable from exile';
+document.getElementById('hud')!.append(exileLabel);
 
 /**
  * How many cards a hovered battlefield stack holds ("5 in this stack"), and for lands how many of that land

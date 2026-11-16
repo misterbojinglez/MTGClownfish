@@ -94,6 +94,7 @@ public final class Serializer {
                         }
                         f.addProperty("identity", wubrg.toString());
                     }
+                    f.add("exilePlayable", exilePlayable(real));
                 }
             } catch (RuntimeException ignored) {
                 // view mid-update; the next snapshot carries it
@@ -101,7 +102,21 @@ public final class Serializer {
             LIVE_PLAYER.put(p.getId(), f);
         }
         final JsonObject facts = LIVE_PLAYER.get(p.getId());
-        if (facts != null) facts.entrySet().forEach(e -> o.add(e.getKey(), e.getValue()));
+        if (facts != null) {
+            for (final java.util.Map.Entry<String, JsonElement> e : facts.entrySet()) {
+                if (!"exilePlayable".equals(e.getKey())) {
+                    o.add(e.getKey(), e.getValue());
+                    continue;
+                }
+                // only the cards this viewer may see (an impulse-drawn card exiled face down is its player's secret)
+                final JsonArray seen = new JsonArray();
+                for (final JsonElement id : e.getValue().getAsJsonArray()) {
+                    final CardView cv = gv.getTracker() == null ? null : gv.getTracker().getObj(forge.trackable.TrackableTypes.CardViewType, id.getAsInt());
+                    if (cv != null && mayView.test(cv)) seen.add(id);
+                }
+                o.add("exilePlayable", seen);
+            }
+        }
         o.addProperty("lost", p.getHasLost());
         o.addProperty("priority", p.getHasPriority());
         o.addProperty("poison", p.getCounters(forge.game.card.CounterEnumType.POISON));
@@ -315,7 +330,44 @@ public final class Serializer {
     }
 
     /** A new game: nothing carried over (ids are reused). */
+    /** per player: the exiled cards they've been allowed to play, with the last of their own turns each was playable */
+    private static final java.util.Map<Integer, java.util.Map<Integer, Integer>> EXILE_PLAYABLE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The exiled cards (in anyone's exile) this player may play: impulse draw, Tinybones' stash, adventures. Some
+     * are only playable on their own turn (Tinybones), so cards stay listed between turns. Each is remembered with
+     * the last turn it was playable; on the player's own turn, once their first main phase is over, a card that
+     * hasn't been playable at any point that turn (an impulse draw that ran out) drops off. Forge clears and
+     * re-grants these permissions while it updates continuous effects, so a moment where nothing is playable
+     * must not empty the list. Anything that leaves exile goes. Game thread only.
+     */
+    private static JsonArray exilePlayable(final forge.game.player.Player player) {
+        final forge.game.Game game = player.getGame();
+        // counted in the player's own turns: the game's turn number moves on a moment before the turn passes to
+        // the next player, which would otherwise look like "your turn, and none of these playable this turn"
+        final int turn = player.getTurn();
+        final java.util.Set<Integer> inExile = new java.util.HashSet<>();
+        final java.util.Map<Integer, Integer> kept = EXILE_PLAYABLE.computeIfAbsent(player.getId(), k -> new java.util.LinkedHashMap<>());
+        final JsonArray out = new JsonArray();
+        synchronized (kept) {
+            for (final forge.game.player.Player owner : game.getPlayers()) {
+                for (final forge.game.card.Card c : owner.getCardsIn(ZoneType.Exile)) {
+                    inExile.add(c.getId());
+                    if (!c.mayPlay(player).isEmpty()) kept.put(c.getId(), turn);
+                }
+            }
+            kept.keySet().retainAll(inExile);
+            final forge.game.phase.PhaseType phase = game.getPhaseHandler().getPhase();
+            if (game.getPhaseHandler().isPlayerTurn(player) && phase != null && phase.isAfter(forge.game.phase.PhaseType.MAIN1)) {
+                kept.values().removeIf(t -> t != turn);
+            }
+            kept.keySet().forEach(out::add);
+        }
+        return out;
+    }
+
     static void resetLive() {
+        EXILE_PLAYABLE.clear();
         LIVE_PLAYER.clear();
         CANT_BLOCK.clear();
         LIVE_PT.clear();

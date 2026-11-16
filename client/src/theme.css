@@ -1192,3 +1192,25 @@ body:not(.in-game) .plate {
 .seat-edit:hover {
   color: var(--gilt-hi);
 }
+
+/* the label over the band of cards you may play from exile, on the bottom edge of your mat */
+.exile-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 8px;
+  font: 600 12px var(--display);
+  letter-spacing: 0.04em;
+  color: #e4d4ff;
+  background: rgba(40, 24, 70, 0.72);
+  border: 1px solid rgba(160, 120, 255, 0.55);
+  border-radius: 999px;
+  pointer-events: none !important;
+  opacity: 0;
+  transition: opacity 0.25s;
+  white-space: nowrap;
+}
+
+.exile-label.show {
+  opacity: 1;
+}
