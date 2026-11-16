@@ -82,6 +82,9 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             READY_X.put(me, readyX);
             PLAYABLE_TOP.put(me, playableTop);
             PREPARED_READY.put(me, preparedReady);
+            // and the live facts every snapshot carries (cards playable from exile, mana available): the
+            // snapshots sent while you decide are mostly built off the game thread, where they can't be worked out
+            Serializer.refreshLive(getGame());
             final boolean hold = sacrificeOutletReady() || playableTop >= 0 || !preparedReady.isEmpty() || (!readyX.isEmpty() && getGame().getStack().isEmpty());
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {

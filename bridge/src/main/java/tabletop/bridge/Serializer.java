@@ -77,29 +77,8 @@ public final class Serializer {
         // facts read from the live game (not its view) are worked out on the game thread only: reading them
         // elsewhere races the engine (with several people at the table, views update while it runs)
         if (onGameThread()) {
-            // Forge's game turn counts every player's turns; players think in their own ("my third turn")
-            final JsonObject f = new JsonObject();
-            try {
-                final forge.game.player.Player real = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
-                if (real != null) {
-                    f.addProperty("turns", real.getTurn());
-                    // what they could spend right now: untapped sources (net of activation costs) plus floating mana
-                    f.addProperty("manaAvailable", manaAvailable(real));
-                    // their commanders' combined colour identity, WUBRG order ("" for colourless); the table tints their mat's cracks
-                    final forge.card.ColorSet identity = real.getCommanderColorID();
-                    if (identity != null) {
-                        final StringBuilder wubrg = new StringBuilder();
-                        for (final byte color : forge.card.MagicColor.WUBRG) {
-                            if (identity.hasAnyColor(color)) { wubrg.append(forge.card.MagicColor.toShortString(color)); }
-                        }
-                        f.addProperty("identity", wubrg.toString());
-                    }
-                    f.add("exilePlayable", exilePlayable(real));
-                }
-            } catch (RuntimeException ignored) {
-                // view mid-update; the next snapshot carries it
-            }
-            LIVE_PLAYER.put(p.getId(), f);
+            final forge.game.player.Player real = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
+            if (real != null) refreshLive(real);
         }
         final JsonObject facts = LIVE_PLAYER.get(p.getId());
         if (facts != null) {
@@ -341,6 +320,40 @@ public final class Serializer {
      * re-grants these permissions while it updates continuous effects, so a moment where nothing is playable
      * must not empty the list. Anything that leaves exile goes. Game thread only.
      */
+    /**
+     * Works out a player's live-game facts (see LIVE_PLAYER). Game thread only. Snapshots are often built on
+     * the display thread, which reuses these, so they're also refreshed whenever a person gets priority
+     * (refreshLive(Game)): what's on screen while the game waits for you is never older than that.
+     */
+    static void refreshLive(final forge.game.player.Player real) {
+        final JsonObject f = new JsonObject();
+        try {
+            // Forge's game turn counts every player's turns; players think in their own ("my third turn")
+            f.addProperty("turns", real.getTurn());
+            // what they could spend right now: untapped sources (net of activation costs) plus floating mana
+            f.addProperty("manaAvailable", manaAvailable(real));
+            // their commanders' combined colour identity, WUBRG order ("" for colourless); the table tints their mat's cracks
+            final forge.card.ColorSet identity = real.getCommanderColorID();
+            if (identity != null) {
+                final StringBuilder wubrg = new StringBuilder();
+                for (final byte color : forge.card.MagicColor.WUBRG) {
+                    if (identity.hasAnyColor(color)) { wubrg.append(forge.card.MagicColor.toShortString(color)); }
+                }
+                f.addProperty("identity", wubrg.toString());
+            }
+            f.add("exilePlayable", exilePlayable(real));
+        } catch (RuntimeException ignored) {
+            // mid-update; the next refresh carries it
+        }
+        LIVE_PLAYER.put(real.getId(), f);
+    }
+
+    /** Every player's live facts at once (game thread only). */
+    static void refreshLive(final forge.game.Game game) {
+        if (game == null) return;
+        for (final forge.game.player.Player pl : game.getPlayers()) refreshLive(pl);
+    }
+
     private static JsonArray exilePlayable(final forge.game.player.Player player) {
         final forge.game.Game game = player.getGame();
         // counted in the player's own turns: the game's turn number moves on a moment before the turn passes to
