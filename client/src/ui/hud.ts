@@ -290,7 +290,9 @@ export class Hud {
     row.append(stay, concede, exit);
     panel.append(row);
     modal.append(panel);
-    modal.onclick = (e) => e.target === modal && close();
+    modal.onclick = (e) => {
+      if (e.target === modal) close();
+    };
     window.addEventListener('keydown', onKey, true);
     this.root.append(modal);
   }
@@ -382,7 +384,9 @@ export class Hud {
     row.append(later, pay);
     panel.append(row);
     modal.append(panel);
-    modal.onclick = (e) => e.target === modal && close();
+    modal.onclick = (e) => {
+      if (e.target === modal) close();
+    };
     window.addEventListener('keydown', onKey, true);
     this.root.append(modal);
     pay.focus();
@@ -838,7 +842,9 @@ export class Hud {
         input.value = req.initial ?? '';
         const b = h('button', 'main-btn wide', 'OK');
         b.onclick = () => done(input.value);
-        input.onkeydown = (e) => e.key === 'Enter' && done(input.value);
+        input.onkeydown = (e) => {
+          if (e.key === 'Enter') done(input.value);
+        };
         panel.append(input, b);
         setTimeout(() => input.focus(), 50);
       } else {

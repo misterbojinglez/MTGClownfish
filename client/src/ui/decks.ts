@@ -406,7 +406,9 @@ export class DeckSetup {
       actions.append(remove, cancel, ok);
       box.append(input, note, actions);
       modal.append(box);
-      modal.onclick = (e) => e.target === modal && close();
+      modal.onclick = (e) => {
+        if (e.target === modal) close();
+      };
       this.root.append(modal);
       input.focus();
     });
@@ -464,7 +466,9 @@ export class DeckSetup {
       actions.append(remove, cancel, go);
       box.append(area, keyLink, keyRow, result, actions);
       modal.append(box);
-      modal.onclick = (e) => e.target === modal && !go.disabled && close();
+      modal.onclick = (e) => {
+        if (e.target === modal && !go.disabled) close();
+      };
       this.root.append(modal);
       area.focus();
 

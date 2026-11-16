@@ -192,7 +192,9 @@ export class LobbyView {
         setPlayerName(name);
         this.bridge.lobbySeat({ name });
       };
-      input.onkeydown = (e) => e.key === 'Enter' && input.blur();
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') input.blur();
+      };
       // the name box only stretches inside a row (as on the single-player setup screen)
       const nameRow = h('div', 'seat-name-row');
       const pencil = h('span', 'seat-edit', '✎');
@@ -313,7 +315,9 @@ export function askName(root: HTMLElement, title: string, action: string): Promi
     actions.append(cancel, ok);
     box.append(input, actions);
     modal.append(box);
-    modal.onclick = (e) => e.target === modal && done(null);
+    modal.onclick = (e) => {
+      if (e.target === modal) done(null);
+    };
     root.append(modal);
     input.focus();
     input.select();
@@ -361,7 +365,12 @@ export function joinScreen(root: HTMLElement, prefill: string, message: string |
     onJoin(c, n);
   };
   go.onclick = submit;
-  for (const el of [name, code]) el.onkeydown = (e) => e.key === 'Enter' && submit();
+  // (a handler that returns false cancels the key, so these must not return the comparison)
+  for (const el of [name, code]) {
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter') submit();
+    };
+  }
   form.append(name, code, go);
   if (message) form.append(h('div', 'paste-bad', message));
   ov.append(form);
@@ -406,7 +415,9 @@ export function onlineChooser(root: HTMLElement, relay: string | null, onHost: (
       // friends' games are joined on the relay's page
       location.href = `${relay}/?join=${c}`;
     };
-    code.onkeydown = (e) => e.key === 'Enter' && join.click();
+    code.onkeydown = (e) => {
+      if (e.key === 'Enter') join.click();
+    };
     joinRow.append(code, join);
     box.append(joinRow);
   }
@@ -416,6 +427,8 @@ export function onlineChooser(root: HTMLElement, relay: string | null, onHost: (
   actions.append(cancel);
   box.append(actions);
   modal.append(box);
-  modal.onclick = (e) => e.target === modal && close();
+  modal.onclick = (e) => {
+    if (e.target === modal) close();
+  };
   root.append(modal);
 }
