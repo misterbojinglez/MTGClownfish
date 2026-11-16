@@ -23,18 +23,31 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
      * collided with the AI's own evaluation and killed the game thread (the game hung "Waiting for…").
      * These are worked out each time you get priority, on the game thread, and read when updates are sent.
      */
-    /** your battlefield cards with an X-targeted ability ready to use (Chthonian Nightmare) */
-    static volatile java.util.Set<Integer> readyX = java.util.Set.of();
-    /** the top card of your library, when you could play it right now (Bolas's Citadel), else -1 */
-    static volatile int playableTop = -1;
-    /** your prepared permanents whose waiting spell copy you could cast right now (Emeritus of Woe) */
-    static volatile java.util.Set<Integer> preparedReady = java.util.Set.of();
+    /* each per human seat (by player id), since several people can share a game online */
+    /** battlefield cards with an X-targeted ability ready to use (Chthonian Nightmare) */
+    private static final java.util.Map<Integer, java.util.Set<Integer>> READY_X = new java.util.concurrent.ConcurrentHashMap<>();
+    /** the top card of the player's library, when they could play it right now (Bolas's Citadel) */
+    private static final java.util.Map<Integer, Integer> PLAYABLE_TOP = new java.util.concurrent.ConcurrentHashMap<>();
+    /** prepared permanents whose waiting spell copy the player could cast right now (Emeritus of Woe) */
+    private static final java.util.Map<Integer, java.util.Set<Integer>> PREPARED_READY = new java.util.concurrent.ConcurrentHashMap<>();
 
-    /** battlefield cards Forge's scan misses that you could use now: X-targeted abilities, prepared spells */
-    static java.util.Set<Integer> readyCards() {
-        final java.util.Set<Integer> all = new java.util.HashSet<>(readyX);
-        all.addAll(preparedReady);
+    /** battlefield cards Forge's scan misses that this player could use now: X-targeted abilities, prepared spells */
+    static java.util.Set<Integer> readyCards(final int playerId) {
+        final java.util.Set<Integer> all = new java.util.HashSet<>(READY_X.getOrDefault(playerId, java.util.Set.of()));
+        all.addAll(PREPARED_READY.getOrDefault(playerId, java.util.Set.of()));
         return all;
+    }
+
+    /** The top of this player's library when they could play it right now, else -1. */
+    static int playableTop(final int playerId) {
+        return PLAYABLE_TOP.getOrDefault(playerId, -1);
+    }
+
+    /** A new game: nothing carried over from the last one (player ids are reused). */
+    static void resetAll() {
+        READY_X.clear();
+        PLAYABLE_TOP.clear();
+        PREPARED_READY.clear();
     }
 
     BridgeHumanPlayer(final String name) {
@@ -62,9 +75,13 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
         @Override
         public List<SpellAbility> chooseSpellAbilityToPlay() {
             // game thread: safe to evaluate abilities here; updates sent while you hold priority read these
-            readyX = java.util.Set.copyOf(readyXNow());
-            playableTop = libraryTopPlayable();
-            preparedReady = java.util.Set.copyOf(preparedNow());
+            final int me = getPlayer().getId();
+            final java.util.Set<Integer> readyX = java.util.Set.copyOf(readyXNow());
+            final int playableTop = libraryTopPlayable();
+            final java.util.Set<Integer> preparedReady = java.util.Set.copyOf(preparedNow());
+            READY_X.put(me, readyX);
+            PLAYABLE_TOP.put(me, playableTop);
+            PREPARED_READY.put(me, preparedReady);
             final boolean hold = sacrificeOutletReady() || playableTop >= 0 || !preparedReady.isEmpty() || (!readyX.isEmpty() && getGame().getStack().isEmpty());
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {

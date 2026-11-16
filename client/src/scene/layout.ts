@@ -194,6 +194,11 @@ export function tableMats(state: GameState, localId: number): THREE.Vector4[] {
   });
 }
 
+/** Each mat's commander colour identity, in tableMats order ("" colourless, undefined outside Commander). */
+export function matIdentities(state: GameState, localId: number): (string | undefined)[] {
+  return seatsFor(state, localId).map((seat) => seat.player.identity);
+}
+
 /** Whose side of the table a point belongs to: the seat whose footprint is nearest. */
 export function seatAt(state: GameState, localId: number, point: THREE.Vector3): number | null {
   let best: number | null = null;
@@ -388,6 +393,19 @@ export function computeLayout(
   });
 
   return out;
+}
+
+/** Which of n fan slots lies nearest a hand card held at rig-space x (for reordering by drag). */
+export function nearestHandSlot(n: number, x: number): number {
+  const delta = n > 1 ? Math.min(HAND.maxDelta, HAND.fitAngle / (n - 1)) : 0;
+  const start = (-delta * (n - 1)) / 2;
+  let best = 0;
+  for (let i = 1; i < n; i++) {
+    const xi = Math.sin(THREE.MathUtils.degToRad(start + delta * i)) * HAND.radius;
+    const xb = Math.sin(THREE.MathUtils.degToRad(start + delta * best)) * HAND.radius;
+    if (Math.abs(xi - x) < Math.abs(xb - x)) best = i;
+  }
+  return best;
 }
 
 /** How far a picked hand card rises (about a third of a card). */

@@ -5,3 +5,4 @@ dist/
 client/src-tauri/target/
 .DS_Store
 logs/
+.wrangler/

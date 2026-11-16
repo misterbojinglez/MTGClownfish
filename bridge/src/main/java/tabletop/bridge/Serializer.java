@@ -74,17 +74,34 @@ public final class Serializer {
         o.addProperty("name", p.getName());
         o.addProperty("ai", p.isAI());
         o.addProperty("life", p.getLife());
-        // Forge's game turn counts every player's turns; players think in their own ("my third turn")
-        try {
-            final forge.game.player.Player real = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
-            if (real != null) {
-                o.addProperty("turns", real.getTurn());
-                // what they could spend right now: untapped sources (net of activation costs) plus floating mana
-                o.addProperty("manaAvailable", manaAvailable(real));
+        // facts read from the live game (not its view) are worked out on the game thread only: reading them
+        // elsewhere races the engine (with several people at the table, views update while it runs)
+        if (onGameThread()) {
+            // Forge's game turn counts every player's turns; players think in their own ("my third turn")
+            final JsonObject f = new JsonObject();
+            try {
+                final forge.game.player.Player real = gv.getGame() == null ? null : gv.getGame().getPlayer(p);
+                if (real != null) {
+                    f.addProperty("turns", real.getTurn());
+                    // what they could spend right now: untapped sources (net of activation costs) plus floating mana
+                    f.addProperty("manaAvailable", manaAvailable(real));
+                    // their commanders' combined colour identity, WUBRG order ("" for colourless); the table tints their mat's cracks
+                    final forge.card.ColorSet identity = real.getCommanderColorID();
+                    if (identity != null) {
+                        final StringBuilder wubrg = new StringBuilder();
+                        for (final byte color : forge.card.MagicColor.WUBRG) {
+                            if (identity.hasAnyColor(color)) { wubrg.append(forge.card.MagicColor.toShortString(color)); }
+                        }
+                        f.addProperty("identity", wubrg.toString());
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // view mid-update; the next snapshot carries it
             }
-        } catch (RuntimeException ignored) {
-            // view mid-update; the next snapshot carries it
+            LIVE_PLAYER.put(p.getId(), f);
         }
+        final JsonObject facts = LIVE_PLAYER.get(p.getId());
+        if (facts != null) facts.entrySet().forEach(e -> o.add(e.getKey(), e.getValue()));
         o.addProperty("lost", p.getHasLost());
         o.addProperty("priority", p.getHasPriority());
         o.addProperty("poison", p.getCounters(forge.game.card.CounterEnumType.POISON));
@@ -113,7 +130,7 @@ public final class Serializer {
             putCard(cards, top, mayView);
             try {
                 // worked out on the game thread when you got priority (see BridgeHumanPlayer)
-                if (!p.isAI() && BridgeHumanPlayer.playableTop == top.getId()) {
+                if (!p.isAI() && BridgeHumanPlayer.playableTop(p.getId()) == top.getId()) {
                     zones.addProperty("LibraryTopPlayable", true);
                 }
             } catch (final RuntimeException ignored) {
@@ -217,14 +234,17 @@ public final class Serializer {
             o.add("keywords", kws);
         }
         if (s.isCreature() && c.getZone() == forge.game.zone.ZoneType.Battlefield) {
-            try {
-                final forge.game.Game game = SocketGuiGame.liveGame;
-                final forge.game.card.Card real = game == null ? null : game.findById(c.getId());
-                if (real != null && !forge.game.combat.CombatUtil.canBlock(real, true)) {
-                    o.addProperty("cantBlock", true);
+            if (onGameThread()) {
+                try {
+                    final forge.game.Game game = SocketGuiGame.liveGame;
+                    final forge.game.card.Card real = game == null ? null : game.findById(c.getId());
+                    if (real != null) CANT_BLOCK.put(c.getId(), !forge.game.combat.CombatUtil.canBlock(real, true));
+                } catch (final RuntimeException ignored) {
+                    // the game moved on mid-check; the next update will say
                 }
-            } catch (final RuntimeException ignored) {
-                // the game moved on mid-check; the next update will say
+            }
+            if (Boolean.TRUE.equals(CANT_BLOCK.get(c.getId()))) {
+                o.addProperty("cantBlock", true);
             }
         }
         if (s.isCreature() || s.hasPrintedPT()) {
@@ -250,6 +270,16 @@ public final class Serializer {
         if (c.getZone() != forge.game.zone.ZoneType.Battlefield) {
             return;
         }
+        if (onGameThread()) {
+            final JsonObject f = new JsonObject();
+            livePtBreakdown(f, c);
+            LIVE_PT.put(c.getId(), f);
+        }
+        final JsonObject f = LIVE_PT.get(c.getId());
+        if (f != null) f.entrySet().forEach(e -> o.add(e.getKey(), e.getValue()));
+    }
+
+    private static void livePtBreakdown(final JsonObject o, final CardView c) {
         try {
             final forge.game.Game game = SocketGuiGame.liveGame;
             final forge.game.card.Card real = game == null ? null : game.findById(c.getId());
@@ -268,6 +298,27 @@ public final class Serializer {
         } catch (final RuntimeException ignored) {
             // the game moved on mid-read; the next update will say
         }
+    }
+
+    /** live-game facts per player / card, as last worked out on the game thread (see onGameThread) */
+    private static final java.util.Map<Integer, JsonObject> LIVE_PLAYER = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Map<Integer, Boolean> CANT_BLOCK = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Map<Integer, JsonObject> LIVE_PT = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Whether this is a game thread (Forge names them Game-N). Only there is it safe to read the live game
+     * rather than its views: elsewhere the engine may be changing it underneath (a ConcurrentModificationException
+     * there kills the game thread, as in Forge's undo checkpoint).
+     */
+    static boolean onGameThread() {
+        return Thread.currentThread().getName().startsWith("Game-");
+    }
+
+    /** A new game: nothing carried over (ids are reused). */
+    static void resetLive() {
+        LIVE_PLAYER.clear();
+        CANT_BLOCK.clear();
+        LIVE_PT.clear();
     }
 
     private static String collectorNumber(final String name, final String set) {

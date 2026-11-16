@@ -1,4 +1,4 @@
-# MTG Tabletop
+# MTGClownfish
 
 A local, single-player Magic: The Gathering table with an Arena-style 3D client and Forge AI opponents.
 No store, no deckbuilding, no networking: you play against the AI, 1v1 or 4-player Commander.

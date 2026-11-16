@@ -47,6 +47,8 @@ export interface HudHandlers {
   concede(): void;
   /** undo the last undoable action (a mana tap, a declaration) */
   undo(): void;
+  /** pay one Phyrexian (or K'rrik {B}) symbol of the cost being paid with life */
+  payLife(): void;
   /** leave the game for the main menu */
   exitToMenu(): void;
 }
@@ -64,6 +66,7 @@ export class Hud {
   private skipping = false;
   private readonly cancelBtn = h('button', 'sub-btn');
   private readonly undoBtn = h('button', 'sub-btn undo-btn', 'Undo');
+  private readonly lifeBtn = h('button', 'sub-btn life-btn');
   private readonly phaseBar = h('div', 'phase-bar');
   private readonly turnLabel = h('div', 'turn-label');
   private readonly zoom = h('div', 'zoom');
@@ -79,7 +82,7 @@ export class Hud {
   private handlers!: HudHandlers;
 
   constructor() {
-    // the button column at the bottom right: Pass Turn, Undo, then the prompt's own pair (secondary, OK)
+    // the button column at the bottom right, top to bottom: Pass Turn, Undo, Pay 2 life (when a cost allows it), the prompt's secondary, OK
     const pass = h('button', 'main-btn pass-btn', 'Pass Turn');
     pass.title = 'Pass priority until end of turn (Shift+Enter)';
     pass.onclick = () => this.handlers.passTurn();
@@ -89,7 +92,10 @@ export class Hud {
     const pair = h('div', 'actions');
     pair.append(this.cancelBtn, this.okBtn);
     const column = h('div', 'action-column');
-    column.append(pass, undo, pair);
+    const life = this.lifeBtn;
+    life.title = 'Pay this symbol with life instead of mana (or tap more mana)';
+    life.onclick = () => this.handlers.payLife();
+    column.append(pass, undo, life, pair);
     this.promptBox.append(this.promptSource, this.promptText, column);
     const phaseWrap = h('div', 'phase-wrap');
     phaseWrap.append(this.turnLabel, this.phaseBar);
@@ -192,10 +198,15 @@ export class Hud {
 
   // ---- menu / game over -------------------------------------------------------------------------
 
-  menu(onStart: (format: 'constructed' | 'commander', players: number, title: string) => void): void {
+  menu(onStart: (format: 'constructed' | 'commander', players: number, title: string) => void, onOnline?: () => void): void {
     this.closeOverlay();
     const ov = h('div', 'overlay menu');
-    ov.append(h('h1', '', 'MTG Tabletop'), h('p', 'sub', 'Play against Forge AI opponents'));
+    const title = h('h1', 'menu-logo');
+    const logo = h('img');
+    logo.src = '/logo.webp';
+    logo.alt = 'MTGClownfish';
+    title.append(logo);
+    ov.append(title, h('p', 'sub tagline', 'Test your deck against Forge-Driven Competition'));
     const opts: [string, string, 'constructed' | 'commander', number][] = [
       ['Duel', '1 v 1 with a precon or your own deck', 'constructed', 2],
       ['Commander', 'Free-for-all against three AI opponents', 'commander', 4],
@@ -209,6 +220,12 @@ export class Hud {
         this.closeOverlay();
         onStart(format, players, title);
       };
+      row.append(b);
+    }
+    if (onOnline) {
+      const b = h('button', 'menu-card online');
+      b.append(h('div', 'menu-title', 'Online'), h('div', 'menu-desc', 'Host a game for friends, or join one with a code'));
+      b.onclick = () => onOnline();
       row.append(b);
     }
     ov.append(row);
@@ -291,6 +308,8 @@ export class Hud {
     }
     // without Forge's bracketed context notes ("[Added once: Summon: Bahamut]", "[Zone Changer: …]")
     let msg = tidyMessage((prompt.message ?? '').replace(/[ \t]*\[[^\]\n]*:[^\]\n]*\]/g, ''));
+    // Forge's "(Click on your life total to pay life for …)": the Pay life button does that here
+    if (prompt.lifePay) msg = msg.replace(/\n?\(Click on your life total to pay life[^)]*\)/i, '\n(Tap mana, or press Pay life to pay with life instead)');
     // Forge's status line counts game turns; show the active player's own count instead
     const active = state?.players.find((p) => p.id === state.activePlayer);
     if (active?.turns != null) msg = msg.replace(/^Turn: \d+ \((.+?)\)$/m, (_m, who: string) => `Turn: ${active.turns} (${who})`);
@@ -299,9 +318,9 @@ export class Hud {
       msg += sel.max > 1 ? `\n(${picked}/${sel.max} selected)` : '';
     }
     if (sel.targets.some((t) => t?.player !== undefined)) msg += '\n(Click a player\'s portrait or their side of the table)';
-    else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Drag a creature onto an opponent or their planeswalker, or click your creatures and then who to attack)';
-    else if (prompt.input === 'InputAttack') msg += '\n(Click your creatures, or drag one onto a planeswalker to attack it)';
-    else if (prompt.input === 'InputBlock') msg += '\n(Drag a creature onto an attacker to block it)';
+    else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Drag a creature onto an opponent or their planeswalker, or click your creatures and then who to attack. Drag a box on the table to select several, then drag one of them)';
+    else if (prompt.input === 'InputAttack') msg += '\n(Click your creatures, or drag one onto a planeswalker to attack it. Drag a box on the table to select several)';
+    else if (prompt.input === 'InputBlock') msg += '\n(Drag a creature onto an attacker to block it. Drag a box on the table to select several, then drag one of them)';
     this.promptText.textContent = msg;
     const ok = prompt.ok;
     const cancel = prompt.cancel;
@@ -322,6 +341,59 @@ export class Hud {
     this.cancelBtn.style.visibility = cancel?.enabled && !waiting ? 'visible' : 'hidden';
     this.cancelBtn.disabled = !cancel?.enabled || waiting;
     this.promptBox.classList.toggle('waiting', waiting);
+    // Phyrexian mana (and K'rrik's {B}): life pays a symbol at a time, alongside whatever mana you tap
+    const lp = prompt.lifePay;
+    const canPayLife = !!lp && !waiting && lp.life - lp.committed >= lp.each;
+    this.lifeBtn.style.display = canPayLife ? '' : 'none';
+    if (lp && canPayLife) this.lifeBtn.textContent = lp.shards > 1 ? `Pay ${lp.each} life · ${lp.shards} left` : `Pay ${lp.each} life`;
+  }
+
+  /**
+   * Nothing but life can pay the rest of a cost (no mana left that could): ask before spending it, rather
+   * than leaving the player to find Forge's "click your life total".
+   */
+  confirmLifePayment(total: number, life: number, onPay: () => void): void {
+    if (document.querySelector('.modal.life-pay')) return;
+    const modal = h('div', 'modal life-pay');
+    const panel = h('div', 'modal-panel');
+    panel.append(
+      h('div', 'modal-title', `Pay ${total} life?`),
+      h('div', 'modal-sub', `There's no mana left for the rest of this cost. Paying with life takes you from ${life} to ${life - total}.`),
+    );
+    const row = h('div', 'modal-buttons');
+    const close = () => {
+      modal.classList.add('out');
+      setTimeout(() => modal.remove(), 160);
+      window.removeEventListener('keydown', onKey, true);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    const later = h('button', 'sub-btn wide', 'Not now');
+    later.onclick = close;
+    const pay = h('button', 'main-btn wide', `Pay ${total} life`);
+    pay.onclick = () => {
+      close();
+      onPay();
+    };
+    row.append(later, pay);
+    panel.append(row);
+    modal.append(panel);
+    modal.onclick = (e) => e.target === modal && close();
+    window.addEventListener('keydown', onKey, true);
+    this.root.append(modal);
+    pay.focus();
+  }
+
+  /** The life question no longer applies (the payment finished or was cancelled). */
+  dismissLifePayment(): void {
+    const m = document.querySelector('.modal.life-pay:not(.out)');
+    if (!m) return;
+    m.classList.add('out');
+    setTimeout(() => m.remove(), 160);
   }
 
   /**

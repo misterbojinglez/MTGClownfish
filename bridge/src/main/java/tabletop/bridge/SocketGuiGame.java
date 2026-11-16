@@ -37,7 +37,10 @@ import java.util.Map;
  * message and every question becomes a blocking {@code request} answered by the 3D client.
  */
 public class SocketGuiGame extends AbstractGuiGame {
-    private final Session session;
+    /** the player this view belongs to */
+    private final Client session;
+    /** the seats this view plays, from openView (sent again when the player reconnects) */
+    private volatile JsonArray myPlayers = new JsonArray();
     private final Object snapshotLock = new Object();
     private final Map<Integer, String> sentCards = new HashMap<>();
     private final List<JsonObject> pendingEvents = new ArrayList<>();
@@ -45,7 +48,7 @@ public class SocketGuiGame extends AbstractGuiGame {
     private JsonObject prompt = new JsonObject();
     private int seq = 0;
 
-    public SocketGuiGame(final Session session) {
+    public SocketGuiGame(final Client session) {
         this.session = session;
         prompt.addProperty("message", "");
     }
@@ -109,7 +112,8 @@ public class SocketGuiGame extends AbstractGuiGame {
         // Forge refreshes its combat view only between steps; attackers and blockers being declared right
         // now live on the game's Combat, so pull them into the view before every snapshot
         try {
-            if (getGameView().getGame() != null) {
+            // (it changes the game's view objects: only on the game thread, never while the engine runs elsewhere)
+            if (getGameView().getGame() != null && Serializer.onGameThread()) {
                 getGameView().getGame().updateCombatForView();
             }
         } catch (RuntimeException ignored) {
@@ -173,7 +177,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         if ("InputPassPriority".equals(currentInputName()) && getGameController() instanceof forge.player.PlayerControllerHuman pch) {
             try {
                 final JsonArray actionable = selection.getAsJsonArray("actionable");
-                for (final Integer id : BridgeHumanPlayer.readyCards()) {
+                for (final Integer id : BridgeHumanPlayer.readyCards(playerId())) {
                     if (!actionable.contains(new com.google.gson.JsonPrimitive(id))) {
                         actionable.add(id);
                     }
@@ -309,13 +313,34 @@ public class SocketGuiGame extends AbstractGuiGame {
     @Override
     public void openView(final TrackableCollection<PlayerView> myPlayers) {
         try { liveGame = getGameView().getGame(); } catch (final RuntimeException ignored) { }
-        final JsonObject msg = new JsonObject();
-        msg.addProperty("type", "gameStarted");
         final JsonArray you = new JsonArray();
         myPlayers.forEach(p -> you.add(p.getId()));
-        msg.add("you", you);
-        session.send(msg);
+        this.myPlayers = you;
+        sendGameStarted();
         flush();
+    }
+
+    private void sendGameStarted() {
+        final JsonObject msg = new JsonObject();
+        msg.addProperty("type", "gameStarted");
+        msg.add("you", myPlayers.deepCopy());
+        session.send(msg);
+    }
+
+    /** The player reconnected: their seat again, then the whole table (not just what changed). */
+    void resend() {
+        if (getGameView() == null) return;
+        synchronized (snapshotLock) {
+            sentCards.clear();
+            lastFingerprint = null;
+        }
+        sendGameStarted();
+        flush();
+    }
+
+    /** The id of the seat this view plays, or -1. */
+    int playerId() {
+        return myPlayers.size() > 0 ? myPlayers.get(0).getAsInt() : -1;
     }
 
     @Override public void showCombat() { flush(); }
@@ -346,16 +371,91 @@ public class SocketGuiGame extends AbstractGuiGame {
 
     @Override
     public void showPromptMessage(final PlayerView playerView, final String message, final CardView card) {
+        // Forge puts up "Waiting for <opponent>…" 250 ms after an input ends. When this player's next input (paying
+        // for the spell they just cast) is already showing, that late message would cover it and switch its buttons
+        // off, leaving the game waiting on a prompt the player can no longer see. Keep the live input's prompt.
+        if (isAwaitPrompt(message) && getGameController() instanceof forge.player.PlayerControllerHuman pch
+                && pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputBase live) {
+            forge.gui.FThreads.invokeInEdtLater(live::showMessageInitial);
+            return;
+        }
+        final JsonObject lifePay = lifePayment();
         synchronized (snapshotLock) {
             prompt.addProperty("message", message == null ? "" : message);
             prompt.addProperty("card", card == null ? null : card.getId());
+            putLifePay(lifePay);
         }
         flush();
     }
 
+    private void putLifePay(final JsonObject lifePay) {
+        if (lifePay != null) {
+            prompt.add("lifePay", lifePay);
+        } else {
+            prompt.remove("lifePay");
+        }
+    }
+
+    /**
+     * While a cost is being paid: the parts of it that life can pay instead of mana (Phyrexian symbols, and
+     * {B} under K'rrik's "pay 2 life rather than that mana"), so the client can offer a Pay 2 life button
+     * instead of Forge's "click your life total". Read on the thread that's showing the payment prompt,
+     * straight after Forge builds the same message from the same fields; nothing is evaluated.
+     * Null when there's no such payment.
+     */
+    private JsonObject lifePayment() {
+        if (!(getGameController() instanceof forge.player.PlayerControllerHuman pch)
+                || !(pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputPayManaOfCostPayment pay)) {
+            return null;
+        }
+        try {
+            final Class<?> base = forge.gamemodes.match.input.InputPayMana.class;
+            final java.lang.reflect.Field costF = base.getDeclaredField("manaCost");
+            final java.lang.reflect.Field playerF = base.getDeclaredField("player");
+            final java.lang.reflect.Field lifeF = base.getDeclaredField("phyLifeToLose");
+            costF.setAccessible(true);
+            playerF.setAccessible(true);
+            lifeF.setAccessible(true);
+            final forge.game.mana.ManaCostBeingPaid cost = (forge.game.mana.ManaCostBeingPaid) costF.get(pay);
+            final forge.game.player.Player payer = (forge.game.player.Player) playerF.get(pay);
+            if (cost == null || payer == null) {
+                return null;
+            }
+            final boolean blackByLife = payer.hasKeyword("PayLifeInsteadOf:B");
+            int shards = 0;
+            boolean onlyLife = true;
+            for (final forge.card.mana.ManaCostShard shard : cost.getUnpaidShards()) {
+                if (shard.isPhyrexian() || (blackByLife && shard == forge.card.mana.ManaCostShard.BLACK)) {
+                    shards++;
+                } else {
+                    onlyLife = false;
+                }
+            }
+            if (shards == 0) {
+                return null;
+            }
+            final JsonObject o = new JsonObject();
+            o.addProperty("shards", shards);
+            o.addProperty("each", 2);
+            // life already set aside for symbols paid this way (Forge takes it when the payment completes)
+            o.addProperty("committed", lifeF.getInt(pay));
+            o.addProperty("life", payer.getLife());
+            // nothing but life-payable symbols left to pay
+            o.addProperty("onlyLife", onlyLife);
+            o.addProperty("player", payer.getId());
+            return o;
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[bridge] couldn't read the life payment: " + e);
+            return null;
+        }
+    }
+
     @Override
     public void updateButtons(final PlayerView owner, final String label1, final String label2, final boolean enable1, final boolean enable2, final boolean focus1) {
+        // kept in step with the buttons: the client reads "only life left, and Auto can't pay it" from the pair
+        final JsonObject lifePay = lifePayment();
         synchronized (snapshotLock) {
+            putLifePay(lifePay);
             final JsonObject ok = new JsonObject();
             ok.addProperty("label", label1);
             ok.addProperty("enabled", enable1);
@@ -444,6 +544,25 @@ public class SocketGuiGame extends AbstractGuiGame {
     /** Tell the client something it should show the player (a toast). */
     void tell(final String text) {
         notice("message", text);
+    }
+
+    private static volatile String[] awaitTexts;
+
+    /** Whether a prompt is Forge's "Waiting for <player>…" / "Waiting for opponent…" (in the current language). */
+    private static boolean isAwaitPrompt(final String message) {
+        if (message == null) return false;
+        String[] t = awaitTexts;
+        if (t == null) {
+            final forge.util.Localizer loc = forge.util.Localizer.getInstance();
+            final String forPlayer = loc.getMessage("lblWaitingForPlayer", "\u0001");
+            final int cut = forPlayer.indexOf('\u0001');
+            t = new String[] { cut > 0 ? forPlayer.substring(0, cut) : forPlayer, loc.getMessage("lblWaitingForOpponent") };
+            awaitTexts = t;
+        }
+        for (final String s : t) {
+            if (s.length() > 3 && message.contains(s)) return true;
+        }
+        return false;
     }
 
     /** The Forge input class showing now (InputPassPriority, InputAttack…), or null. */

@@ -37,7 +37,6 @@ import java.util.List;
  */
 public final class BridgeMain {
     private static Session session;
-    private static SocketGuiGame gui;
     private static HostedMatch match;
 
     private BridgeMain() { }
@@ -64,7 +63,8 @@ public final class BridgeMain {
         // revealed hands); the dialog-based paths are the ones this client renders
         prefs.setPref(ForgePreferences.FPref.UI_SELECT_FROM_CARD_DISPLAYS, false);
 
-        session = new Session(port, BridgeMain::onClientMessage);
+        Hub.onMessage(BridgeMain::onClientMessage);
+        session = new Session(port);
         session.start();
         // the shareable package: the bridge also serves the built client, so testers need only Java
         final String clientDir = System.getProperty("client.dir");
@@ -73,22 +73,43 @@ public final class BridgeMain {
         }
     }
 
-    private static void onClientMessage(final JsonObject msg) {
+    /** who a handler's notices go to (the player whose message it's handling), else everyone in the game */
+    private static final ThreadLocal<Client> REPLY_TO = new ThreadLocal<>();
+
+    /** Run a handler off the socket thread, its notices going to the player who asked. */
+    private static void spawn(final Client c, final String name, final Runnable r) {
+        new Thread(() -> {
+            REPLY_TO.set(c);
+            try {
+                r.run();
+            } catch (final RuntimeException e) {
+                e.printStackTrace();
+            }
+        }, name).start();
+    }
+
+    /** The people in the current game (their views get its events), and who started it. */
+    private static volatile List<Client> inGame = List.of();
+    private static volatile Client gameHost;
+
+    private static void onClientMessage(final Client c, final JsonObject msg) {
         final String type = msg.has("type") ? msg.get("type").getAsString() : "";
+        // a friend's browser (through the relay) may only play their own seat and use their lobby seat;
+        // starting games, test tooling and gameplans (which spend the host's API key) are for this computer
+        final boolean local = !c.remote();
         switch (type) {
-            case "start" -> new Thread(() -> startGame(msg), "bridge-start").start();
-            // leaving for the main menu: stop the game so the AIs don't play on in the background
-            case "endGame" -> new Thread(() -> {
-                if (match != null && match.getGame() != null && !match.getGame().isGameOver()) {
-                    session.cancelPending();
-                    match.endCurrentGame();
-                }
-            }, "bridge-end").start();
-            case "validateDeck" -> new Thread(() -> validateDeck(msg), "bridge-deck").start();
-            case "listPrecons" -> new Thread(() -> listPrecons(msg), "bridge-precons").start();
+            case "hello", "_disconnected" -> Lobby.onPresence(c, type);
+            case "start" -> { if (local) spawn(c, "bridge-start", () -> startGame(c, msg)); }
+            // leaving for the main menu: the host's leaving stops the game so the AIs don't play on in the
+            // background; anyone else leaving concedes their seat
+            case "endGame" -> spawn(c, "bridge-end", () -> leaveGame(c));
+            case "validateDeck" -> spawn(c, "bridge-deck", () -> validateDeck(c, msg));
+            case "listPrecons" -> spawn(c, "bridge-precons", () -> listPrecons(c, msg));
+            case "compileGameplan" -> { if (local) spawn(c, "bridge-gameplan", () -> compileGameplan(c, msg)); }
+            case "hostLobby", "lobbySeat", "lobbyConfig", "lobbyStart", "leaveLobby" -> spawn(c, "bridge-lobby", () -> Lobby.onMessage(c, type, msg));
             // test tooling only: set up a board from Forge's game-state text (-Dbridge.dev=true)
             case "devState" -> {
-                if (Boolean.getBoolean("bridge.dev") && match != null && match.getGame() != null) {
+                if (local && Boolean.getBoolean("bridge.dev") && match != null && match.getGame() != null) {
                     final forge.game.GameState gs = new forge.game.GameState();
                     gs.parse(java.util.Arrays.asList(msg.get("text").getAsString().split("\\r?\\n")));
                     gs.applyToGame(match.getGame());
@@ -98,7 +119,7 @@ public final class BridgeMain {
                         for (final forge.game.player.Player pl : match.getGame().getPlayers()) {
                             System.out.println("[dev] " + pl.getName() + " battlefield=" + pl.getCardsIn(forge.game.zone.ZoneType.Battlefield) + " hand=" + pl.getCardsIn(forge.game.zone.ZoneType.Hand));
                         }
-                        gui.refreshField();
+                        for (final Client p : inGame) if (p.gui != null) p.gui.refreshField();
                         // the waiting prompt was wiped by the setup: show it again
                         for (final forge.game.player.Player pl : match.getGame().getPlayers()) {
                             if (pl.getController() instanceof forge.player.PlayerControllerHuman pch
@@ -109,49 +130,72 @@ public final class BridgeMain {
                     }, "bridge-dev").start();
                 }
             }
-            case "action" -> FThreads.invokeInEdtLater(() -> handleAction(msg));
+            case "action" -> FThreads.invokeInEdtLater(() -> handleAction(c, msg));
             case "ping" -> {
                 final JsonObject pong = new JsonObject();
                 pong.addProperty("type", "pong");
-                session.send(pong);
+                c.send(pong);
             }
             default -> System.err.println("[bridge] unknown message type: " + type);
         }
     }
 
-    private static void startGame(final JsonObject msg) {
+    /** One seat of a game being started: a person (their client) or an AI, a name, and a deck spec. */
+    record SeatSetup(Client human, String name, JsonObject spec) { }
+
+    /** {type: start} from this computer's browser: you in seat 0 against AI opponents. */
+    private static void startGame(final Client c, final JsonObject msg) {
         final boolean commander = msg.has("format") && "commander".equalsIgnoreCase(msg.get("format").getAsString());
         final int playerCount = msg.has("players") ? Math.max(2, Math.min(4, msg.get("players").getAsInt())) : (commander ? 4 : 2);
-        final GameType gameType = commander ? GameType.Commander : GameType.Constructed;
-
-        if (match != null && match.getGame() != null && !match.getGame().isGameOver()) {
-            session.cancelPending();
-            match.endCurrentGame();
+        final JsonArray seatDecks = msg.has("decks") && msg.get("decks").isJsonArray() ? msg.getAsJsonArray("decks") : new JsonArray();
+        final List<SeatSetup> seats = new ArrayList<>();
+        for (int i = 0; i < playerCount; i++) {
+            JsonObject spec = i < seatDecks.size() && seatDecks.get(i).isJsonObject() ? seatDecks.get(i).getAsJsonObject() : null;
+            if (spec == null && i == 0 && msg.has("deck")) {
+                spec = new JsonObject();
+                spec.addProperty("plainList", msg.get("deck").getAsString());
+            }
+            seats.add(new SeatSetup(i == 0 ? c : null, i == 0 ? "You" : seatName(msg, i), spec));
         }
+        launch(seats, commander, msg.has("apiKey") && msg.get("apiKey").isJsonPrimitive() ? msg.get("apiKey").getAsString() : null, c);
+    }
+
+    /** Start a game: people in their seats (each with their own view), AI opponents in the rest. */
+    static void launch(final List<SeatSetup> seats, final boolean commander, final String apiKey, final Client host) {
+        final GameType gameType = commander ? GameType.Commander : GameType.Constructed;
+        stopGame();
+        BridgeHumanPlayer.resetAll();
+        Serializer.resetLive();
 
         final List<RegisteredPlayer> players = new ArrayList<>();
+        final java.util.Map<RegisteredPlayer, forge.gui.interfaces.IGuiGame> guis = new java.util.LinkedHashMap<>();
+        final List<Client> people = new ArrayList<>();
         final JsonArray deckNames = new JsonArray();
-        RegisteredPlayer human = null;
-        final JsonArray seatDecks = msg.has("decks") && msg.get("decks").isJsonArray() ? msg.getAsJsonArray("decks") : new JsonArray();
-        for (int i = 0; i < playerCount; i++) {
+        for (int i = 0; i < seats.size(); i++) {
+            final SeatSetup seat = seats.get(i);
+            final JsonObject spec = seat.spec();
             Deck deck = null;
-            final JsonObject spec = i < seatDecks.size() && seatDecks.get(i).isJsonObject() ? seatDecks.get(i).getAsJsonObject() : null;
             if (spec != null && spec.has("precon")) {
                 deck = precon(spec.get("precon").getAsString(), commander);
-            } else if (spec != null) {
+            } else if (spec != null && spec.has("plainList")) {
+                deck = deckFromList(spec.get("plainList").getAsString());
+            } else if (spec != null && spec.has("list")) {
                 deck = pastedDeck(spec, commander, i);
-            } else if (i == 0 && msg.has("deck")) {
-                deck = deckFromList(msg.get("deck").getAsString());
             }
             if (deck == null) {
                 deck = commander ? DeckgenUtil.getRandomCommanderPreconDeck() : DeckgenUtil.getRandomPreconDeck();
             }
             final RegisteredPlayer rp = commander ? RegisteredPlayer.forCommander(deck) : new RegisteredPlayer(deck);
-            if (i == 0) {
-                rp.setPlayer(new BridgeHumanPlayer("You"));
-                human = rp;
+            if (seat.human() != null) {
+                rp.setPlayer(new BridgeHumanPlayer(seat.name()));
+                final SocketGuiGame view = new SocketGuiGame(seat.human());
+                seat.human().gui = view;
+                guis.put(rp, view);
+                people.add(seat.human());
             } else {
-                rp.setPlayer(GamePlayerUtil.createAiPlayer(seatName(msg, i), i));
+                // an opponent with a gameplan plays to it (made now if it isn't cached from the setup screen)
+                final Gameplan.Plan plan = spec != null ? seatPlan(spec, deck, seat.name(), apiKey) : null;
+                rp.setPlayer(plan != null ? PlannedAi.create(seat.name(), i, plan) : GamePlayerUtil.createAiPlayer(seat.name(), i));
             }
             deckNames.add(deck.getName());
             players.add(rp);
@@ -161,22 +205,65 @@ public final class BridgeMain {
         starting.addProperty("type", "starting");
         starting.addProperty("format", gameType.name());
         starting.add("decks", deckNames);
-        session.send(starting);
+        for (final Client p : people) p.send(starting);
 
-        gui = new SocketGuiGame(session);
+        inGame = List.copyOf(people);
+        gameHost = host;
         match = GuiBase.getInterface().hostMatch();
         GameRecord.begin(gameType.name(), players.size());
+        final List<SocketGuiGame> views = people.stream().map(p -> p.gui).toList();
         match.setStartGameHook(() -> match.getGame().subscribeToEvents(new Object() {
             @Subscribe
             public void receiveGameEvent(final GameEvent event) {
-                gui.onGameEvent(event);
+                for (final SocketGuiGame v : views) v.onGameEvent(event);
                 GameRecord.onEvent(match.getGame(), event);
+                // an online table goes back to its lobby (players leave the game-over screen when they like)
+                if (event instanceof forge.game.event.GameEventGameOutcome) Lobby.gameOver();
             }
         }));
         final GameRules rules = new GameRules(gameType);
         rules.setAppliedVariants(EnumSet.of(gameType));
         rules.setGamesPerMatch(1);
-        match.startMatch(rules, EnumSet.of(gameType), players, human, gui);
+        match.startMatch(rules, EnumSet.of(gameType), players, guis, null);
+    }
+
+    /** End the current game, if one is running (everyone's open questions are dropped). */
+    static void stopGame() {
+        if (match != null && match.getGame() != null && !match.getGame().isGameOver()) {
+            for (final Client p : inGame) p.cancelPending();
+            match.endCurrentGame();
+            // a player in the middle of an input (paying mana, declaring attackers) holds the game thread on it:
+            // let it go, or the old game's thread waits forever
+            for (final Client p : inGame) {
+                final SocketGuiGame v = p.gui;
+                if (v != null && v.getGameController() instanceof forge.player.PlayerControllerHuman pch) {
+                    pch.getInputQueue().onGameOver(true);
+                }
+            }
+            // everyone else at the table hears why their game stopped
+            final JsonObject n = new JsonObject();
+            n.addProperty("type", "notice");
+            n.addProperty("kind", "gameAbandoned");
+            n.addProperty("text", "The host ended the game.");
+            for (final Client p : inGame) if (p != gameHost) p.send(n);
+        }
+        Lobby.gameOver();
+        for (final Client p : inGame) p.gui = null;
+        inGame = List.of();
+    }
+
+    /** A player heads for the main menu: the one who started the game stops it; anyone else concedes. */
+    private static void leaveGame(final Client c) {
+        if (!inGame.contains(c)) return;
+        if (c == gameHost || inGame.size() == 1) {
+            stopGame();
+            return;
+        }
+        final SocketGuiGame view = c.gui;
+        if (view != null && view.getGameController() != null && match != null && match.getGame() != null && !match.getGame().isGameOver()) {
+            FThreads.invokeInEdtLater(() -> view.getGameController().concede());
+        }
+        c.cancelPending();
     }
 
     /** The name the client gave seat i (opponents can be named), else "AI i". Names must be unique. */
@@ -212,7 +299,7 @@ public final class BridgeMain {
     private static JsonArray preconCache;
     private static JsonArray preconCacheCommander;
 
-    private static void listPrecons(final JsonObject msg) {
+    private static void listPrecons(final Client c, final JsonObject msg) {
         final boolean commander = msg.has("format") && "commander".equalsIgnoreCase(msg.get("format").getAsString());
         JsonArray decks = commander ? preconCacheCommander : preconCache;
         if (decks == null) {
@@ -231,7 +318,7 @@ public final class BridgeMain {
         out.addProperty("type", "precons");
         out.addProperty("format", commander ? "commander" : "constructed");
         out.add("decks", decks);
-        session.send(out);
+        c.send(out);
     }
 
     /** {list, commanders?} from the client's deck picker; null (→ a precon) if nothing usable came of it. */
@@ -254,7 +341,7 @@ public final class BridgeMain {
         return r.deck;
     }
 
-    private static void validateDeck(final JsonObject msg) {
+    private static void validateDeck(final Client c, final JsonObject msg) {
         final boolean commander = msg.has("format") && "commander".equalsIgnoreCase(msg.get("format").getAsString());
         final List<String> chosen = new ArrayList<>();
         if (msg.has("commanders") && msg.get("commanders").isJsonArray()) {
@@ -271,15 +358,87 @@ public final class BridgeMain {
         }
         out.addProperty("type", "deckInfo");
         out.add("id", msg.get("id"));
-        session.send(out);
+        c.send(out);
     }
 
+    /** The seat's gameplan as AI settings, or null (no gameplan, or it couldn't be made: the seat plays as usual). */
+    private static Gameplan.Plan seatPlan(final JsonObject spec, final Deck deck, final String name, final String key) {
+        // test tooling only: a ready-made plan, no Claude request
+        if (Boolean.getBoolean("bridge.dev") && spec.has("devPlan")) {
+            try {
+                return Gameplan.parse(spec.get("devPlan").toString());
+            } catch (final java.io.IOException e) {
+                System.err.println("[gameplan] bad devPlan: " + e.getMessage());
+                return null;
+            }
+        }
+        final String text = spec.has("gameplan") && spec.get("gameplan").isJsonPrimitive() ? spec.get("gameplan").getAsString() : "";
+        if (text.isBlank()) return null;
+        try {
+            if (Gameplan.cached(deck, text).isEmpty()) notice("message", "Preparing " + name + "'s gameplan…");
+            final Gameplan.Plan plan = Gameplan.make(deck, text, key);
+            System.out.println("[gameplan] " + name + " plays " + deck.getName() + " to plan: " + plan.summary());
+            return plan;
+        } catch (final Gameplan.GameplanException e) {
+            notice("error", name + " plays without the gameplan: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * The setup screen's "translate for the AI": the seat's deck (precon or pasted list) and gameplan become a
+     * plan, which is cached and described back so the player can see how the AI read it.
+     */
+    private static void compileGameplan(final Client c, final JsonObject msg) {
+        final JsonObject out = new JsonObject();
+        out.addProperty("type", "gameplan");
+        out.add("id", msg.get("id"));
+        try {
+            final boolean commander = msg.has("format") && "commander".equalsIgnoreCase(msg.get("format").getAsString());
+            final JsonObject spec = msg.getAsJsonObject("spec");
+            final Deck deck = spec.has("precon") ? precon(spec.get("precon").getAsString(), commander) : pastedDeck(spec, commander, 1);
+            if (deck == null) throw new Gameplan.GameplanException("Couldn't load that deck.", false);
+            final String key = msg.has("apiKey") && msg.get("apiKey").isJsonPrimitive() ? msg.get("apiKey").getAsString() : null;
+            final Gameplan.Plan plan = Gameplan.make(deck, msg.get("gameplan").getAsString(), key);
+            out.addProperty("ok", true);
+            out.addProperty("summary", plan.summary());
+            out.addProperty("stance", plan.stance());
+            out.addProperty("tokensAreFodder", plan.tokensAreFodder());
+            final JsonArray cards = new JsonArray();
+            for (final Gameplan.CardHint h : plan.cards()) {
+                final JsonObject hint = new JsonObject();
+                hint.addProperty("name", h.name());
+                hint.addProperty("castPriority", h.castPriority());
+                hint.addProperty("value", h.value());
+                hint.addProperty("sacrificeFodder", h.sacrificeFodder());
+                hint.addProperty("discardFodder", h.discardFodder());
+                hint.addProperty("castBeforeCombat", h.castBeforeCombat());
+                hint.addProperty("protect", h.protect());
+                hint.addProperty("engine", h.engine());
+                cards.add(hint);
+            }
+            out.add("cards", cards);
+        } catch (final Gameplan.GameplanException e) {
+            out.addProperty("ok", false);
+            out.addProperty("error", e.getMessage());
+            out.addProperty("noKey", e.noKey);
+        } catch (final RuntimeException e) {
+            e.printStackTrace();
+            out.addProperty("ok", false);
+            out.addProperty("error", "Couldn't make the plan: " + e.getMessage());
+        }
+        c.send(out);
+    }
+
+    /** A message for the player whose request is being handled, or for everyone in the game. */
     private static void notice(final String kind, final String text) {
         final JsonObject n = new JsonObject();
         n.addProperty("type", "notice");
         n.addProperty("kind", kind);
         n.addProperty("text", text);
-        session.send(n);
+        final Client to = REPLY_TO.get();
+        if (to != null) to.send(n);
+        else for (final Client p : inGame) p.send(n);
     }
 
     /** A plain "4 Forest" per line deck list (an optional "Commander:" line names the commander). */
@@ -309,7 +468,8 @@ public final class BridgeMain {
         @Override public int getY() { return 0; }
     }
 
-    private static void handleAction(final JsonObject msg) {
+    private static void handleAction(final Client c, final JsonObject msg) {
+        final SocketGuiGame gui = c.gui;
         if (gui == null || gui.getGameView() == null) {
             return;
         }
@@ -322,6 +482,11 @@ public final class BridgeMain {
         final Integer id = msg.has("id") && !msg.get("id").isJsonNull() ? msg.get("id").getAsInt() : null;
         final Click click = new Click(msg.has("button") ? msg.get("button").getAsInt() : 1);
 
+        // a friend's browser (through the relay) must say which prompt a click answers: unguarded clicks racing the
+        // engine (a land tapped while a cancelled payment is being rolled back) can kill the game thread
+        if (c.remote() && !msg.has("input") && GUARDED_ACTIONS.contains(action)) {
+            return;
+        }
         // prompt answers are dropped when Forge has moved on from the prompt the player was answering
         if (msg.has("input") && GUARDED_ACTIONS.contains(action)) {
             final int meant = msg.get("input").getAsInt();

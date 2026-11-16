@@ -25,6 +25,12 @@
             <artifactId>Java-WebSocket</artifactId>
             <version>1.5.7</version>
         </dependency>
+        <!-- turns an opponent's plain-language gameplan into AI settings (Gameplan.java) -->
+        <dependency>
+            <groupId>com.anthropic</groupId>
+            <artifactId>anthropic-java</artifactId>
+            <version>3.3.0</version>
+        </dependency>
     </dependencies>
 
     <build>

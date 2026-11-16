@@ -77,6 +77,8 @@ export interface PlayerState {
   };
   commanderDamage?: Record<string, number>;
   commanders?: number[];
+  /** commanders' combined colour identity in WUBRG order ("" colourless); absent outside Commander */
+  identity?: string;
 }
 
 export type Ref = { card?: number; player?: number; stack?: number; entity?: number; ability?: number } | null;
@@ -138,6 +140,22 @@ export interface Prompt {
   /** which Forge input object this is: a new number for each prompt (the same one while you pick several cards) */
   inputId?: number;
   source?: ResolvingSource | null;
+  /** while paying a cost: the symbols life can pay instead of mana (Phyrexian mana, {B} under K'rrik) */
+  lifePay?: LifePay;
+}
+
+export interface LifePay {
+  /** how many such symbols are still unpaid */
+  shards: number;
+  /** life per symbol (2) */
+  each: number;
+  /** life already set aside for symbols paid this way; Forge takes it when the payment completes */
+  committed: number;
+  life: number;
+  /** nothing but life-payable symbols left to pay */
+  onlyLife: boolean;
+  /** the paying player (a click on them pays one symbol with life) */
+  player: number;
 }
 
 export interface Selection {
@@ -221,7 +239,31 @@ export interface DeckInfo {
 
 /** One seat's deck when starting a game: a pasted list, or null for a random precon. */
 /** a pasted list, or one of Forge's precons by name */
-export type SeatDeckSpec = { list: string; name?: string; commanders?: string[] } | { precon: string };
+/** gameplan: the player's plain-language plan for an AI opponent's deck, turned into AI settings by the bridge */
+export type SeatDeckSpec = ({ list: string; name?: string; commanders?: string[] } | { precon: string }) & { gameplan?: string };
+
+/** how the bridge's AI will read a gameplan: the plan Claude made from it (or why it couldn't) */
+export interface GameplanInfo {
+  type: 'gameplan';
+  id: number;
+  ok: boolean;
+  summary?: string;
+  stance?: 'aggressive' | 'balanced' | 'defensive';
+  tokensAreFodder?: boolean;
+  cards?: {
+    name: string;
+    castPriority: number;
+    value: number;
+    sacrificeFodder: number;
+    discardFodder: number;
+    castBeforeCombat: boolean;
+    protect: boolean;
+    engine: boolean;
+  }[];
+  error?: string;
+  /** there's no usable Claude API key: ask for one */
+  noKey?: boolean;
+}
 
 /** one of Forge's precon decks, for the deck picker */
 export interface PreconInfo {
@@ -239,6 +281,10 @@ export type ServerMsg =
   | { type: 'notice'; kind: string; text: string | null }
   | { type: 'pong' }
   | DeckInfo
+  | GameplanInfo
+  | LobbyState
+  | { type: 'lobbyClosed'; reason: string }
+  | { type: 'welcome'; returning: boolean; remote: boolean; relay?: string | null }
   | { type: 'precons'; format: string; decks: PreconInfo[] };
 
 export type Action =
@@ -252,3 +298,40 @@ export type Action =
   | { action: 'stack'; id: number }
   | { action: 'mana'; color: number }
   | { action: 'reorderHand'; id: number; index: number };
+
+/** what a lobby seat's deck looks like on the seat list */
+export interface LobbyDeckInfo {
+  label?: string;
+  commanders?: string[];
+  colors?: string[];
+  face?: { name: string; set: string; cn: string };
+}
+
+export interface LobbySeat {
+  kind: 'host' | 'human' | 'ai' | 'open';
+  name: string;
+  connected: boolean;
+  ready: boolean;
+  deck: LobbyDeckInfo | null;
+  /** host only, for AI and open seats: the deck spec and gameplan picked for it */
+  spec?: SeatDeckSpec | null;
+  gameplan?: string | null;
+}
+
+/** an online lobby, from this player's point of view */
+export interface LobbyState {
+  type: 'lobby';
+  /** the join code, once the relay has opened the lobby */
+  code: string | null;
+  /** the page friends open to join */
+  link: string | null;
+  format: 'constructed' | 'commander';
+  playing: boolean;
+  /** whether you're the host */
+  host: boolean;
+  /** your seat index */
+  you: number;
+  /** the relay couldn't be reached, etc. */
+  problem: string | null;
+  seats: LobbySeat[];
+}

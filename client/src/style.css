@@ -623,6 +623,21 @@ button {
   text-shadow: 0 0 30px rgba(214, 178, 94, 0.6);
 }
 
+/* the start screen's MTGClownfish crest stands in for the title text */
+.overlay h1.menu-logo {
+  line-height: 0;
+}
+
+.menu-logo img {
+  display: block;
+  width: min(560px, 72vw);
+  max-height: 50vh;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 24px rgba(70, 150, 200, 0.25));
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .overlay .sub {
   color: var(--muted);
   margin: 0;

@@ -3,15 +3,16 @@ import './theme.css';
 import * as THREE from 'three';
 import gsap from 'gsap';
 import { Bridge } from './net';
-import type { CardState, RequestMsg, ServerMsg, UpdateMsg } from './protocol';
+import type { CardState, GameState, RequestMsg, ServerMsg, UpdateMsg } from './protocol';
 import { stackKey } from './scene/layout';
 import { Stage } from './scene/stage';
 import { Table } from './game/table';
-import { Input } from './game/input';
+import { Input, type AimTarget } from './game/input';
 import { CameraDirector } from './game/camera';
 import { Hud } from './ui/hud';
 import { sfx } from './audio';
-import { DeckSetup, type GameSetup } from './ui/decks';
+import { claudeKey, DeckSetup, type GameSetup } from './ui/decks';
+import { askName, joinScreen, LobbyView, onlineChooser } from './ui/lobby';
 
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement);
 const table = new Table(stage);
@@ -21,7 +22,15 @@ table.onOpponentCast = (card, who) => hud.revealCast(card, `${who} casts ${card.
 table.onPlayerHit = (pid, amount) => hud.hitPlate(pid, amount);
 // ?bridge=7778 points the client at another bridge instance (used for automated testing)
 const bridgePort = new URLSearchParams(location.search).get('bridge') ?? '7777';
+/**
+ * Served by the relay (a friend opened an invite): there's no rules engine on this computer, so the page joins
+ * the host's game through the relay. Anywhere else (the dev server, the bridge's own server) it's the full app.
+ */
+const onRelay = new URLSearchParams(location.search).has("relay") || !/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
+const relaySocket = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 const bridge = new Bridge(`ws://127.0.0.1:${bridgePort}`);
+/** the relay's web address (from the bridge's welcome), for "Join a friend's game" */
+let relayHttp: string | null = onRelay ? `${location.protocol}//${location.host}` : null;
 
 let lastSetup: GameSetup = { format: 'constructed', players: 2, decks: [], names: [] };
 let gameOverShown = false;
@@ -125,9 +134,42 @@ function refreshPrompt(): void {
   hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0, table.state);
   // clicks from here on answer this prompt
   bridge.shownInput = table.prompt.inputId;
+  askLifeIfNoMana();
   hud.setPhase(table.state, table.localId);
   hud.setStack(table.state, table.localId);
   refreshBrowser();
+}
+
+/**
+ * Paying a cost whose only unpaid symbols life can pay (Phyrexian mana, K'rrik's {B}), and Forge's Auto
+ * can't pay them with mana: there's no mana left that could, so ask whether to pay it all with life.
+ * Checked again after a beat, so a passing in-between update (buttons reset mid-refresh) doesn't ask.
+ */
+let lifeAsked = '';
+let lifeTimer = 0;
+function askLifeIfNoMana(): void {
+  const p = table.prompt;
+  const lp = p.lifePay;
+  if (!lp) hud.dismissLifePayment();
+  const due = () => {
+    const q = table.prompt;
+    const l = q.lifePay;
+    if (!l || !l.onlyLife || q.ok?.enabled || (draining && queue.length > 0)) return null;
+    const total = l.shards * l.each;
+    if (l.life - l.committed < total) return null;
+    return { key: `${q.inputId}|${l.shards}`, total, l, inputId: q.inputId };
+  };
+  const first = due();
+  if (!first || first.key === lifeAsked) return;
+  clearTimeout(lifeTimer);
+  lifeTimer = window.setTimeout(() => {
+    const now = due();
+    if (!now || now.key !== first.key || now.key === lifeAsked) return;
+    lifeAsked = now.key;
+    hud.confirmLifePayment(now.total, now.l.life - now.l.committed, () => {
+      for (let i = 0; i < now.l.shards; i++) bridge.act({ action: 'player', id: now.l.player }, now.inputId);
+    });
+  }, 300);
 }
 
 /** Selectable cards that aren't on the table (library search etc.) get the browser overlay. */
@@ -168,8 +210,34 @@ async function handle(msg: ServerMsg): Promise<void> {
       if (!inGame) break;
       await answer(msg);
       break;
+    case 'welcome':
+      if (msg.relay !== undefined) relayHttp = msg.relay ?? null;
+      break;
+    case 'lobby':
+      // drawn now unless a game is on screen (then when the player leaves it)
+      if (!inGame) {
+        hud.closeOverlay();
+        document.querySelectorAll('.modal:not(.deck-modal)').forEach((m) => m.remove());
+      }
+      lobby.update(msg, !inGame);
+      break;
+    case 'lobbyClosed':
+      lobby.clear();
+      if (inGame) leaveTable();
+      if (onRelay) showJoin(msg.reason);
+      else {
+        hud.toast(msg.reason, 'error');
+        showMenu();
+      }
+      break;
     case 'notice':
       if (msg.kind === 'message' || msg.kind === 'error') hud.toast(msg.text ?? '', msg.kind);
+      // the host ended an online game: back to the lobby
+      if (msg.kind === 'gameAbandoned') {
+        hud.toast(msg.text ?? 'The game was ended.', 'message');
+        leaveTable();
+        backToLobbyOrMenu();
+      }
       // a click landed after the game had moved on from what was on screen: it was dropped, not misapplied
       if (msg.kind === 'stale' && performance.now() - lastStaleToast > 4000) {
         lastStaleToast = performance.now();
@@ -207,6 +275,8 @@ function maybeAutoPay(msg: UpdateMsg): void {
   autoPayMovedOn = true;
   if (p.input?.startsWith('InputPayMana')) {
     autoPayUntil = 0;
+    // Phyrexian mana: mana or life is the player's choice (Auto, or the Pay 2 life button)
+    if (p.lifePay) return;
     // answers this payment prompt specifically, not whatever is on screen (or whatever Forge shows by the time
     // it lands). Flagged as automatic: if Forge's plan would sacrifice a source (Lotus Petal, a Treasure), the
     // bridge leaves the prompt up and says so, and the player taps their mana or presses Auto themselves.
@@ -259,6 +329,8 @@ function explainCombat(msg: UpdateMsg): void {
 
 async function applyUpdate(msg: UpdateMsg): Promise<void> {
   if (msg.prompt.input !== 'InputAttack') attackGroup = [];
+  // a box-selected group lasts only while declaring (the table's refresh below redraws without it)
+  if (msg.prompt.input !== 'InputAttack' && msg.prompt.input !== 'InputBlock') table.group.clear();
   maybeAutoPay(msg);
   const animating = table.apply(msg);
   // the camera turns toward what's about to happen while it animates
@@ -288,7 +360,9 @@ function showGameOver(): void {
 function startGame(setup: GameSetup): void {
   lastSetup = setup;
   hud.loading('Starting game…');
-  bridge.start(setup.format, setup.players, undefined, setup.decks, setup.names);
+  // the API key goes along only when an opponent has a gameplan (one the setup screen didn't get to translate)
+  const planned = setup.decks.some((d, i) => i > 0 && d?.gameplan);
+  bridge.start(setup.format, setup.players, undefined, setup.decks, setup.names, planned ? claudeKey() || undefined : undefined);
 }
 
 const deckSetup = new DeckSetup(document.getElementById('hud')!, bridge);
@@ -298,9 +372,15 @@ let inGame = false;
 
 /** Leave the game: stop it on the bridge, clear the table, and go back to the main menu. */
 function exitToMenu(): void {
+  bridge.endGame();
+  leaveTable();
+  backToLobbyOrMenu();
+}
+
+/** Clear the table and the game HUD (the game is over, abandoned, or left). */
+function leaveTable(): void {
   inGame = false;
   document.body.classList.remove('in-game');
-  bridge.endGame();
   queue.length = 0;
   table.reset();
   director.reset();
@@ -308,16 +388,55 @@ function exitToMenu(): void {
   hud.setStack(null, -1);
   hud.closeOverlay();
   document.querySelectorAll('.modal').forEach((m) => m.remove());
-  showMenu();
+}
+
+/** After a game: an online table goes back to its lobby; otherwise the main menu. */
+function backToLobbyOrMenu(): void {
+  if (lobby.current) lobby.show();
+  else showMenu();
 }
 
 function showMenu(): void {
-  hud.menu(async (format, players, title) => {
-    const setup = await deckSetup.open(format, players, title);
-    if (setup) startGame(setup);
-    else showMenu();
+  if (onRelay) return showJoin(null);
+  hud.menu(
+    async (format, players, title) => {
+      const setup = await deckSetup.open(format, players, title);
+      if (setup) startGame(setup);
+      else showMenu();
+    },
+    () => onlineChooser(document.getElementById('hud')!, relayHttp, (format, players) => void hostOnline(format, players)),
+  );
+}
+
+/** Host an online game: your name, then the bridge opens a lobby on the relay and the code comes back. */
+async function hostOnline(format: 'constructed' | 'commander', players: number): Promise<void> {
+  const name = await askName(document.getElementById('hud')!, 'Your name at the table', 'Open lobby');
+  if (!name) return;
+  hud.closeOverlay();
+  hud.loading('Opening the lobby…');
+  bridge.hostLobby(format, players, name);
+}
+
+/** The relay's page: join a friend's game by code (?join=CODE fills it in). */
+function showJoin(message: string | null): void {
+  const prefill = new URLSearchParams(location.search).get('join') ?? '';
+  joinScreen(document.getElementById('hud')!, prefill, message, (code) => {
+    hud.loading('Joining…');
+    bridge.setUrl(`${relaySocket}/join/${code}`);
   });
 }
+
+const lobby = new LobbyView(document.getElementById('hud')!, bridge, deckSetup, (text, kind) => hud.toast(text, kind));
+lobby.onLeave = () => {
+  if (onRelay) showJoin(null);
+  else showMenu();
+};
+// a friend's game that's gone for good (no such code, the host left): back to the join screen
+bridge.onClosed((reason) => {
+  lobby.clear();
+  if (inGame) leaveTable();
+  showJoin(reason);
+});
 
 bridge.onMessage((msg) => {
   if (msg.type === 'pong') return;
@@ -357,12 +476,109 @@ function pickPlayer(id: number): void {
   else bridge.act({ action: 'player', id });
 }
 
+/**
+ * Whether one of your creatures can be dragged into combat right now, and how. strict (for a selection box):
+ * also leave out creatures that plainly can't, so a sweep across the board picks only the ones that will go.
+ */
+function declarable(id: number, strict: boolean): 'attack' | 'block' | null {
+  const c = table.state?.cards[id];
+  if (!c || c.zone !== 'Battlefield' || !c.creature || c.controller !== table.localId) return null;
+  if (table.isDeclaringAttack()) {
+    if (c.attacking) return 'attack';
+    if (c.tapped) return null;
+    if (strict && (c.sick || c.keywords?.includes('Defender'))) return null;
+    return 'attack';
+  }
+  if (table.isDeclaringBlock() && !c.tapped && !c.attacking && !c.cantBlock) return 'block';
+  return null;
+}
+
+/** Card names for a message, with repeats counted: "Soldier Token ×5, Elspeth's Knight". */
+function nameList(ids: number[]): string {
+  const counts = new Map<string, number>();
+  for (const id of ids) {
+    const name = table.state?.cards[id]?.name || 'a creature';
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts].map(([n, k]) => (k > 1 ? `${n} ×${k}` : n)).join(', ');
+}
+
+/**
+ * Forge turns down an illegal declaration without a word: once the table has caught up with Forge (so a
+ * declaration still animating in isn't mistaken for one refused), name the creatures that didn't make it.
+ */
+function reportRefused(ids: number[], stillDeclaring: () => boolean, made: (s: GameState, id: number) => boolean, say: (names: string) => string): void {
+  let tries = 0;
+  const check = () => {
+    if ((draining || queue.length > 0) && ++tries < 10) {
+      setTimeout(check, 300);
+      return;
+    }
+    const now = table.state;
+    if (!now || !stillDeclaring()) return;
+    const refused = ids.filter((id) => now.cards[id] && !made(now, id));
+    if (refused.length) hud.toast(say(nameList(refused)), 'message');
+  };
+  setTimeout(check, 700);
+}
+
+/** Send creatures (one, or a box-selected group) to attack a player, planeswalker or battle. */
+function attackWith(ids: number[], target: AimTarget): void {
+  const s = table.state;
+  if (!s) return;
+  const aimedThere = (st: GameState, id: number) => {
+    const engaged = st.combat?.find((a) => a.attacker === id);
+    return !!engaged && ('player' in target ? engaged.defender?.player === target.player : engaged.defender?.card === target.card);
+  };
+  const go = ids.filter((id) => !aimedThere(s, id));
+  if (!go.length) return;
+  // Forge attacks the "current defender": take creatures out that are attacking elsewhere, pick the
+  // defender, then send them all in
+  for (const id of go) if (s.cards[id]?.attacking) bridge.act({ action: 'card', id });
+  bridge.act('player' in target ? { action: 'player', id: target.player } : { action: 'card', id: target.card });
+  for (const id of go) bridge.act({ action: 'card', id });
+  attackGroup = [];
+  sfx.click();
+  reportRefused(go, () => table.isDeclaringAttack(), aimedThere, (names) => `Couldn't attack with ${names}`);
+}
+
+/** Send creatures (one, or a box-selected group) to block an attacker. */
+function blockWith(ids: number[], attackerId: number): void {
+  const s = table.state;
+  if (!s) return;
+  const attacker = s.cards[attackerId];
+  const blocks = (st: GameState, id: number) => !!st.combat?.find((a) => a.attacker === attackerId)?.blockers.includes(id);
+  let go = ids.filter((id) => !blocks(s, id));
+  // only flyers and reach can block a flyer: say so rather than sending blocks Forge will refuse
+  if (attacker?.flying) {
+    const grounded = go.filter((id) => !s.cards[id]?.flying && !s.cards[id]?.keywords?.includes('Reach'));
+    if (grounded.length) {
+      hud.toast(`${nameList(grounded)} can't block ${attacker.name}: it has flying, so only creatures with flying or reach can`, 'message');
+      go = go.filter((id) => !grounded.includes(id));
+    }
+  }
+  if (!go.length) return;
+  // a creature already blocking another attacker moves over to this one (right-click takes it out of combat)
+  for (const id of go) if (s.cards[id]?.blocking) bridge.act({ action: 'card', id, button: 3 });
+  // Forge blocks the "current attacker": pick the attacker, then the blockers
+  bridge.act({ action: 'card', id: attackerId });
+  for (const id of go) bridge.act({ action: 'card', id });
+  sfx.click();
+  reportRefused(go, () => table.isDeclaringBlock(), blocks, (names) => `${names} can't block ${attacker?.name ?? 'that attacker'}`);
+}
+
 hud.bind({
   ok: () => bridge.act({ action: 'ok' }),
   cancel: () => bridge.act({ action: 'cancel' }),
   // a plate click picks that player when the engine is asking for one; otherwise the camera goes to
   // their side (clicking the player already shown goes back to the whole table)
   player: (id) => {
+    // a box-selected group of attackers goes at the opponent whose portrait was clicked
+    if (table.group.size) {
+      const ids = [...table.group];
+      table.clearGroup();
+      if (table.isDeclaringAttack() && id !== table.localId) return attackWith(ids, { player: id });
+    }
     if (!director.multiplayer || table.targetablePlayers().has(id)) return pickPlayer(id);
     if (director.isShowing(id)) director.showTable();
     else director.focusPlayer(id);
@@ -370,11 +586,28 @@ hud.bind({
   passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
   concede: () => bridge.act({ action: 'concede' }),
   undo: () => bridge.act({ action: 'undo' }),
+  payLife: () => {
+    const lp = table.prompt.lifePay;
+    if (lp) bridge.act({ action: 'player', id: lp.player });
+  },
   exitToMenu: () => exitToMenu(),
 });
 
 const input = new Input(stage, table, {
   clickCard: (id, button) => {
+    // a box-selected group: a click on something it can go at sends it there (an attacker to block, an
+    // opponent's card or planeswalker to attack); any other click lets go of the group
+    if (table.group.size && button === 1) {
+      const ids = [...table.group];
+      const member = table.group.has(id);
+      table.clearGroup();
+      const c = table.state?.cards[id];
+      if (!member && c && table.isDeclaringBlock() && c.attacking) return blockWith(ids, id);
+      if (!member && c && table.isDeclaringAttack() && c.zone === 'Battlefield' && c.controller != null && c.controller !== table.localId) {
+        return attackWith(ids, /Planeswalker|Battle/.test(c.typeLine ?? '') ? { card: id } : { player: c.controller });
+      }
+      if (member) return;
+    } else if (table.group.size) table.clearGroup();
     // a graveyard or exile card you can't use right now opens that whole pile
     const pileCard = table.state?.cards[id];
     const usableNow = table.selection.cards.includes(id) || table.selection.actionable.includes(id);
@@ -425,13 +658,38 @@ const input = new Input(stage, table, {
   clickTable: (pid) => {
     if (table.targetablePlayers().has(pid)) pickPlayer(pid);
   },
+  // clicking an opponent's side sends a box-selected group of attackers at them; anywhere else lets go of it
+  clickEmpty: (pid) => {
+    if (!table.group.size) return false;
+    const ids = [...table.group];
+    table.clearGroup();
+    const opponent = pid != null && pid !== table.localId && !table.state?.players.find((p) => p.id === pid)?.lost;
+    if (!opponent || !table.isDeclaringAttack()) return true;
+    attackWith(ids, { player: pid! });
+    return true;
+  },
+  // ---- box-selecting creatures to attack or block with together ----
+  canBoxSelect: () => table.isDeclaringAttack() || table.isDeclaringBlock(),
+  boxSelect: (rect, additive) => {
+    const inBox = table.creaturesInRect(rect);
+    const ids = inBox.filter((id) => declarable(id, true) != null);
+    // say why creatures inside the box were left out, when that's all there was
+    if (!ids.length && inBox.length) {
+      const why = inBox.map((id) => table.state!.cards[id]).find((c) => c && (table.isDeclaringBlock() ? c.cantBlock : c.sick));
+      hud.toast(why ? `${why.name} can't ${table.isDeclaringBlock() ? 'block' : 'attack this turn'}` : 'None of those creatures can be declared right now', 'message');
+    }
+    if (ids.length || !additive) table.setGroup(ids, additive);
+    if (ids.length) sfx.click();
+  },
   // ---- dragging attackers onto players/planeswalkers and blockers onto attackers (Arena style) ----
   aimKind: (id) => {
+    const kind = declarable(id, false);
+    // Starscape Cleric and friends: say why instead of starting a drag Forge will refuse
     const c = table.state?.cards[id];
-    if (!c || c.zone !== 'Battlefield' || !c.creature || c.controller !== table.localId) return null;
-    if (table.isDeclaringAttack() && (!c.tapped || c.attacking)) return 'attack';
-    if (table.isDeclaringBlock() && !c.tapped && !c.attacking) return 'block';
-    return null;
+    if (!kind && c && table.isDeclaringBlock() && c.controller === table.localId && c.creature && c.zone === 'Battlefield' && c.cantBlock) {
+      hud.toast(`${c.name} can't block`, 'message');
+    }
+    return kind;
   },
   aimTarget: (kind, _from, cardId, plate, point) => {
     const s = table.state;
@@ -460,30 +718,15 @@ const input = new Input(stage, table, {
       return;
     }
     const to = target && 'player' in target ? table.playerWorld(target.player) : target && 'card' in target ? table.cardWorld(target.card) : point;
-    table.showAim(from, to, kind, target && 'card' in target ? target.card : null);
+    // dragging one of a box-selected group drags them all
+    table.showAim(table.group.has(from) ? [...table.group] : from, to, kind, target && 'card' in target ? target.card : null);
     hud.aimPlate(target && 'player' in target ? target.player : null);
   },
   aimDrop: (kind, from, target) => {
-    const s = table.state;
-    if (!s) return;
-    if (kind === 'attack') {
-      const engaged = s.combat?.find((a) => a.attacker === from);
-      const same = engaged && ('player' in target ? engaged.defender?.player === target.player : engaged.defender?.card === target.card);
-      if (same) return;
-      // Forge attacks the "current defender": take the creature out if it's attacking elsewhere, pick the
-      // defender, then send it in
-      if (s.cards[from]?.attacking) bridge.act({ action: 'card', id: from });
-      bridge.act('player' in target ? { action: 'player', id: target.player } : { action: 'card', id: target.card });
-      bridge.act({ action: 'card', id: from });
-      attackGroup = [];
-    } else if ('card' in target) {
-      // Forge blocks the "current attacker": pick the attacker, then the blocker (unless it already blocks it)
-      const already = s.combat?.find((a) => a.attacker === target.card)?.blockers.includes(from);
-      if (already) return;
-      bridge.act({ action: 'card', id: target.card });
-      bridge.act({ action: 'card', id: from });
-    }
-    sfx.click();
+    const ids = table.group.has(from) ? [...table.group] : [from];
+    table.clearGroup();
+    if (kind === 'attack') attackWith(ids, target);
+    else if ('card' in target) blockWith(ids, target.card);
   },
   hover: (id) => {
     const inHand = id != null && table.isLocalHand(id);
@@ -555,6 +798,11 @@ const viewHandlers = {
 director.onChange = refreshViewBar;
 
 window.addEventListener('keydown', (e) => {
+  // Escape lets go of a box-selected group
+  if (e.key === 'Escape' && table.group.size && !document.querySelector('.modal')) {
+    table.clearGroup();
+    return;
+  }
   if (!director.multiplayer || e.metaKey || e.ctrlKey || e.altKey) return;
   if (document.querySelector('.modal') || (e.target as HTMLElement).closest?.('input, textarea, select')) return;
   if (e.key === '0' || e.key === '`') director.showTable();
@@ -582,7 +830,8 @@ stage.renderer.domElement.addEventListener(
   { passive: false },
 );
 
-bridge.connect();
+// the full app talks to the rules engine on this computer; the relay's page connects once a code is entered
+if (!onRelay) bridge.connect();
 showMenu();
 
 // dev-only hook so the headless driver (scratch tooling) can read state and act like a player

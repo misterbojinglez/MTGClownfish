@@ -1,4 +1,4 @@
-import type { DeckInfo, PreconInfo, SeatDeckSpec } from '../protocol';
+import type { DeckInfo, GameplanInfo, LobbyDeckInfo, PreconInfo, SeatDeckSpec } from '../protocol';
 import type { Bridge } from '../net';
 import { cardArtUrl } from '../scene/textures';
 
@@ -69,6 +69,26 @@ function splitPreconName(name: string): { title: string; tag: string } {
 }
 
 const DECKS_KEY = 'mtg-tabletop.decks';
+/** opponents' gameplans, by seat choice (a saved deck's id or "precon:<name>") */
+const GAMEPLANS_KEY = 'mtg-tabletop.gameplans';
+/** the player's Claude API key, kept in this browser only; the local bridge uses it to call Claude */
+const CLAUDE_KEY = 'mtg-tabletop.claudeKey';
+
+function gameplanFor(choice: SeatChoice): string {
+  return choice ? load<Record<string, string>>(GAMEPLANS_KEY, {})[choice] ?? '' : '';
+}
+
+function setGameplan(choice: string, text: string): void {
+  const all = load<Record<string, string>>(GAMEPLANS_KEY, {});
+  if (text.trim()) all[choice] = text.trim();
+  else delete all[choice];
+  save(GAMEPLANS_KEY, all);
+}
+
+/** The Claude API key the player saved, if any (sent along when a game starts, for plans not made yet). */
+export function claudeKey(): string {
+  return load<string>(CLAUDE_KEY, '');
+}
 const seatsKey = (format: Format, players: number) => `mtg-tabletop.seats.${format}.${players}`;
 
 function load<T>(key: string, fallback: T): T {
@@ -206,6 +226,17 @@ export class DeckSetup {
             who.append(nameRow);
           }
           who.append(h('div', 'seat-role', i === 0 ? 'Your deck' : 'Opponent'));
+          if (i > 0) {
+            // a random seat's button first asks for a deck (a gameplan is written for one), then opens the plan
+            const chooseDeck = async (): Promise<SeatChoice> => {
+              const picked = await this.pick(format, choices[i]);
+              if (picked === undefined) return null;
+              choices[i] = picked;
+              this.saveSeats(format, count, choices);
+              return picked;
+            };
+            who.append(this.gameplanButton(format, choices[i], chooseDeck, render));
+          }
           const tile = this.choiceTile(choices[i], format);
           tile.classList.add('seat-deck');
           tile.title = 'Choose a deck';
@@ -221,16 +252,29 @@ export class DeckSetup {
         }
         ov.append(seats);
 
+        // the Claude API key gameplans need, reachable without opening a gameplan first
+        const keyLine = h('div', 'setup-key');
+        const keySet = !!claudeKey();
+        keyLine.append(h('span', '', keySet ? 'Claude API key saved' : 'Opponents’ gameplans use Claude.'));
+        const keyBtn = h('button', 'link-btn', keySet ? 'Change' : 'Add your API key…');
+        keyBtn.onclick = async () => {
+          await this.keyEditor();
+          render();
+        };
+        keyLine.append(keyBtn);
+        ov.append(keyLine);
+
         const actions = h('div', 'setup-actions');
         const back = h('button', 'sub-btn', 'Back');
         back.onclick = () => close(null);
         const start = h('button', 'main-btn wide glow', 'Start game');
         start.onclick = () => {
           const all = savedDecks();
-          const decks = choices.slice(0, count).map((id): SeatDeckSpec | null => {
-            if (id?.startsWith(PRECON)) return { precon: id.slice(PRECON.length) };
-            const d = all.find((x) => x.id === id);
-            return d ? specFor(d) : null;
+          const decks = choices.slice(0, count).map((id, i): SeatDeckSpec | null => {
+            const spec = this.specForChoice(id, all);
+            // an opponent's gameplan rides along with its deck
+            const plan = i > 0 ? gameplanFor(id) : '';
+            return spec && plan ? { ...spec, gameplan: plan } : spec;
           });
           // blank or repeated names fall back to "AI n"
           const seatNames = ['You', ...names.slice(0, count - 1).map((n, i, a) => {
@@ -245,6 +289,255 @@ export class DeckSetup {
       render();
       this.root.append(ov);
     });
+  }
+
+  // ---- for the online lobby ----
+
+  /** The deck picker on its own: the deck picked (a seat choice, its spec and how to show it), or undefined. */
+  async pickDeck(format: Format, current: string | null): Promise<{ choice: string | null; spec: SeatDeckSpec | null; info: LobbyDeckInfo | null } | undefined> {
+    const picked = await this.pick(format, current);
+    if (picked === undefined) return undefined;
+    return { choice: picked, spec: this.specForChoice(picked), info: this.infoForChoice(picked) };
+  }
+
+  /** How a seat choice looks on the lobby's seat list. */
+  infoForChoice(choice: string | null): LobbyDeckInfo | null {
+    if (!choice) return null;
+    if (choice.startsWith(PRECON)) {
+      const name = choice.slice(PRECON.length);
+      const p = preconInfo(name);
+      return { label: p?.commanders.length ? p.commanders.join(' & ') : splitPreconName(name).title, commanders: p?.commanders ?? [], colors: p?.colors ?? [], face: p?.face };
+    }
+    const d = savedDecks().find((x) => x.id === choice);
+    return d ? { label: d.name, commanders: d.commanders, colors: d.colors, face: d.face } : null;
+  }
+
+  /** A deck tile for what a lobby seat says about its deck (null: a random precon). */
+  lobbyDeckTile(info: LobbyDeckInfo | null, format: Format): HTMLElement {
+    if (!info) return this.deckTile(undefined, format);
+    const tile = h('button', 'deck-tile');
+    const art = h('div', 'deck-art');
+    setArt(art, info.face);
+    const body = h('div', 'deck-body');
+    body.append(h('div', 'deck-name', info.label || 'Custom deck'));
+    const meta = h('div', 'deck-meta');
+    meta.append(pips(info.colors ?? []), h('span', '', info.commanders?.length ? info.commanders.join(' & ') : format === 'commander' ? 'Commander deck' : 'Deck'));
+    body.append(meta);
+    tile.append(art, body);
+    return tile;
+  }
+
+  /** The gameplan editor for a seat choice; resolves with the gameplan it leaves (empty if none). */
+  async editGameplan(format: Format, choice: string): Promise<string> {
+    const spec = this.specForChoice(choice);
+    if (spec) await this.gameplanEditor(format, choice, spec);
+    return gameplanFor(choice);
+  }
+
+  private specForChoice(choice: SeatChoice, all = savedDecks()): SeatDeckSpec | null {
+    if (choice?.startsWith(PRECON)) return { precon: choice.slice(PRECON.length) };
+    const d = all.find((x) => x.id === choice);
+    return d ? specFor(d) : null;
+  }
+
+  private choiceLabel(choice: SeatChoice): string {
+    if (choice?.startsWith(PRECON)) {
+      const name = choice.slice(PRECON.length);
+      const info = preconInfo(name);
+      return info?.commanders.length ? info.commanders.join(' & ') : splitPreconName(name).title;
+    }
+    return savedDecks().find((d) => d.id === choice)?.name ?? 'this deck';
+  }
+
+  /** The seat's "Gameplan" button: write how this opponent should pilot its deck. */
+  private gameplanButton(format: Format, choice: SeatChoice, chooseDeck: () => Promise<SeatChoice>, rerender: () => void): HTMLElement {
+    const plan = gameplanFor(choice);
+    const btn = h('button', `gameplan-btn${plan ? ' set' : ''}`, plan ? '✦ Gameplan (beta)' : '+ Gameplan (beta)');
+    btn.title = !choice ? 'Choose a deck for this seat, then write its gameplan' : plan ? `Gameplan: ${plan}` : 'Tell this opponent how to pilot its deck';
+    btn.onclick = async () => {
+      // a random precon can't have a plan: pick the deck first
+      const seat = choice ?? (await chooseDeck());
+      if (!seat) return rerender();
+      const spec = this.specForChoice(seat);
+      if (spec) await this.gameplanEditor(format, seat, spec);
+      rerender();
+    };
+    return btn;
+  }
+
+  /** Set, change or remove the Claude API key (kept in this browser; the local rules engine uses it). */
+  private keyEditor(): Promise<void> {
+    return new Promise((resolve) => {
+      const modal = h('div', 'modal deck-modal');
+      const box = h('div', 'modal-panel gameplan-panel');
+      const close = () => {
+        modal.remove();
+        resolve();
+      };
+      box.append(
+        h('div', 'modal-title', 'Claude API key'),
+        h('div', 'modal-sub', 'Opponents’ gameplans are turned into AI settings by Claude, once per deck and gameplan (a few cents each; the result is saved). Create a key at console.anthropic.com → API Keys.'),
+      );
+      const input = h('input', 'paste-name');
+      input.type = 'password';
+      input.placeholder = 'sk-ant-…';
+      input.value = claudeKey();
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      const note = h('div', 'paste-note', 'Kept in this browser only, and sent only to the rules engine on this computer, which uses it to ask Claude.');
+      const actions = h('div', 'modal-buttons');
+      const remove = h('button', 'sub-btn', 'Remove');
+      remove.hidden = !claudeKey();
+      remove.onclick = () => {
+        save(CLAUDE_KEY, '');
+        close();
+      };
+      const cancel = h('button', 'sub-btn', 'Cancel');
+      cancel.onclick = close;
+      const ok = h('button', 'main-btn', 'Save');
+      ok.onclick = () => {
+        save(CLAUDE_KEY, input.value.trim());
+        close();
+      };
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') ok.click();
+        if (e.key === 'Escape') close();
+      };
+      actions.append(remove, cancel, ok);
+      box.append(input, note, actions);
+      modal.append(box);
+      modal.onclick = (e) => e.target === modal && close();
+      this.root.append(modal);
+      input.focus();
+    });
+  }
+
+  /**
+   * The gameplan editor: the player writes how the AI should pilot this deck; the bridge has Claude turn it
+   * into AI settings and shows back how the AI will read it.
+   */
+  private gameplanEditor(format: Format, choice: string, spec: SeatDeckSpec): Promise<void> {
+    return new Promise((resolve) => {
+      const modal = h('div', 'modal deck-modal');
+      const box = h('div', 'modal-panel gameplan-panel');
+      const close = () => {
+        modal.remove();
+        resolve();
+      };
+      box.append(
+        h('div', 'modal-title', `Gameplan · ${this.choiceLabel(choice)}`),
+        h('div', 'modal-sub', 'Tell this opponent how to pilot the deck, in your own words. Claude turns it into settings Forge’s AI follows: what to cast first, what to protect, what to sacrifice, which “you may” triggers to always take.'),
+      );
+      const area = h('textarea', 'paste-area gameplan-area');
+      area.placeholder = 'e.g. Prioritize transforming Sephiroth as many times as possible to generate the maximum number of emblems: keep Sephiroth safe, make tokens and sacrifice them.';
+      area.value = gameplanFor(choice);
+      area.maxLength = 1500;
+
+      // the API key: only asked for when the bridge has none (or the player wants to change it)
+      const keyRow = h('div', 'gameplan-key');
+      const keyInput = h('input', 'paste-name');
+      keyInput.type = 'password';
+      keyInput.placeholder = 'Claude API key (sk-ant-…)';
+      keyInput.value = claudeKey();
+      keyInput.autocomplete = 'off';
+      keyInput.spellcheck = false;
+      keyRow.append(keyInput, h('div', 'paste-note', 'Kept in this browser only. The rules engine on this computer uses it to ask Claude, once per deck and gameplan (a few cents); the result is saved, so games don’t wait on it.'));
+      keyRow.hidden = !claudeKey();
+      const keyLink = h('button', 'link-btn', keyRow.hidden ? 'Use my own API key…' : 'Hide API key');
+      keyLink.onclick = () => {
+        keyRow.hidden = !keyRow.hidden;
+        keyLink.textContent = keyRow.hidden ? 'Use my own API key…' : 'Hide API key';
+        if (!keyRow.hidden) keyInput.focus();
+      };
+
+      const result = h('div', 'gameplan-result');
+      const actions = h('div', 'modal-buttons');
+      const remove = h('button', 'sub-btn', 'Remove');
+      remove.hidden = !gameplanFor(choice);
+      remove.onclick = () => {
+        setGameplan(choice, '');
+        close();
+      };
+      const cancel = h('button', 'sub-btn', 'Cancel');
+      cancel.onclick = close;
+      const go = h('button', 'main-btn', 'Translate & save');
+      actions.append(remove, cancel, go);
+      box.append(area, keyLink, keyRow, result, actions);
+      modal.append(box);
+      modal.onclick = (e) => e.target === modal && !go.disabled && close();
+      this.root.append(modal);
+      area.focus();
+
+      let translated = '';
+      go.onclick = async () => {
+        const text = area.value.trim();
+        if (!text) {
+          setGameplan(choice, '');
+          close();
+          return;
+        }
+        // already translated and unchanged: this press is "Done"
+        if (text === translated) {
+          close();
+          return;
+        }
+        const key = keyInput.value.trim();
+        save(CLAUDE_KEY, key);
+        go.disabled = true;
+        area.disabled = true;
+        result.replaceChildren(h('div', 'paste-checking', 'Claude is reading the deck and your plan… (up to a minute the first time)'));
+        const info = await this.bridge.compileGameplan(spec, format, text, key || undefined);
+        go.disabled = false;
+        area.disabled = false;
+        if (!info.ok) {
+          result.replaceChildren(h('div', 'paste-bad', info.error ?? 'Couldn’t make the plan.'));
+          if (info.noKey) {
+            keyRow.hidden = false;
+            keyLink.textContent = 'Hide API key';
+            keyInput.focus();
+          }
+          // still keep the words: the game tries again when it starts
+          setGameplan(choice, text);
+          remove.hidden = false;
+          go.textContent = 'Try again';
+          return;
+        }
+        setGameplan(choice, text);
+        translated = text;
+        remove.hidden = false;
+        this.showPlan(result, info);
+        go.textContent = 'Done';
+        area.oninput = () => (go.textContent = area.value.trim() === translated ? 'Done' : 'Translate & save');
+      };
+    });
+  }
+
+  /** How the AI will read a gameplan: Claude's summary, then what changed card by card. */
+  private showPlan(el: HTMLElement, info: GameplanInfo): void {
+    el.replaceChildren();
+    el.append(h('div', 'gameplan-summary', info.summary || 'Plan made.'));
+    const stance = { aggressive: 'Aggressive in combat', balanced: 'Balanced in combat', defensive: 'Defensive in combat' }[info.stance ?? 'balanced'];
+    el.append(h('div', 'paste-note', `${stance}${info.tokensAreFodder ? ' · creature tokens are sacrifice fodder' : ''}`));
+    const list = h('div', 'gameplan-cards');
+    const cards = [...(info.cards ?? [])].sort((a, b) => Number(b.engine) - Number(a.engine) || Number(b.protect) - Number(a.protect) || b.castPriority - a.castPriority);
+    for (const c of cards) {
+      const row = h('div', 'gameplan-card');
+      row.append(h('span', 'gameplan-name', c.name));
+      const tags = h('span', 'gameplan-tags');
+      const tag = (text: string, cls = '') => tags.append(h('span', `gameplan-tag ${cls}`, text));
+      if (c.engine) tag('engine', 'engine');
+      if (c.protect) tag('protect', 'protect');
+      if (c.castPriority > 0) tag(`cast early +${c.castPriority}`);
+      if (c.castPriority < 0) tag('hold back');
+      if (c.castBeforeCombat) tag('before combat');
+      if (c.value > 0) tag(`value +${c.value}`);
+      if (c.value < 0) tag(`value ${c.value}`);
+      if (c.sacrificeFodder > 0) tag('sacrifice fodder', 'fodder');
+      if (c.discardFodder > 0) tag('discard first', 'fodder');
+      row.append(tags);
+      list.append(row);
+    }
+    el.append(list);
   }
 
   private loadSeats(format: Format, players: number): SeatChoice[] {

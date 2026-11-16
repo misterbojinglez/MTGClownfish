@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
-import { avatarAnchor, computeLayout, libraryAnchor, seatAt, seatFrames, seatRotation, type Placement } from '../scene/layout';
+import { avatarAnchor, computeLayout, libraryAnchor, nearestHandSlot, seatAt, seatFrames, seatRotation, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx, type LinkMark } from '../scene/fx';
 import { Magic } from '../scene/magic';
 import { sfx } from '../audio';
@@ -74,6 +74,8 @@ export class Table {
   /** the arrow drawn while dragging an attacker or blocker toward its target */
   private readonly aimArrows: Arrows;
   private aimCard: number | null = null;
+  /** your creatures picked with a selection box while declaring attackers or blockers, to be sent together */
+  readonly group = new Set<number>();
   /** spells on the stack that have tucked away into the Stack panel (hidden until they leave the stack) */
   private readonly tucked = new Set<number>();
   private readonly libraries = new Map<number, THREE.Mesh>();
@@ -293,6 +295,25 @@ export class Table {
       zone.scale.setScalar(p.scale);
       zone.position.z += 0.001 * p.order;
     }
+  }
+
+  /**
+   * A hand card dragged sideways takes the fan slot nearest it (rig-space x) and the rest slide over to
+   * make room. The order sticks for the rest of the game; new cards join at the right.
+   */
+  moveHandCard(id: number, x: number): void {
+    const me = this.state?.players.find((p) => p.id === this.localId);
+    if (!me) return;
+    const order = this.handOrder.filter((h) => me.zones.Hand.includes(h));
+    for (const h of me.zones.Hand) if (!order.includes(h)) order.push(h);
+    const from = order.indexOf(id);
+    if (from < 0) return;
+    const to = nearestHandSlot(order.length, x);
+    if (to === from) return;
+    order.splice(from, 1);
+    order.splice(to, 0, id);
+    this.handOrder = order;
+    this.relayout(0.16);
   }
 
   /** The player picked up a hand card: stop layout from moving it and stand it upright. */
@@ -1045,7 +1066,7 @@ export class Table {
       const c = obj.state;
       let h: Highlight = 'none';
       // what a card is doing in combat outranks "you could click this"
-      if (chosen.has(id)) h = 'chosen';
+      if (chosen.has(id) || this.group.has(id)) h = 'chosen';
       else if (selectable.has(id)) h = 'selectable';
       else if (c.attacking) h = 'attacking';
       else if (c.blocking) h = 'blocking';
@@ -1128,16 +1149,46 @@ export class Table {
     return this.prompt.input === 'InputBlock';
   }
 
-  /** Draw the drag arrow from a creature to a point (snapped to the target when there is one), or clear it. */
-  showAim(from: number | null, to: THREE.Vector3 | null, kind: 'attack' | 'block', targetCard: number | null): void {
-    const start = from != null ? this.cardWorld(from) : null;
-    this.aimArrows.set(start && to ? [{ from: start, to, color: kind === 'attack' ? '#ff5a2a' : '#7fc4ff' }] : []);
+  /** Replace (or with additive, extend) the box-selected group and show it. */
+  setGroup(ids: number[], additive = false): void {
+    if (!additive) this.group.clear();
+    for (const id of ids) this.group.add(id);
+    this.refreshHighlights();
+  }
+
+  clearGroup(): void {
+    if (!this.group.size) return;
+    this.group.clear();
+    this.refreshHighlights();
+  }
+
+  /** Draw the drag arrows from a creature (or a selected group) to a point (snapped to the target when there is one), or clear them. */
+  showAim(from: number | number[] | null, to: THREE.Vector3 | null, kind: 'attack' | 'block', targetCard: number | null): void {
+    const ids = from == null ? [] : Array.isArray(from) ? from : [from];
+    const color = kind === 'attack' ? '#ff5a2a' : '#7fc4ff';
+    const starts = ids.map((id) => this.cardWorld(id)).filter((p): p is THREE.Vector3 => p != null);
+    this.aimArrows.set(to ? starts.map((start) => ({ from: start, to, color })) : []);
     if (targetCard !== this.aimCard) {
       const was = this.aimCard;
       this.aimCard = targetCard;
       if (was != null) this.refreshHighlights();
       if (targetCard != null) this.cards.get(targetCard)?.setHighlight('target');
     }
+  }
+
+  /** Your creatures on the battlefield whose centres lie inside a screen rectangle (for a selection box). */
+  creaturesInRect(rect: { left: number; top: number; right: number; bottom: number }): number[] {
+    const me = this.state?.players.find((p) => p.id === this.localId);
+    if (!me) return [];
+    const out: number[] = [];
+    for (const id of me.zones.Battlefield) {
+      if (!this.state!.cards[id]?.creature) continue;
+      const w = this.cardWorld(id);
+      if (!w) continue;
+      const p = this.toScreen(w);
+      if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom) out.push(id);
+    }
+    return out;
   }
 
   /** The player your attackers are currently aimed at (Forge's current defender), while declaring. */

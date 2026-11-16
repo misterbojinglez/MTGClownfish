@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GameEvent, GameState, Ref, Selection } from '../protocol';
 import { HOME_VIEW, type CameraView, type Stage } from '../scene/stage';
-import { computeLayout, seatFrames, tableMats, type SeatFrame } from '../scene/layout';
+import { computeLayout, matIdentities, seatFrames, tableMats, type SeatFrame } from '../scene/layout';
 import { CARD_H } from '../scene/cardMesh';
 
 /**
@@ -76,6 +76,7 @@ export class CameraDirector {
     this.activePlayer = null;
     this.mode = { kind: 'table' };
     this.stage.setView(HOME_VIEW, 0);
+    this.stage.setMatColors([]);
     this.onChange?.();
   }
 
@@ -95,6 +96,8 @@ export class CameraDirector {
       }
       this.onChange?.();
     }
+    // each mat's cracks run in its commander's colours (identity arrives once commanders are known)
+    this.stage.setMatColors(matIdentities(state, localId));
     if (!this.multiplayer) return;
     // an opponent's board framed on its own grows or shrinks: keep it filling the view
     if (this.mode.kind === 'seats' && this.mode.players.length === 1 && this.mode.players[0] !== localId) {

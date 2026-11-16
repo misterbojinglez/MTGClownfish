@@ -13,6 +13,15 @@ const CAMERA_TARGET = new THREE.Vector3(0, 0, 0.71);
 const DESIGN_ASPECT = 16 / 9;
 /** Where the arena floor painting's glowing ring sits: radius as a share of the image width, centre up from the bottom. */
 const FLOOR_RING_RADIUS = 0.121;
+/** Lava tint per colour of Magic (linear RGB, before the ramp brightens the hottest flow toward white). */
+const LAVA_COLORS: Record<string, [number, number, number]> = {
+  W: [1.0, 0.76, 0.36],
+  U: [0.08, 0.36, 1.0],
+  B: [0.48, 0.1, 0.9],
+  R: [1.0, 0.24, 0.03],
+  G: [0.14, 0.85, 0.12],
+};
+const COLORLESS_LAVA: [number, number, number] = [0.62, 0.64, 0.72];
 const FLOOR_RING_V = 0.589;
 /** width / height of the floor painting */
 const FLOOR_ASPECT = 2752 / 1536;
@@ -57,6 +66,7 @@ export class Stage {
   private readonly tickers = new Set<(dt: number, t: number) => void>();
   private readonly clock = new THREE.Clock();
   private tableMaterial!: THREE.ShaderMaterial;
+  private matColorKey = '';
   private keyLight!: THREE.DirectionalLight;
   private shake = 0;
   /** the current camera view; tweened by setView */
@@ -198,6 +208,25 @@ export class Stage {
   }
 
   /**
+   * Tints each mat's lava cracks with its commander's colour identity (WUBRG letters, tableMats order):
+   * one colour flows alone, several drift around the mat as a gradient. No identity keeps molten orange.
+   */
+  setMatColors(identities: (string | undefined)[]): void {
+    const key = identities.map((id) => id ?? '-').join('|');
+    if (key === this.matColorKey) return;
+    this.matColorKey = key;
+    const u = this.tableMaterial.uniforms;
+    const n = [0, 0, 0, 0];
+    identities.slice(0, 4).forEach((id, i) => {
+      if (id === undefined) return;
+      const cols = id === '' ? [COLORLESS_LAVA] : [...id].map((c) => LAVA_COLORS[c]).filter(Boolean);
+      cols.slice(0, 5).forEach((c, k) => (u.uMatCols.value[i * 5 + k] as THREE.Color).setRGB(c[0], c[1], c[2]));
+      n[i] = Math.min(5, cols.length);
+    });
+    u.uMatColN.value = n;
+  }
+
+  /**
    * Table dressing for the seat arrangement: battlefield mats (world boxes minX, minZ, maxX, maxZ), the
    * ritual circle at the centre, and shadow coverage wide enough for every seat.
    */
@@ -336,6 +365,9 @@ export class Stage {
         // duel layout until a game says otherwise
         uMats: { value: [new THREE.Vector4(-21.8, -0.6, 21.8, 10.6), new THREE.Vector4(-21.8, -12.6, 21.8, -1.9), new THREE.Vector4(), new THREE.Vector4()] },
         uMatCount: { value: 2 },
+        // each mat's lava colours (up to 5 per mat, mat i at [i*5]); a count of 0 is classic molten orange
+        uMatCols: { value: Array.from({ length: 20 }, () => new THREE.Color()) },
+        uMatColN: { value: [0, 0, 0, 0] },
         uCircle: { value: new THREE.Vector3(0, -1.25, 9) },
         // the painted arena floor: centre x/z of its ritual ring, and its world width/height
         uFloor: { value: null as THREE.Texture | null },
@@ -354,12 +386,13 @@ export class Stage {
         uniform float uTime;
         uniform vec4 uMats[4];
         uniform int uMatCount;
+        uniform vec3 uMatCols[20];
+        uniform int uMatColN[4];
         uniform vec3 uCircle;
         uniform sampler2D uFloor;
         uniform vec4 uFloorRect;
         uniform float uHasFloor;
         varying vec2 vUv; varying vec3 vWorld;
-        float box(vec2 p, vec4 b) { return step(b.x, p.x) * step(p.x, b.z) * step(b.y, p.y) * step(p.y, b.w); }
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float noise(vec2 p) {
           vec2 i = floor(p), f = fract(p);
@@ -368,6 +401,14 @@ export class Stage {
         }
         float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; } return v; }
         float ring(float d, float r, float w) { return smoothstep(w, 0.0, abs(d - r)); }
+        // how far round a box's edge (centre-relative q, half-size h) a point lies, 0..1, so colours share it evenly
+        float perimeter(vec2 q, vec2 h) {
+          float s;
+          if (abs(q.x) / h.x >= abs(q.y) / h.y) s = q.x > 0.0 ? q.y + h.y : 2.0 * h.y + 2.0 * h.x + (h.y - q.y);
+          else s = q.y > 0.0 ? 2.0 * h.y + (h.x - q.x) : 4.0 * h.y + 2.0 * h.x + (q.x + h.x);
+          return s / (4.0 * (h.x + h.y));
+        }
+        float sdBox(vec2 p, vec4 b) { vec2 q = abs(p - (b.xy + b.zw) * 0.5) - (b.zw - b.xy) * 0.5; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
         void main() {
           vec2 p = vWorld.xz;
           float n = fbm(p * 0.09) * 0.6 + fbm(p * 0.6) * 0.4;
@@ -392,16 +433,54 @@ export class Stage {
             stone = mix(stone * 0.35, floorCol * 0.92, inside);
           }
 
-          // player mats: slightly darker inset with a thin gilt edge
-          float mat = 0.0, edge = 0.0;
+          // player mats: slightly darker inset, bounded by cracks in the stone with lava flowing beneath.
+          // Distances are measured from a gently warped point so the edges meander organically.
+          vec2 pw = p + (vec2(fbm(p * 0.33 + 11.0), fbm(p * 0.33 + 27.0)) - 0.5) * 1.1
+                      + (vec2(noise(p * 1.7), noise(p * 1.7 + 5.0)) - 0.5) * 0.3
+                      + (vec2(noise(p * 4.3 + 2.0), noise(p * 4.3 + 8.0)) - 0.5) * 0.1;
+          float mat = 0.0, e = 1e3;
+          int owner = 0;
           for (int i = 0; i < 4; i++) {
             if (i >= uMatCount) break;
-            float m = box(p, uMats[i]);
-            mat = max(mat, m);
-            edge = max(edge, m * (1.0 - box(p, uMats[i] + vec4(0.15, 0.15, -0.15, -0.15))));
+            float s = sdBox(pw, uMats[i]);
+            mat = max(mat, smoothstep(0.1, -0.1, s));
+            if (abs(s) < e) { e = abs(s); owner = i; }
+          }
+          // the nearest mat's colours: one alone, or several blending as they drift around its edge
+          vec3 tint = vec3(1.0, 0.3, 0.04);
+          int nc = uMatColN[owner];
+          if (nc > 0) {
+            vec4 b = uMats[owner];
+            vec2 q = p - (b.xy + b.zw) * 0.5, h = (b.zw - b.xy) * 0.5;
+            float x = fract(perimeter(q, h) + uTime * 0.012) * float(nc);
+            int k = int(floor(x));
+            tint = mix(uMatCols[owner * 5 + k], uMatCols[owner * 5 + (k + 1) % nc], smoothstep(0.15, 0.85, fract(x)));
           }
           stone = mix(stone, stone * 0.82, mat * 0.5);
-          stone += edge * vec3(0.62, 0.48, 0.24) * 0.75;
+
+          // the crack: width wanders and nearly pinches shut in places; hairline offshoots branch off it
+          float w = 0.045 + 0.13 * smoothstep(0.25, 0.8, noise(p * 0.45 + 3.0));
+          float crack = smoothstep(w, w * 0.3, e);
+          float ridge = 1.0 - abs(noise(pw * 2.2 + vec2(4.0, 9.0)) * 2.0 - 1.0);
+          float branch = smoothstep(0.965 + e * 0.02, 0.99, ridge) * smoothstep(1.3, 0.1, e) * step(0.35, noise(p * 0.8 + 17.0));
+
+          // molten flow: slow drifting heat with faster ripples, hottest at the crack's centre
+          float t = uTime;
+          float heat = fbm(pw * 0.9 + vec2(t * 0.22, -t * 0.15)) * 1.1 + noise(pw * 3.1 - vec2(t * 0.5, t * 0.35)) * 0.35 - 0.2;
+          heat = clamp(heat * (0.85 + 0.15 * sin(t * 0.9 + p.x * 0.15 + p.y * 0.1)), 0.0, 1.0);
+          vec3 lava = mix(tint * 0.35, tint * 1.25, smoothstep(0.15, 0.6, heat));
+          lava = mix(lava, mix(tint * 1.2, vec3(1.6, 1.5, 1.3), 0.45), smoothstep(0.65, 0.95, heat));
+          lava *= 0.65 + 0.55 * smoothstep(w, 0.0, e);
+          // cooled crust drifts over stretches of the flow, leaving it dim and dark
+          float crust = smoothstep(0.5, 0.7, fbm(pw * 0.6 + vec2(-t * 0.05, t * 0.04) + 40.0));
+          lava = mix(lava, tint * 0.12 + 0.02, crust * 0.8);
+
+          // scorched lip, then heat glowing out across the stone
+          stone *= 1.0 - smoothstep(w + 0.35, w, e) * (1.0 - crack) * 0.45;
+          stone += tint * 0.55 * exp(-max(e - w, 0.0) * 3.0) * (0.25 + 0.75 * heat) * (1.0 - crust * 0.7) * 0.35;
+          // offshoots: dark fissures with only a faint ember line deep inside
+          stone = mix(stone, mix(vec3(0.02, 0.01, 0.01), lava * 0.45, smoothstep(0.985, 1.0, ridge)), branch * (1.0 - crack));
+          stone = mix(stone, lava, crack);
 
           if (uHasFloor < 0.5) {
             // light pool + vignette (wider for a multiplayer table)

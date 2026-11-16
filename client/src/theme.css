@@ -269,25 +269,40 @@
 
 .action-column {
   --btn-h: 50px;
-  display: grid;
-  grid-template-columns: auto auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 10px;
-  justify-items: end;
 }
 
 .action-column > .pass-btn,
 .action-column > .undo-btn {
-  grid-column: 2;
   width: 200px;
 }
 
-.action-column > .undo-btn {
+.action-column > .undo-btn,
+.action-column > .life-btn {
   --h: 42px;
   height: 42px;
 }
 
+.action-column > .life-btn {
+  width: 200px;
+}
+
+/* paying life: the red of your life shield on the slate button */
+.life-btn:not(:disabled) {
+  border-color: rgba(214, 74, 58, 0.85);
+  color: #ffd9cf;
+  box-shadow: inset 0 0 14px rgba(190, 40, 30, 0.35);
+}
+
+/* the prompt's own pair stacks under Undo, secondary (End Turn, Cancel, Alpha Strike) above OK, so the
+   column stays narrow and never covers the right end of your hand */
 .action-column > .actions {
-  grid-column: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   --btn-h: 50px;
   gap: 10px;
 }
@@ -297,7 +312,9 @@
 }
 
 .action-column .actions .sub-btn {
-  min-width: 150px;
+  --h: 42px;
+  height: 42px;
+  width: 200px;
 }
 
 /* the prompt's message: a slate plaque with a gilt hairline */
@@ -382,6 +399,16 @@
 
 .menu-title {
   font-size: 24px;
+}
+
+/* the start screen's tagline, set in the display face like the menu titles beneath it */
+.menu .tagline {
+  font-family: var(--display);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #e6cf98;
+  text-shadow: 0 1px 0 #000, 0 0 14px rgba(245, 220, 154, 0.2);
 }
 
 .overlay h1 {
@@ -853,4 +880,315 @@ body:not(.in-game) .plate {
 .zoom-stats {
   bottom: auto;
   top: calc(100% + 10px);
+}
+
+/* the selection box drawn on the table while declaring attackers or blockers: arcane blue, like a pick */
+.marquee {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid rgba(127, 196, 255, 0.9);
+  border-radius: 3px;
+  background: rgba(70, 140, 255, 0.12);
+  box-shadow: 0 0 14px rgba(127, 196, 255, 0.35), inset 0 0 18px rgba(127, 196, 255, 0.15);
+}
+
+/* ---- opponents' gameplans (setup screen) ---- */
+
+.gameplan-btn {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 3px 10px;
+  font: 600 12px var(--display);
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: rgba(20, 18, 28, 0.7);
+  border: 1px dashed rgba(217, 180, 95, 0.45);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.gameplan-btn:hover:not(:disabled) {
+  color: var(--gilt-hi);
+  border-color: var(--gilt);
+}
+
+.gameplan-btn.set {
+  color: #d9c2ff;
+  border: 1px solid rgba(160, 120, 255, 0.7);
+  box-shadow: inset 0 0 10px rgba(140, 90, 255, 0.25);
+}
+
+.gameplan-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.gameplan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  text-align: left;
+}
+
+.gameplan-area {
+  height: 120px;
+  min-height: 90px;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.gameplan-key {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.link-btn {
+  align-self: flex-start;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  color: var(--gilt-hi);
+}
+
+.gameplan-result:empty {
+  display: none;
+}
+
+.gameplan-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.gameplan-summary {
+  font-size: 14.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.gameplan-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 34vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.gameplan-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.gameplan-name {
+  font-weight: 600;
+}
+
+.gameplan-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.gameplan-tag {
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: 999px;
+  color: #cfd6e6;
+  background: rgba(127, 160, 220, 0.16);
+}
+
+.gameplan-tag.engine {
+  color: #e9dcff;
+  background: rgba(150, 100, 255, 0.35);
+}
+
+.gameplan-tag.protect {
+  color: #fff0c8;
+  background: rgba(217, 180, 95, 0.32);
+}
+
+.gameplan-tag.fodder {
+  color: #ffd2c8;
+  background: rgba(200, 70, 50, 0.3);
+}
+
+.gameplan-panel [hidden] {
+  display: none !important;
+}
+
+/* the setup screen's Claude API key line, under the seats */
+.setup-key {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.setup-key .link-btn {
+  font-size: 13px;
+}
+
+/* ---- online play: lobby, join screen, online chooser ---- */
+
+.lobby-share {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.lobby-code-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.lobby-code {
+  font: 800 40px var(--display);
+  letter-spacing: 0.12em;
+  color: var(--gilt-hi);
+  text-shadow: 0 2px 0 #000, 0 0 22px rgba(245, 220, 154, 0.3);
+  user-select: all;
+}
+
+.lobby-share-row,
+.lobby-table {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.lobby-seats {
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+.seat-row.mine {
+  border-color: rgba(127, 196, 255, 0.55);
+}
+
+.lobby-tag {
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: 999px;
+  color: #cfd6e6;
+  background: rgba(127, 160, 220, 0.16);
+}
+
+.lobby-tag.ready {
+  color: #d6ffd9;
+  background: rgba(70, 180, 90, 0.32);
+}
+
+.lobby-tag.away {
+  color: #ffe1b0;
+  background: rgba(220, 150, 40, 0.3);
+}
+
+.lobby-seat-ctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 4px;
+}
+
+.lobby-seat-ctl .gameplan-btn {
+  margin-top: 0;
+}
+
+.deck-tile.readonly {
+  cursor: default;
+}
+
+.lobby-wait {
+  text-align: center;
+}
+
+.join-form,
+.online-join {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.online-join {
+  flex-direction: row;
+  width: auto;
+}
+
+.online-join .paste-name {
+  flex: 1;
+}
+
+.join-code {
+  font: 700 22px var(--display);
+  letter-spacing: 0.14em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.online-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.online-row .menu-card {
+  flex: 1 1 200px;
+}
+
+/* the code field's hint reads as ordinary text; only a typed code gets the big spaced letters */
+.join-code::placeholder {
+  font: 400 15px Inter, system-ui, sans-serif;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.online-label {
+  margin-top: 4px;
+  font: 600 15px var(--display);
+  color: var(--gilt-hi);
+}
+
+/* your name in the lobby: visibly editable */
+.lobby .seat-name-input:not(:disabled) {
+  border-color: rgba(217, 180, 95, 0.28);
+}
+
+.seat-edit {
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.seat-edit:hover {
+  color: var(--gilt-hi);
 }
