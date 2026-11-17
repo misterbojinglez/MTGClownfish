@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Builds ready-to-run copies of MTGClownfish, one per platform, each with its own Java runtime, so players
-# install nothing:
-#   dist/MTGClownfish-mac-apple-silicon.zip   (M1 and newer Macs)
-#   dist/MTGClownfish-mac-intel.zip           (older Macs)
-#   dist/MTGClownfish-windows.zip             (64-bit Windows)
-# Inside each: the bridge (Forge included), Forge's card data, the built client (which the bridge serves), a
-# trimmed Java runtime (jlink'd from Eclipse Temurin), a launcher and a README.
+# Builds the MTGClownfish desktop app, one per platform, each with its own Java runtime, so players install
+# nothing:
+#   dist/MTGClownfish-mac-apple-silicon.zip   (M1 and newer Macs)    MTGClownfish.app
+#   dist/MTGClownfish-mac-intel.zip           (older Macs)           MTGClownfish.app
+#   dist/MTGClownfish-windows.zip             (64-bit Windows)       MTGClownfish.exe
+# The app (desktop/, Electron) starts the bridge out of sight and shows the game in its own window. Its game/
+# resources hold the bridge (Forge included), Forge's card data, the built client (which the bridge serves) and
+# a trimmed Java runtime (jlink'd from Eclipse Temurin).
 #
-# Temurin JDKs are downloaded once into dist/.jdk (checksums verified). This must run on an Apple Silicon Mac:
-# its JDK's jlink builds all three runtimes (jlink can target other platforms from their jmods, same version).
+# Temurin JDKs are downloaded once into dist/.jdk (checksums verified), Electron once into its own cache. This
+# must run on an Apple Silicon Mac: its JDK's jlink builds all three runtimes (jlink can target other platforms
+# from their jmods, same version), and the Macs' apps are signed (ad hoc) with its codesign.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
@@ -23,11 +25,11 @@ JDK_RELEASE="jdk-17.0.21+9"
 # Claude, Scryfall), zip file systems, extra charsets, logging
 MODULES="java.base,java.compiler,java.desktop,java.management,java.naming,java.net.http,java.scripting,java.security.jgss,java.sql,jdk.httpserver,jdk.sctp,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets,java.logging"
 
-# name  temurin-os  temurin-arch
+# name  temurin-os  temurin-arch  electron-platform  electron-arch
 TARGETS=(
-  "mac-apple-silicon mac aarch64"
-  "mac-intel mac x64"
-  "windows windows x64"
+  "mac-apple-silicon mac aarch64 darwin arm64"
+  "mac-intel mac x64 darwin x64"
+  "windows windows x64 win32 x64"
 )
 
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || { echo "package.sh runs on an Apple Silicon Mac (its jlink builds every runtime)"; exit 1; }
@@ -76,108 +78,94 @@ fetch_jdk() {
 HOST_JDK=$(fetch_jdk mac aarch64)
 JLINK="$HOST_JDK/bin/jlink"
 
-# ---- launchers and readme, per platform ----
-mac_launcher() {
-  cat > "$1/Start MTGClownfish.command" <<'SH'
-#!/usr/bin/env bash
-# macOS: double-click to play. (The first time macOS may block it: see README.txt.)
-cd "$(dirname "$0")"
-# the Java that comes with the game: out of a downloaded zip it's marked as quarantined, which would stop it running
-xattr -dr com.apple.quarantine runtime 2>/dev/null || true
-echo "Starting MTGClownfish… (leave this window open while you play; close it to quit)"
-runtime/bin/java -Xmx3g -Dforge.assets=forge -Dclient.dir=client -jar forge-bridge.jar &
-BRIDGE=$!
-trap 'kill $BRIDGE 2>/dev/null' EXIT INT TERM
-for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:7780/ && break; sleep 1; done
-open "http://127.0.0.1:7780/"
-wait $BRIDGE
-SH
-  chmod +x "$1/Start MTGClownfish.command"
-}
-
-windows_launcher() {
-  cat > "$1/Start MTGClownfish.bat" <<'BAT'
-@echo off
-rem Windows: double-click to play. Leave the black window open while you play; close it to quit.
-cd /d "%~dp0"
-echo Starting MTGClownfish... the game opens in your browser when it's ready.
-start "" /b "%~dp0runtime\bin\java.exe" -Xmx3g -Dforge.assets=forge -Dclient.dir=client -jar forge-bridge.jar
-rem wait for the game to answer (up to a minute), then open the table
-set /a TRIES=0
-:waitloop
-curl -s -o nul http://127.0.0.1:7780/ >nul 2>nul && goto ready
-set /a TRIES+=1
-if %TRIES% GEQ 60 goto ready
-timeout /t 1 /nobreak >nul
-goto waitloop
-:ready
-start "" "http://127.0.0.1:7780/"
-echo Close this window to quit.
-pause >nul
-BAT
-}
+# ---- the desktop app's own dependencies (Electron, its packager) ----
+(cd "$ROOT/desktop" && npm install --silent --no-audit --no-fund)
+PACKAGER="$ROOT/desktop/node_modules/.bin/electron-packager"
+VERSION=$(node -p "require('$ROOT/desktop/package.json').version")
 
 readme() {
   local dir=$1 how=$2
   cat > "$dir/README.txt" <<TXT
-MTGClownfish — play Magic against Forge AI opponents (1v1 or 4-player Commander), or online with friends
+MTGClownfish $VERSION: play Magic against Forge AI opponents (1v1 or 4-player Commander), or online with friends
 
-Nothing to install: the game brings its own Java.
+Nothing else to install: the app brings everything it needs.
 
-1. Start the game:
 $how
-2. The game opens in your browser at http://127.0.0.1:7780/ (Chrome, Safari, Firefox or Edge).
-   Keep the launcher window open while you play; close it to quit.
 
-Online: Main menu > Online > Host, then share the invite link. Friends only need a browser.
+Online: Main menu > Online > Host, then share the invite link. Friends who don't have the app can join from
+a browser; friends who do can paste the code in Online > Join.
 
 Card images come from Scryfall, so you need an internet connection.
-Each game is recorded in the logs/ folder; send it along when reporting a bug.
+Each game is recorded: Help > Open Game Logs. Please send the latest one along when reporting a bug
+(and Help > Open Engine Log if the game stopped or wouldn't start).
 
 The rules engine is Forge (GPL-3.0, https://github.com/Card-Forge/forge).
-Java runtime: Eclipse Temurin (GPL-2.0 with Classpath Exception, https://adoptium.net).
+Java runtime: Eclipse Temurin (GPL-2.0 with Classpath Exception, https://adoptium.net). App shell: Electron (MIT).
 TXT
 }
 
-MAC_HOW='     Double-click "Start MTGClownfish.command".
-     The first time, macOS may say it can'"'"'t be opened. Then open
-     System Settings > Privacy & Security, scroll down and click
-     "Open Anyway" (on older macOS: right-click it > Open > Open).'
-WIN_HOW='     Double-click "Start MTGClownfish.bat".
-     If Windows SmartScreen warns you: More info > Run anyway.
-     Allow Java through the firewall if asked (it only talks to
-     your own computer and the game'"'"'s relay).'
+MAC_HOW='To start:
+  1. Drag MTGClownfish.app into your Applications folder, then open it from there.
+  2. The first time, macOS says it can'"'"'t check the app for malicious software. Click Done, then open
+     System Settings > Privacy & Security, scroll down and click "Open Anyway" next to MTGClownfish
+     (on older macOS: right-click the app > Open > Open). After that it opens normally.'
+WIN_HOW='To start:
+  1. Unzip the whole folder somewhere (your Documents, say), not just the .exe.
+  2. Open the folder and double-click MTGClownfish.exe.
+  3. If Windows SmartScreen warns you: More info > Run anyway. It only does this the first time.'
 
-# ---- one package per platform ----
-# the old single, bring-your-own-Java package
+# ---- one app per platform ----
 rm -rf "$DIST/MTGClownfish" "$DIST/MTGClownfish.zip"
+STAGE="$DIST/.stage"
 for t in "${TARGETS[@]}"; do
-  read -r name os arch <<<"$t"
+  read -r name os arch eplat earch <<<"$t"
   home=$(fetch_jdk "$os" "$arch")
-  out="$DIST/MTGClownfish-$name"
   echo "== $name"
+  # the game files the app carries, with this platform's Java
+  game="$STAGE/$name/game"
+  rm -rf "$STAGE/$name"
+  mkdir -p "$game"
+  rsync -a "$PAYLOAD/" "$game/"
+  "$JLINK" --module-path "$home/jmods" --add-modules "$MODULES" \
+    --strip-debug --no-man-pages --no-header-files --compress=2 --output "$game/runtime"
+  # jlink leaves some files read-only, which gets in the way of unzipping over an old copy or deleting it
+  chmod -R u+w "$game/runtime"
+  # its legal/ notices are symlinks between modules, which the packager would copy as links into this machine's
+  # disk (and macOS won't sign an app with links leading out of it): make them plain files
+  rsync -aL "$game/runtime/legal/" "$game/runtime/legal.real/"
+  rm -rf "$game/runtime/legal"
+  mv "$game/runtime/legal.real" "$game/runtime/legal"
+
+  "$PACKAGER" "$ROOT/desktop" MTGClownfish --platform="$eplat" --arch="$earch" \
+    --out="$STAGE/$name/electron" --overwrite --asar --icon="$ROOT/desktop/build/icon" \
+    --extra-resource="$game" --app-bundle-id=app.mtgclownfish --app-version="$VERSION" \
+    --app-copyright="MTGClownfish alpha" --win32metadata.ProductName=MTGClownfish \
+    --win32metadata.FileDescription=MTGClownfish --ignore='^/node_modules' --quiet
+  built="$STAGE/$name/electron/MTGClownfish-$eplat-$earch"
+
+  out="$DIST/MTGClownfish-$name"
   rm -rf "$out" "$out.zip"
   mkdir -p "$out"
-  rsync -a "$PAYLOAD/" "$out/"
-  "$JLINK" --module-path "$home/jmods" --add-modules "$MODULES" \
-    --strip-debug --no-man-pages --no-header-files --compress=2 --output "$out/runtime"
-  # jlink leaves some files read-only, which gets in the way of unzipping over an old copy or deleting it
-  chmod -R u+w "$out/runtime"
   case "$os" in
     mac)
-      # every binary on a Mac needs a valid signature (Apple Silicon won't run one without): re-sign the runtime
-      codesign --force --deep --sign - "$out/runtime" >/dev/null 2>&1 || true
-      mac_launcher "$out"
+      mv "$built/MTGClownfish.app" "$out/"
+      # every binary on a Mac needs a valid signature (Apple Silicon won't run one without), and changing the
+      # app's resources broke Electron's: sign the whole app again, ad hoc
+      codesign --force --deep --sign - "$out/MTGClownfish.app"
+      codesign --verify --deep --strict "$out/MTGClownfish.app"
       readme "$out" "$MAC_HOW"
+      # ditto keeps the app's framework symlinks and permissions intact
+      (cd "$DIST" && ditto -c -k --keepParent "MTGClownfish-$name" "MTGClownfish-$name.zip")
       ;;
     windows)
-      windows_launcher "$out"
-      readme "$out" "$WIN_HOW"
-      # Windows' cmd misreads labels and goto in a batch file with Unix line endings; Notepad wants them too
-      perl -pi -e 's/\r?\n/\r\n/' "$out/Start MTGClownfish.bat" "$out/README.txt"
+      mv "$built" "$out/MTGClownfish"
+      readme "$out/MTGClownfish" "$WIN_HOW"
+      # Notepad wants Windows line endings
+      perl -pi -e 's/\r?\n/\r\n/' "$out/MTGClownfish/README.txt"
+      (cd "$out" && zip -qry "../MTGClownfish-$name.zip" MTGClownfish -x '*.DS_Store')
       ;;
   esac
-  (cd "$DIST" && zip -qry "MTGClownfish-$name.zip" "MTGClownfish-$name" -x '*.DS_Store')
   du -sh "$out.zip"
 done
+rm -rf "$STAGE"
 echo "done: $(cd "$DIST" && ls MTGClownfish-*.zip | tr '\n' ' ')"

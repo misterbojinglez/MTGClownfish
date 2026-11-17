@@ -44,6 +44,21 @@ public final class BridgeMain {
     public static void main(final String[] args) throws Exception {
         final int port = Integer.parseInt(System.getProperty("bridge.port", "7777"));
         final String assets = System.getProperty("forge.assets", new File("../engine/forge/forge-gui").getCanonicalPath());
+        // started by the desktop app: it holds our standard input open, so its end (quit, or a crash) closes it.
+        // Exit then too, or an orphaned bridge would keep the game's ports and the next launch couldn't start
+        if (Boolean.getBoolean("bridge.exitWithParent")) {
+            final Thread watch = new Thread(() -> {
+                try {
+                    while (System.in.read() >= 0) { /* nothing is sent; just wait for the end */ }
+                } catch (final java.io.IOException ignored) {
+                    // closed
+                }
+                System.out.println("[bridge] the app has gone; exiting");
+                System.exit(0);
+            }, "parent-watch");
+            watch.setDaemon(true);
+            watch.start();
+        }
 
         GuiBase.setInterface(new HeadlessGui(assets));
         System.out.println("[bridge] loading Forge card database from " + assets + " ...");
