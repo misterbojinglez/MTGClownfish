@@ -375,8 +375,34 @@ public final class Serializer {
                 kept.values().removeIf(t -> t != turn);
             }
             kept.keySet().forEach(out::add);
+            // cards one of your permanents lets you play even while that's switched off right now (Tinybones:
+            // "during your turn"), so a card stashed on an opponent's turn joins the band straight away
+            for (final forge.game.player.Player owner : game.getPlayers()) {
+                for (final forge.game.card.Card c : owner.getCardsIn(ZoneType.Exile)) {
+                    if (!kept.containsKey(c.getId()) && grantedPlayFromExile(player, c)) out.add(c.getId());
+                }
+            }
         }
         return out;
+    }
+
+    /** Whether a continuous "you may play" effect of one of this player's permanents (or emblems) covers this exiled card, conditions aside. */
+    private static boolean grantedPlayFromExile(final forge.game.player.Player player, final forge.game.card.Card exiled) {
+        for (final ZoneType z : new ZoneType[]{ZoneType.Battlefield, ZoneType.Command}) {
+            for (final forge.game.card.Card host : player.getCardsIn(z)) {
+                for (final forge.game.staticability.StaticAbility st : host.getStaticAbilities()) {
+                    if (!st.checkMode(forge.game.staticability.StaticAbilityMode.Continuous) || !st.hasParam("MayPlay") || !st.hasParam("Affected")) continue;
+                    final String zones = st.getParamOrDefault("AffectedZone", "");
+                    if (!zones.contains("Exile")) continue;
+                    try {
+                        if (st.matchesValidParam("Affected", exiled)) return true;
+                    } catch (final RuntimeException ignored) {
+                        // a condition we can't evaluate here
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     static void resetLive() {
@@ -631,6 +657,58 @@ public final class Serializer {
                 }
                 if (ids.contains(c.getId())) {
                     break;
+                }
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * Cards in exile this player could play right now. Forge's own "you could play this" scan never looks in
+     * exile (only hand, battlefield and flashback), so stash cards, impulse draws and the like never lit up.
+     * Spells cast with "mana of any type" (Tinybones, Gonti, heist) are checked against the total mana you
+     * could make, since the colours don't matter; anything else asks Forge whether the cost can be paid.
+     * Game thread only.
+     */
+    public static java.util.List<Integer> exileReady(final forge.game.player.Player player) {
+        final java.util.List<Integer> ids = new java.util.ArrayList<>();
+        final forge.game.Game game = player.getGame();
+        int available = -1;
+        for (final forge.game.player.Player owner : game.getPlayers()) {
+            for (final forge.game.card.Card c : owner.getCardsIn(ZoneType.Exile)) {
+                final java.util.List<forge.game.card.CardPlayOption> options = c.mayPlay(player);
+                if (options.isEmpty()) continue;
+                boolean anyMana = false;
+                for (final forge.game.card.CardPlayOption o : options) {
+                    if (o.isIgnoreManaCostType() || o.isIgnoreManaCostColor()) anyMana = true;
+                }
+                try {
+                    for (final forge.game.spellability.SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
+                        if (sa.isManaAbility() || !forge.ai.ComputerUtilAbility.isFullyTargetable(sa)) continue;
+                        final forge.game.cost.Cost cost = sa.getPayCosts();
+                        boolean affordable;
+                        if (cost == null || !cost.hasManaCost()) {
+                            affordable = true;
+                        } else {
+                            if (available < 0) available = manaAvailable(player);
+                            final int needed = cost.getTotalMana().getCMC();
+                            if (anyMana) {
+                                affordable = available >= needed;
+                            } else {
+                                try {
+                                    affordable = forge.ai.ComputerUtilMana.canPayManaCost(sa, player, 0, false);
+                                } catch (final RuntimeException e) {
+                                    affordable = available >= needed;
+                                }
+                            }
+                        }
+                        if (affordable) {
+                            ids.add(c.getId());
+                            break;
+                        }
+                    }
+                } catch (final RuntimeException ignored) {
+                    // can't tell for this one
                 }
             }
         }

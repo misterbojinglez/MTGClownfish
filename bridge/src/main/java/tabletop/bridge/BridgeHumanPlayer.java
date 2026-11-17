@@ -30,11 +30,14 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
     private static final java.util.Map<Integer, Integer> PLAYABLE_TOP = new java.util.concurrent.ConcurrentHashMap<>();
     /** prepared permanents whose waiting spell copy the player could cast right now (Emeritus of Woe) */
     private static final java.util.Map<Integer, java.util.Set<Integer>> PREPARED_READY = new java.util.concurrent.ConcurrentHashMap<>();
+    /** cards in exile the player could play right now (Forge's scan doesn't look in exile) */
+    private static final java.util.Map<Integer, java.util.Set<Integer>> EXILE_READY = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** battlefield cards Forge's scan misses that this player could use now: X-targeted abilities, prepared spells */
     static java.util.Set<Integer> readyCards(final int playerId) {
         final java.util.Set<Integer> all = new java.util.HashSet<>(READY_X.getOrDefault(playerId, java.util.Set.of()));
         all.addAll(PREPARED_READY.getOrDefault(playerId, java.util.Set.of()));
+        all.addAll(EXILE_READY.getOrDefault(playerId, java.util.Set.of()));
         return all;
     }
 
@@ -48,6 +51,7 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
         READY_X.clear();
         PLAYABLE_TOP.clear();
         PREPARED_READY.clear();
+        EXILE_READY.clear();
     }
 
     BridgeHumanPlayer(final String name) {
@@ -82,10 +86,17 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             READY_X.put(me, readyX);
             PLAYABLE_TOP.put(me, playableTop);
             PREPARED_READY.put(me, preparedReady);
+            final java.util.Set<Integer> exileReady = java.util.Set.copyOf(exileNow());
+            EXILE_READY.put(me, exileReady);
             // and the live facts every snapshot carries (cards playable from exile, mana available): the
             // snapshots sent while you decide are mostly built off the game thread, where they can't be worked out
             Serializer.refreshLive(getGame());
-            final boolean hold = sacrificeOutletReady() || playableTop >= 0 || !preparedReady.isEmpty() || (!readyX.isEmpty() && getGame().getStack().isEmpty());
+            // cards castable from exile only hold your own main phase with an empty stack (an instant sitting in
+            // exile would otherwise stop auto-pass at every step)
+            final forge.game.phase.PhaseHandler ph = getGame().getPhaseHandler();
+            final boolean myMain = ph.isPlayerTurn(getPlayer()) && ph.getPhase() != null && ph.getPhase().isMain() && getGame().getStack().isEmpty();
+            final boolean hold = sacrificeOutletReady() || playableTop >= 0 || !preparedReady.isEmpty() || (!readyX.isEmpty() && getGame().getStack().isEmpty())
+                    || (myMain && !exileReady.isEmpty());
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {
                 yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
@@ -96,6 +107,14 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 if (hold) {
                     yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");
                 }
+            }
+        }
+
+        private java.util.List<Integer> exileNow() {
+            try {
+                return Serializer.exileReady(getPlayer());
+            } catch (final RuntimeException e) {
+                return java.util.List.of();
             }
         }
 
