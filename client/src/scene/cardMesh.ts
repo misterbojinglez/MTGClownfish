@@ -319,6 +319,13 @@ export class CardObject {
     }
   }
 
+  /** Shown greyed out: looked at but not usable right now (a stashed card on someone else's turn). */
+  setDim(on: boolean): void {
+    this.dim = on;
+  }
+  private dim = false;
+  private shade = 1;
+
   setHighlight(h: Highlight): void {
     this.highlight = h;
   }
@@ -337,10 +344,15 @@ export class CardObject {
 
   tick(dt: number): void {
     this.time += dt;
-    if (this.hurtT > 0) {
+    const shadeTarget = this.dim ? 0.28 : 1;
+    if (this.hurtT > 0 || this.shade !== shadeTarget) {
       this.hurtT = Math.max(0, this.hurtT - dt * 1.6);
       const k = this.hurtT * this.hurtT;
-      this.frontMat.emissive.setRGB(1 + k * 1.6, 1 - k * 0.6, 1 - k * 0.65);
+      this.shade += (shadeTarget - this.shade) * Math.min(1, dt * 8);
+      if (Math.abs(this.shade - shadeTarget) < 0.01) this.shade = shadeTarget;
+      const d = this.shade;
+      this.frontMat.emissive.setRGB(d * (1 + k * 1.6), d * (1 - k * 0.6), d * (1 - k * 0.65));
+      this.frontMat.color.setScalar(d);
     }
     const target = this.highlight === 'none' && !this.hovered ? 0 : 1;
     this.glowStrength += (target - this.glowStrength) * Math.min(1, dt * 10);

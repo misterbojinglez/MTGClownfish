@@ -1062,8 +1062,11 @@ export class Table {
     for (const p of s.players) if (p.zones.LibraryTopPlayable && p.zones.LibraryTop != null) actionable.add(p.zones.LibraryTop);
     const top = s.stack[0];
     const targeted = new Set((top?.targets ?? []).map((r) => r?.card).filter((x): x is number => x != null));
+    // your band of cards playable from exile: the ones you can't use right now are greyed out
+    const band = new Set((s.players.find((p) => p.id === this.localId)?.exilePlayable ?? []).filter((id) => s.cards[id]?.zone === 'Exile'));
     for (const [id, obj] of this.cards) {
       const c = obj.state;
+      obj.setDim(band.has(id) && !actionable.has(id) && !selectable.has(id) && !chosen.has(id));
       let h: Highlight = 'none';
       // what a card is doing in combat outranks "you could click this"
       if (chosen.has(id) || this.group.has(id)) h = 'chosen';

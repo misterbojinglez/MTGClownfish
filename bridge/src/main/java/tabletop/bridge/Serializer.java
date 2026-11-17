@@ -54,6 +54,19 @@ public final class Serializer {
             players.add(player(p, gv, mayView, cards));
         }
         o.add("players", players);
+        // cards playable from exile: only those this viewer is shown face up (an impulse-drawn card exiled face
+        // down is its player's secret). Checked against the cards just serialized for them: every player's
+        // exile is in there by now
+        for (final JsonElement pe : players) {
+            final JsonObject po = pe.getAsJsonObject();
+            if (!po.has("exilePlayable")) continue;
+            final JsonArray seen = new JsonArray();
+            for (final JsonElement id : po.getAsJsonArray("exilePlayable")) {
+                final JsonElement card = cards.get(id.getAsString());
+                if (card != null && card.isJsonObject() && card.getAsJsonObject().has("visible") && card.getAsJsonObject().get("visible").getAsBoolean()) seen.add(id);
+            }
+            po.add("exilePlayable", seen);
+        }
 
         final JsonArray stack = new JsonArray();
         if (gv.getStack() != null) {
@@ -87,13 +100,8 @@ public final class Serializer {
                     o.add(e.getKey(), e.getValue());
                     continue;
                 }
-                // only the cards this viewer may see (an impulse-drawn card exiled face down is its player's secret)
-                final JsonArray seen = new JsonArray();
-                for (final JsonElement id : e.getValue().getAsJsonArray()) {
-                    final CardView cv = gv.getTracker() == null ? null : gv.getTracker().getObj(forge.trackable.TrackableTypes.CardViewType, id.getAsInt());
-                    if (cv != null && mayView.test(cv)) seen.add(id);
-                }
-                o.add("exilePlayable", seen);
+                // filtered to the cards this viewer is shown once the whole table is serialized (see game())
+                o.add("exilePlayable", e.getValue().deepCopy());
             }
         }
         o.addProperty("lost", p.getHasLost());

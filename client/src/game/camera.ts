@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GameEvent, GameState, Ref, Selection } from '../protocol';
 import { HOME_VIEW, type CameraView, type Stage } from '../scene/stage';
-import { computeLayout, matIdentities, seatFrames, tableMats, type SeatFrame } from '../scene/layout';
+import { computeLayout, exileStripAnchor, matIdentities, seatFrames, tableMats, type SeatFrame } from '../scene/layout';
 import { CARD_H } from '../scene/cardMesh';
 
 /**
@@ -23,8 +23,13 @@ const REGION_TABLE = { x0: -0.96, x1: 0.96, y0: -0.6, y1: 0.86 };
 const REGION_SEATS = { x0: -0.9, x1: 0.9, y0: -0.45, y1: 0.84 };
 const REGION_LOCAL = { x0: -0.92, x1: 0.92, y0: -0.6, y1: 0.8 };
 
+/** The duel framing eased back toward you, leaving room for the band of cards playable from exile below your mat. */
+const BAND_VIEW: CameraView = { ...HOME_VIEW, target: HOME_VIEW.target.clone().add(new THREE.Vector3(0, 0, 3.4)), dist: HOME_VIEW.dist * 1.1 };
+
 export class CameraDirector {
   auto = true;
+  /** whether the band of cards playable from exile is showing (the camera leaves room for it) */
+  private bandShown = false;
   mode: ViewMode = { kind: 'table' };
   /** a view the player chose; auto framing waits until the next turn */
   private manual = false;
@@ -75,6 +80,7 @@ export class CameraDirector {
     clearTimeout(this.restoreTimer);
     this.activePlayer = null;
     this.mode = { kind: 'table' };
+    this.bandShown = false;
     this.stage.setView(HOME_VIEW, 0);
     this.stage.setMatColors([]);
     this.onChange?.();
@@ -98,6 +104,14 @@ export class CameraDirector {
     }
     // each mat's cracks run in its commander's colours (identity arrives once commanders are known)
     this.stage.setMatColors(matIdentities(state, localId));
+    // your band of cards playable from exile sits just below your mat: in a duel the camera eases back a
+    // little while it's there, or your hand would cover it
+    const band = exileStripAnchor(state, localId) != null;
+    if (band !== this.bandShown) {
+      this.bandShown = band;
+      if (!this.multiplayer) this.stage.setView(band ? BAND_VIEW : HOME_VIEW, 0.6);
+      else if (this.mode.kind === 'seats' && this.mode.players.length === 1 && this.mode.players[0] === localId) this.stage.setView(this.viewFor(this.mode), 0.6);
+    }
     if (!this.multiplayer) return;
     // an opponent's board framed on its own grows or shrinks: keep it filling the view
     if (this.mode.kind === 'seats' && this.mode.players.length === 1 && this.mode.players[0] !== localId) {
@@ -279,6 +293,8 @@ export class CameraDirector {
         // your own side sits just above your hand, with some of the table in front of it
         const toCentre = f.center.clone().negate().setY(0).normalize();
         pts.push(f.center.clone().addScaledVector(toCentre, 14));
+        // and the band of cards playable from exile below your mat, when there is one
+        if (this.bandShown) pts.push(...f.corners.slice(2).map((c) => c.clone().addScaledVector(toCentre, -3.2)));
         return this.fit(pts, f.rotY, 1.2, REGION_LOCAL);
       }
       // an opponent's turn: close in on the cards on their battlefield, so they can be read

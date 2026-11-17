@@ -48,17 +48,10 @@ const OPP_REGIONS = {
 type Regions = typeof LOCAL_REGIONS;
 
 /**
- * Your side while cards you may play from exile are laid out along the bottom of your mat: the lands and other
- * permanents' row gets shorter to make room for the band (EXILE_STRIP).
+ * A second, smaller hand just below your mat (between it and your hand): cards you may play from exile, wherever
+ * their owner's exile is (Tinybones' stash, impulse draw). Ones you can't play right now are shown dimmed.
  */
-const LOCAL_REGIONS_WITH_EXILE = {
-  creatures: LOCAL_REGIONS.creatures,
-  lands: { rect: { x: 1.5, z: 5.3, w: 19.5, h: 2.9 }, scales: [0.8, 0.75, 0.7, 0.6, 0.5], gutter: 0.45 },
-  other: { rect: { x: -21, z: 5.3, w: 19.5, h: 2.9 }, scales: [0.8, 0.75, 0.7, 0.6, 0.5], gutter: 0.45 },
-} satisfies Record<string, RegionSpec>;
-
-/** The band along the bottom of your mat (just above your hand) for cards you may play from exile. */
-const EXILE_STRIP = { x: -19.5, z: 8.45, w: 40.5, h: 2.1, scale: 0.62, gutter: 0.4 };
+const EXILE_STRIP = { x: -19.5, z: 10.9, w: 40.5, h: 5.3, scale: 1.5, gutter: 0.5 };
 
 /** Pile anchors per seat (graveyard, exile, library, command). */
 const LOCAL_PILES = {
@@ -265,7 +258,7 @@ export function computeLayout(
 
   for (const seat of seats) {
     const p = seat.player;
-    const regions: Regions = seat.local && strip.length ? LOCAL_REGIONS_WITH_EXILE : seat.regions;
+    const regions: Regions = seat.regions;
     // ---- battlefield ----
     const attachments = new Map<number, number[]>();
     for (const id of p.zones.Battlefield) {
@@ -409,7 +402,7 @@ export function computeLayout(
     });
   });
 
-  // ---- cards you may play from exile, laid out along the bottom of your mat (wherever their owner's exile is) ----
+  // ---- cards you may play from exile, laid out just below your mat (wherever their owner's exile is) ----
   if (localSeat && strip.length) {
     const { start, step } = stripSpacing(strip.length);
     strip.forEach((id, i) => {
