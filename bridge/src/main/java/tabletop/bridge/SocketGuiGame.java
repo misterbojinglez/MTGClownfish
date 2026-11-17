@@ -215,6 +215,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         msg.add("state", state);
         msg.add("prompt", promptOut);
         msg.add("selection", selection);
+        if (TRACE_INPUTS) System.out.println("[sent] prompt " + promptOut.get("inputId") + " " + promptOut.get("input") + " on " + Thread.currentThread().getName());
         session.send(msg);
     }
 
@@ -490,6 +491,7 @@ public class SocketGuiGame extends AbstractGuiGame {
     }
 
     /** The Forge input last numbered, and its number: each new input object gets the next one. */
+    private static final boolean TRACE_INPUTS = Boolean.getBoolean("bridge.traceInputs");
     private Object numberedInput;
     private int inputId;
 
@@ -504,6 +506,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         if (input != numberedInput) {
             numberedInput = input;
             inputId++;
+            if (TRACE_INPUTS) System.out.println("[input] #" + inputId + " " + (input == null ? "null" : input.getClass().getSimpleName() + "@" + System.identityHashCode(input)) + " on " + Thread.currentThread().getName());
         }
         return inputId;
     }

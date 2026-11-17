@@ -628,7 +628,8 @@ hud.bind({
     if (director.isShowing(id)) director.showTable();
     else director.focusPlayer(id);
   },
-  passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn }),
+  // the stack as shown: a pass pressed before an opponent's newest spell reached the screen doesn't let it resolve unseen
+  passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn, stack: (table.state?.stack ?? []).map((s) => s.id) }),
   concede: () => bridge.act({ action: 'concede' }),
   undo: () => bridge.act({ action: 'undo' }),
   payLife: () => {

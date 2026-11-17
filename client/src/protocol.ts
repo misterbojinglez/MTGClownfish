@@ -294,7 +294,7 @@ export type Action =
   | { action: 'ok'; auto?: boolean }
   | { action: 'cancel' | 'alphaStrike' | 'undo' | 'concede' }
   /** turn: the turn the client is showing, so a late click can't carry into the next turn */
-  | { action: 'passUntilEndOfTurn'; turn?: number }
+  | { action: 'passUntilEndOfTurn'; turn?: number; stack?: number[] }
   | { action: 'card'; id: number; button?: number }
   | { action: 'player'; id: number; button?: number }
   | { action: 'stack'; id: number }

@@ -32,12 +32,16 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
     private static final java.util.Map<Integer, java.util.Set<Integer>> PREPARED_READY = new java.util.concurrent.ConcurrentHashMap<>();
     /** cards in exile the player could play right now (Forge's scan doesn't look in exile) */
     private static final java.util.Map<Integer, java.util.Set<Integer>> EXILE_READY = new java.util.concurrent.ConcurrentHashMap<>();
+    /** cards the player could use right now that Forge's own scan turned down for mana it can't plan (life payments) */
+    private static final java.util.Map<Integer, java.util.Set<Integer>> USABLE_READY = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** battlefield cards Forge's scan misses that this player could use now: X-targeted abilities, prepared spells */
     static java.util.Set<Integer> readyCards(final int playerId) {
         final java.util.Set<Integer> all = new java.util.HashSet<>(READY_X.getOrDefault(playerId, java.util.Set.of()));
         all.addAll(PREPARED_READY.getOrDefault(playerId, java.util.Set.of()));
         all.addAll(EXILE_READY.getOrDefault(playerId, java.util.Set.of()));
+        all.addAll(USABLE_READY.getOrDefault(playerId, java.util.Set.of()));
+        all.remove(-1);
         return all;
     }
 
@@ -52,6 +56,7 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
         PLAYABLE_TOP.clear();
         PREPARED_READY.clear();
         EXILE_READY.clear();
+        USABLE_READY.clear();
     }
 
     BridgeHumanPlayer(final String name) {
@@ -91,12 +96,24 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             // and the live facts every snapshot carries (cards playable from exile, mana available): the
             // snapshots sent while you decide are mostly built off the game thread, where they can't be worked out
             Serializer.refreshLive(getGame());
-            // cards castable from exile only hold your own main phase with an empty stack (an instant sitting in
-            // exile would otherwise stop auto-pass at every step)
             final forge.game.phase.PhaseHandler ph = getGame().getPhaseHandler();
             final boolean myMain = ph.isPlayerTurn(getPlayer()) && ph.getPhase() != null && ph.getPhase().isMain() && getGame().getStack().isEmpty();
+            // a chance to respond: something is on the stack (an opponent's spell, ability or trigger), or this is
+            // one of the steps the table stops at (declare attackers, end of turn...); elsewhere the step is
+            // skipped whatever the player holds
+            final boolean responding = !getGame().getStack().isEmpty();
+            final boolean atStop = ph.getPlayerTurn() != null && ph.getPhase() != null
+                    && !getGui().isUiSetToSkipPhase(ph.getPlayerTurn().getView(), ph.getPhase());
+            final boolean chance = responding || atStop;
+            // Forge passes for you when its own scan finds nothing you could do, and that scan prices costs with
+            // the AI's mana planner, which turns down costs you can pay (Phyrexian mana and K'rrik's {B} with
+            // life): look again, more generously, before letting it pass. A yield you asked for still wins.
+            final java.util.Set<Integer> usable = chance && !getYieldController().isYieldActive() ? usableNow() : java.util.Set.of();
+            USABLE_READY.put(me, usable);
+            // cards castable from exile hold only a real chance to use them (an instant sitting in exile would
+            // otherwise stop auto-pass at every step)
             final boolean hold = sacrificeOutletReady() || playableTop >= 0 || !preparedReady.isEmpty() || (!readyX.isEmpty() && getGame().getStack().isEmpty())
-                    || (myMain && !exileReady.isEmpty());
+                    || ((myMain || chance) && !exileReady.isEmpty()) || !usable.isEmpty();
             final forge.gamemodes.match.YieldController yc = getYieldController();
             if (hold) {
                 yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
@@ -108,6 +125,33 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                     yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");
                 }
             }
+        }
+
+        /** Sentinel in {@link #usableNow}'s answer: the scan ran out of time, so assume there is something. */
+        private static final int UNFINISHED = -1;
+
+        /**
+         * Cards of yours (hand, battlefield, graveyard, command zone, exile) with something you could use now, by
+         * {@link Serializer#usableNow}. Run as the AI, like Forge's own scan, so working out a cost never stops to
+         * ask you anything.
+         */
+        private java.util.Set<Integer> usableNow() {
+            final Player me = getPlayer();
+            final Serializer.UsableScan[] scan = new Serializer.UsableScan[1];
+            try {
+                me.runWithController(() -> scan[0] = Serializer.usableNow(me, 800),
+                        new forge.ai.PlayerControllerAi(getGame(), me, me.getOriginalLobbyPlayer()));
+            } catch (final RuntimeException e) {
+                return java.util.Set.of();
+            }
+            if (scan[0] == null) {
+                return java.util.Set.of();
+            }
+            final java.util.Set<Integer> ids = new java.util.HashSet<>(scan[0].cards());
+            if (scan[0].incomplete()) {
+                ids.add(UNFINISHED);
+            }
+            return java.util.Set.copyOf(ids);
         }
 
         private java.util.List<Integer> exileNow() {

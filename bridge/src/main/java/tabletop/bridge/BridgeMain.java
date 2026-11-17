@@ -583,7 +583,15 @@ public final class BridgeMain {
             case "passUntilEndOfTurn" -> {
                 final int seenTurn = msg.has("turn") ? msg.get("turn").getAsInt() : -1;
                 if (seenTurn < 0 || seenTurn == gui.getGameView().getTurn()) {
-                    YieldController.endTurn(controller, gui.getCurrentPlayer());
+                    // nor one pressed before the table showed an opponent's newest spell or ability: Forge's
+                    // "an opponent's spell interrupts the yield" has already happened by then, so the late pass
+                    // would set the yield again and let that spell resolve without the player seeing it
+                    final String unseen = msg.has("stack") ? unseenOpponentItem(gui, msg.getAsJsonArray("stack")) : null;
+                    if (unseen != null) {
+                        gui.tell(unseen + " just went on the stack, so Pass Turn waited for you. Pass again to let it resolve.");
+                    } else {
+                        YieldController.endTurn(controller, gui.getCurrentPlayer());
+                    }
                 }
             }
             case "reorderHand" -> {
@@ -592,6 +600,24 @@ public final class BridgeMain {
             }
             default -> System.err.println("[bridge] unknown action: " + action);
         }
+    }
+
+    /** The name of a spell or ability an opponent has on the stack that isn't among the stack items the player has seen, or null. */
+    private static String unseenOpponentItem(final SocketGuiGame gui, final JsonArray seen) {
+        final java.util.Set<Integer> shown = new java.util.HashSet<>();
+        for (final com.google.gson.JsonElement e : seen) {
+            if (e.isJsonPrimitive()) shown.add(e.getAsInt());
+        }
+        final var stack = gui.getGameView().getStack();
+        if (stack == null) return null;
+        final int me = gui.playerId();
+        for (final forge.game.spellability.StackItemView si : stack) {
+            final boolean mine = si.getActivatingPlayer() != null && si.getActivatingPlayer().getId() == me;
+            if (!mine && !shown.contains(si.getId())) {
+                return si.getSourceCard() != null ? si.getSourceCard().getName() : "Something";
+            }
+        }
+        return null;
     }
 
     /** Actions that answer the prompt on screen; the rest (pass turn, concede, undo, hand order) stand alone. */

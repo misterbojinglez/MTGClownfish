@@ -734,6 +734,137 @@ public final class Serializer {
         return ids;
     }
 
+    /** What {@link #usableNow} found: the cards, and whether it ran out of time before looking at them all. */
+    record UsableScan(java.util.List<Integer> cards, boolean incomplete) { }
+
+    private static final ZoneType[] OWN_PLAY_ZONES = { ZoneType.Hand, ZoneType.Battlefield, ZoneType.Graveyard, ZoneType.Command, ZoneType.Exile };
+
+    /**
+     * Cards in this player's hand, battlefield, graveyard, command zone and exile with a spell or ability they
+     * could use right now. It's a broader test than Forge's own "anything to do?" check, which auto-pass relies on:
+     * that check pays costs with the AI's mana planner, and the planner says no to costs a person can pay
+     * (Phyrexian symbols or K'rrik's {B} paid with life, mana it won't plan with). Where the planner says no, the
+     * mana on hand is counted roughly instead. Timing, targets and other costs are Forge's own tests. Cards in
+     * other players' exiles are {@link #exileReady}'s. Runs on the game thread; stops after budgetMs (and says so).
+     */
+    static UsableScan usableNow(final forge.game.player.Player player, final long budgetMs) {
+        final java.util.List<Integer> ids = new java.util.ArrayList<>();
+        final long deadline = System.nanoTime() + budgetMs * 1_000_000L;
+        for (final ZoneType zone : OWN_PLAY_ZONES) {
+            for (final forge.game.card.Card c : player.getCardsIn(zone)) {
+                if (System.nanoTime() > deadline) {
+                    return new UsableScan(ids, true);
+                }
+                try {
+                    if (usable(c, player)) {
+                        ids.add(c.getId());
+                    }
+                } catch (final RuntimeException ignored) {
+                    // can't tell for this one
+                }
+            }
+        }
+        return new UsableScan(ids, false);
+    }
+
+    private static boolean usable(final forge.game.card.Card c, final forge.game.player.Player player) {
+        for (final forge.game.spellability.SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
+            if (sa.isManaAbility() || sa.isLandAbility() || !forge.ai.ComputerUtilAbility.isFullyTargetable(sa)) {
+                continue;
+            }
+            final forge.game.cost.Cost cost = sa.getPayCosts();
+            if (cost == null || !cost.hasManaCost()) {
+                return true;
+            }
+            try {
+                if (forge.ai.ComputerUtilMana.canPayManaCost(sa, player, 0, false)) {
+                    return true;
+                }
+            } catch (final RuntimeException ignored) {
+                // the planner gave up; the rough count decides
+            }
+            if (roughlyAffordable(sa, player)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the mana on hand could plausibly pay this ability's mana cost: enough untapped sources and floating
+     * mana for what's left once the symbols payable with life are set aside (Phyrexian ones, and {B} under K'rrik),
+     * and for each coloured symbol left, a source (or the pool) that makes one of its colours. Generous on purpose:
+     * it decides whether to stop for the player, and a needless stop costs a click where a missed one costs a game.
+     */
+    static boolean roughlyAffordable(final forge.game.spellability.SpellAbility sa, final forge.game.player.Player player) {
+        final forge.card.mana.ManaCost cost = sa.getPayCosts().getTotalMana();
+        final boolean lifeForBlack = player.hasKeyword("PayLifeInsteadOf:B");
+        int lifeSymbols = player.canPayLife(2, false, sa) ? Math.max(0, (player.getLife() - 1) / 2) : 0;
+        int needed = cost.getGenericCost();
+        final java.util.List<Byte> colourNeeds = new java.util.ArrayList<>();
+        for (final forge.card.mana.ManaCostShard shard : cost) {
+            if (shard == forge.card.mana.ManaCostShard.X) {
+                continue;
+            }
+            final boolean byLife = shard.isPhyrexian() || (lifeForBlack && shard.getColorMask() == forge.card.MagicColor.BLACK);
+            if (byLife && lifeSymbols > 0) {
+                lifeSymbols--;
+                continue;
+            }
+            needed++;
+            // {2/W} and the like can be paid with generic mana; only plain coloured and hybrid symbols ask for a colour
+            if (!shard.isOr2Generic() && shard.getColorMask() != 0) {
+                colourNeeds.add(shard.getColorMask());
+            }
+        }
+        if (needed == 0) {
+            return true;
+        }
+        if (manaAvailable(player) < needed) {
+            return false;
+        }
+        final byte makes = coloursAvailable(player);
+        for (final byte need : colourNeeds) {
+            if ((need & makes) == 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The colours this player could make right now: floating in the pool, or from a source they could tap. */
+    private static byte coloursAvailable(final forge.game.player.Player player) {
+        byte mask = 0;
+        for (final byte colour : forge.card.MagicColor.WUBRG) {
+            if (player.getManaPool().getAmountOfColor(colour) > 0) {
+                mask |= colour;
+            }
+        }
+        for (final forge.game.card.Card c : player.getCardsIn(ZoneType.Battlefield)) {
+            for (final forge.game.spellability.SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.cost.Cost cost = ma.getPayCosts();
+                if (cost != null && cost.hasTapCost() && (c.isTapped() || (c.isCreature() && c.isSick()))) {
+                    continue;
+                }
+                try {
+                    for (forge.game.spellability.SpellAbility part = ma; part != null; part = part.getSubAbility()) {
+                        if (part.getManaPart() == null) {
+                            continue;
+                        }
+                        for (final byte colour : forge.card.MagicColor.WUBRG) {
+                            if (part.getManaPart().canProduce(forge.card.MagicColor.toShortString(colour), part)) {
+                                mask |= colour;
+                            }
+                        }
+                    }
+                } catch (final RuntimeException ignored) {
+                    // a source we can't read
+                }
+            }
+        }
+        return mask;
+    }
+
     /** Whether every mana ability of this card has a sacrifice in its cost (Lotus Petal, Treasure, Phyrexian Altar). */
     public static boolean manaCostsSacrifice(final forge.game.card.Card card) {
         if (card == null || card.getManaAbilities().isEmpty()) {
