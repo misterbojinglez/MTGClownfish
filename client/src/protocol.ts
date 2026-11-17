@@ -299,6 +299,7 @@ export type Action =
   | { action: 'player'; id: number; button?: number }
   | { action: 'stack'; id: number }
   | { action: 'mana'; color: number }
+  | { action: 'floating' }
   | { action: 'reorderHand'; id: number; index: number };
 
 /** what a lobby seat's deck looks like on the seat list */

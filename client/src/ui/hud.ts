@@ -51,6 +51,8 @@ export interface HudHandlers {
   payLife(): void;
   /** "OK to all": start passing until the stack is resolved, or stop doing so */
   resolveAll(): void;
+  /** spend the mana floating in your pool on the cost being paid */
+  useFloating(): void;
   /** leave the game for the main menu */
   exitToMenu(): void;
 }
@@ -70,6 +72,7 @@ export class Hud {
   private readonly undoBtn = h('button', 'sub-btn undo-btn', 'Undo');
   private readonly lifeBtn = h('button', 'sub-btn life-btn');
   private readonly resolveAllBtn = h('button', 'sub-btn resolve-all-btn');
+  private readonly floatingBtn = h('button', 'sub-btn floating-btn');
   private readonly phaseBar = h('div', 'phase-bar');
   private readonly turnLabel = h('div', 'turn-label');
   private readonly zoom = h('div', 'zoom');
@@ -102,7 +105,11 @@ export class Hud {
     all.title = 'Keep pressing OK until the stack is resolved (stops if an opponent adds something)';
     all.onclick = () => this.handlers.resolveAll();
     all.style.display = 'none';
-    column.append(pass, undo, life, all, pair);
+    const floating = this.floatingBtn;
+    floating.title = 'Spend the mana floating in your pool on this cost';
+    floating.onclick = () => this.handlers.useFloating();
+    floating.style.display = 'none';
+    column.append(pass, undo, life, floating, all, pair);
     this.promptBox.append(this.promptSource, this.promptText, column);
     const phaseWrap = h('div', 'phase-wrap');
     phaseWrap.append(this.turnLabel, this.phaseBar);
@@ -306,7 +313,7 @@ export class Hud {
 
   // ---- prompt -------------------------------------------------------------------------------------
 
-  setPrompt(prompt: Prompt, sel: Selection, waiting: boolean, state: GameState | null = null): void {
+  setPrompt(prompt: Prompt, sel: Selection, waiting: boolean, state: GameState | null = null, localId = -1): void {
     // the resolving spell gets a header with its art and text, unless the stack list already shows it on top
     const onTop = !!prompt.source && prompt.source.card != null && state?.stack[0]?.source === prompt.source.card;
     const src = onTop ? null : prompt.source;
@@ -354,6 +361,13 @@ export class Hud {
     const lp = prompt.lifePay;
     const canPayLife = !!lp && !waiting && lp.life - lp.committed >= lp.each;
     this.lifeBtn.style.display = canPayLife ? '' : 'none';
+    // mana already floating in your pool: Forge spends it only when asked (its Auto can be off, as when the
+    // rest of a cost is being paid with life)
+    const me = state?.players.find((p) => p.id === localId);
+    const floating = me ? Object.values(me.mana ?? {}).reduce((a, b) => a + b, 0) : 0;
+    const paying = !!prompt.input?.startsWith('InputPayMana') && !waiting;
+    this.floatingBtn.style.display = paying && floating > 0 ? '' : 'none';
+    if (paying && floating > 0) this.floatingBtn.textContent = `Use floating mana (${floating})`;
     if (lp && canPayLife) this.lifeBtn.textContent = lp.shards > 1 ? `Pay ${lp.each} life · ${lp.shards} left` : `Pay ${lp.each} life`;
   }
 

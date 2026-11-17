@@ -530,13 +530,35 @@ public final class BridgeMain {
             }
             case "player" -> {
                 final PlayerView player = tracker.getObj(TrackableTypes.PlayerViewType, id);
-                if (player != null) { controller.selectPlayer(player, click); }
+                if (player != null) {
+                    controller.selectPlayer(player, click);
+                    recheckAutoPay(controller);
+                }
             }
             case "stack" -> {
                 final StackItemView item = tracker.getObj(TrackableTypes.StackItemViewType, id);
                 if (item != null) { controller.selectStackItem(item); }
             }
             case "mana" -> controller.useMana((byte) msg.get("color").getAsInt());
+            // "Use floating mana": what's in the pool goes toward the cost being paid, a unit at a time (colourless
+            // first, keeping coloured mana for coloured symbols), until it's paid or nothing more fits. Forge only
+            // spends floating mana by clicks on the pool, and Auto stays off for some costs (paying K'rrik's black
+            // with life), which left floating mana with no way in
+            case "floating" -> {
+                if (controller instanceof forge.player.PlayerControllerHuman pch) {
+                    final byte[] order = { forge.card.mana.ManaAtom.COLORLESS, forge.card.mana.ManaAtom.WHITE, forge.card.mana.ManaAtom.BLUE,
+                            forge.card.mana.ManaAtom.BLACK, forge.card.mana.ManaAtom.RED, forge.card.mana.ManaAtom.GREEN };
+                    for (int guard = 0; guard < 60; guard++) {
+                        if (!(pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputPayMana)) break;
+                        final int before = pch.getPlayer().getManaPool().totalMana();
+                        for (final byte color : order) {
+                            controller.useMana(color);
+                            if (pch.getPlayer().getManaPool().totalMana() != before) break;
+                        }
+                        if (pch.getPlayer().getManaPool().totalMana() == before) break;
+                    }
+                }
+            }
             case "alphaStrike" -> controller.alphaStrike();
             case "undo" -> controller.undoLastAction();
             case "concede" -> controller.concede();
@@ -558,7 +580,25 @@ public final class BridgeMain {
     }
 
     /** Actions that answer the prompt on screen; the rest (pass turn, concede, undo, hand order) stand alone. */
-    private static final java.util.Set<String> GUARDED_ACTIONS = java.util.Set.of("ok", "cancel", "card", "player", "stack", "mana", "alphaStrike");
+    /**
+     * Paying a symbol with life (Phyrexian mana, K'rrik's {B}) shrinks the cost, but Forge keeps its Auto plan
+     * from before: a cost that wasn't payable stayed "not payable", so Auto stayed off even once the mana on hand
+     * covered what was left. Forget the plan and refresh the prompt so it's worked out again.
+     */
+    private static void recheckAutoPay(final IGameController controller) {
+        if (!(controller instanceof forge.player.PlayerControllerHuman pch)) return;
+        if (!(pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputPayMana ipm)) return;
+        try {
+            final java.lang.reflect.Method m = forge.gamemodes.match.input.InputPayMana.class.getDeclaredMethod("invalidateAutoPayManaSources");
+            m.setAccessible(true);
+            m.invoke(ipm);
+            ipm.showMessage();
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+            System.err.println("[bridge] couldn't recheck auto-pay: " + e);
+        }
+    }
+
+    private static final java.util.Set<String> GUARDED_ACTIONS = java.util.Set.of("ok", "cancel", "card", "player", "stack", "mana", "floating", "alphaStrike");
 
     private static List<DeckProxy> constructedPrecons() {
         return DeckProxy.getAllPreconstructedDecks(QuestController.getPrecons());

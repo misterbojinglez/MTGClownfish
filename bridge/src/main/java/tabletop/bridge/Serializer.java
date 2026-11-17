@@ -110,7 +110,8 @@ public final class Serializer {
         o.add("counters", counters(p.getCounters()));
 
         final JsonObject mana = new JsonObject();
-        for (final byte color : forge.card.MagicColor.WUBRGC) {
+        // keyed the way the view stores the pool (colourless is ManaAtom's 32, not MagicColor's 0)
+        for (final byte color : forge.card.mana.ManaAtom.MANATYPES) {
             final int amount = p.getMana(color);
             if (amount > 0) {
                 mana.addProperty(forge.card.MagicColor.toShortString(color), amount);

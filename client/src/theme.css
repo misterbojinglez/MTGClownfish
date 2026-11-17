@@ -287,11 +287,13 @@
 }
 
 .action-column > .life-btn,
-.action-column > .resolve-all-btn {
+.action-column > .resolve-all-btn,
+.action-column > .floating-btn {
   width: 200px;
 }
 
-.action-column > .resolve-all-btn {
+.action-column > .resolve-all-btn,
+.action-column > .floating-btn {
   --h: 42px;
   height: 42px;
 }

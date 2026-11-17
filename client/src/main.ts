@@ -131,7 +131,7 @@ async function drain(): Promise<void> {
 
 function refreshPrompt(): void {
   if (!table.state) return;
-  hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0, table.state);
+  hud.setPrompt(table.prompt, table.selection, draining && queue.length > 0, table.state, table.localId);
   // clicks from here on answer this prompt
   bridge.shownInput = table.prompt.inputId;
   askLifeIfNoMana();
@@ -637,6 +637,7 @@ hud.bind({
   },
   exitToMenu: () => exitToMenu(),
   resolveAll: () => startResolveAll(),
+  useFloating: () => bridge.act({ action: 'floating' }),
 });
 
 const input = new Input(stage, table, {
