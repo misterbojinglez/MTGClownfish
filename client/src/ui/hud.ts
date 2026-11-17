@@ -49,6 +49,8 @@ export interface HudHandlers {
   undo(): void;
   /** pay one Phyrexian (or K'rrik {B}) symbol of the cost being paid with life */
   payLife(): void;
+  /** "OK to all": start passing until the stack is resolved, or stop doing so */
+  resolveAll(): void;
   /** leave the game for the main menu */
   exitToMenu(): void;
 }
@@ -67,6 +69,7 @@ export class Hud {
   private readonly cancelBtn = h('button', 'sub-btn');
   private readonly undoBtn = h('button', 'sub-btn undo-btn', 'Undo');
   private readonly lifeBtn = h('button', 'sub-btn life-btn');
+  private readonly resolveAllBtn = h('button', 'sub-btn resolve-all-btn');
   private readonly phaseBar = h('div', 'phase-bar');
   private readonly turnLabel = h('div', 'turn-label');
   private readonly zoom = h('div', 'zoom');
@@ -95,7 +98,11 @@ export class Hud {
     const life = this.lifeBtn;
     life.title = 'Pay this symbol with life instead of mana (or tap more mana)';
     life.onclick = () => this.handlers.payLife();
-    column.append(pass, undo, life, pair);
+    const all = this.resolveAllBtn;
+    all.title = 'Keep pressing OK until the stack is resolved (stops if an opponent adds something)';
+    all.onclick = () => this.handlers.resolveAll();
+    all.style.display = 'none';
+    column.append(pass, undo, life, all, pair);
     this.promptBox.append(this.promptSource, this.promptText, column);
     const phaseWrap = h('div', 'phase-wrap');
     phaseWrap.append(this.turnLabel, this.phaseBar);
@@ -348,6 +355,15 @@ export class Hud {
     const canPayLife = !!lp && !waiting && lp.life - lp.committed >= lp.each;
     this.lifeBtn.style.display = canPayLife ? '' : 'none';
     if (lp && canPayLife) this.lifeBtn.textContent = lp.shards > 1 ? `Pay ${lp.each} life · ${lp.shards} left` : `Pay ${lp.each} life`;
+  }
+
+  /** The "OK to all" button: offered with several things on the stack, or showing how many are left while it runs. */
+  setResolveAll(mode: 'hidden' | 'offer' | 'running', left: number): void {
+    const b = this.resolveAllBtn;
+    b.style.display = mode === 'hidden' ? 'none' : '';
+    b.classList.toggle('running', mode === 'running');
+    if (mode === 'offer') b.textContent = `OK to all (${left})`;
+    else if (mode === 'running') b.textContent = `Stop · ${left} left`;
   }
 
   /**

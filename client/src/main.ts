@@ -135,9 +135,53 @@ function refreshPrompt(): void {
   // clicks from here on answer this prompt
   bridge.shownInput = table.prompt.inputId;
   askLifeIfNoMana();
+  driveResolveAll();
   hud.setPhase(table.state, table.localId);
   hud.setStack(table.state, table.localId);
   refreshBrowser();
+}
+
+/**
+ * "OK to all": keeps passing priority until the stack that was there when it was pressed has resolved.
+ * Your own triggers that join along the way resolve too; anything an opponent adds stops it, so you can
+ * answer. A choice a resolving spell asks for (a target, a mode) is left to you, and it carries on after.
+ */
+let resolving: { known: Set<number>; sent: number | undefined } | null = null;
+
+function startResolveAll(): void {
+  const s = table.state;
+  if (resolving) {
+    resolving = null;
+  } else if (s && s.stack.length) {
+    resolving = { known: new Set(s.stack.map((it) => it.id)), sent: undefined };
+  }
+  refreshPrompt();
+}
+
+function driveResolveAll(): void {
+  const s = table.state!;
+  const p = table.prompt;
+  const busy = draining && queue.length > 0;
+  if (resolving) {
+    if (s.stack.length === 0 || s.gameOver) {
+      resolving = null;
+    } else {
+      const added = s.stack.find((it) => !resolving!.known.has(it.id) && it.controller != null && it.controller !== table.localId);
+      if (added) {
+        resolving = null;
+        const who = s.players.find((pl) => pl.id === added.controller)?.name ?? 'An opponent';
+        hud.toast(`Stopped: ${who} added something to the stack`);
+      } else {
+        s.stack.forEach((it) => resolving!.known.add(it.id));
+        if (p.input === 'InputPassPriority' && p.ok?.enabled && !busy && p.inputId !== resolving.sent) {
+          resolving.sent = p.inputId;
+          bridge.act({ action: 'ok' }, p.inputId);
+        }
+      }
+    }
+  }
+  const offer = !resolving && p.input === 'InputPassPriority' && !!p.ok?.enabled && s.stack.length >= 2;
+  hud.setResolveAll(resolving ? 'running' : offer ? 'offer' : 'hidden', s.stack.length);
 }
 
 /**
@@ -192,6 +236,7 @@ async function handle(msg: ServerMsg): Promise<void> {
       break;
     case 'gameStarted':
       inGame = true;
+      resolving = null;
       // the game HUD (phase tracker, buttons, stack) only shows during a game
       document.body.classList.add('in-game');
       table.reset();
@@ -591,6 +636,7 @@ hud.bind({
     if (lp) bridge.act({ action: 'player', id: lp.player });
   },
   exitToMenu: () => exitToMenu(),
+  resolveAll: () => startResolveAll(),
 });
 
 const input = new Input(stage, table, {

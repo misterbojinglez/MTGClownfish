@@ -286,8 +286,20 @@
   height: 42px;
 }
 
-.action-column > .life-btn {
+.action-column > .life-btn,
+.action-column > .resolve-all-btn {
   width: 200px;
+}
+
+.action-column > .resolve-all-btn {
+  --h: 42px;
+  height: 42px;
+}
+
+/* while it runs, it reads as a stop button */
+.resolve-all-btn.running {
+  border-color: rgba(230, 180, 80, 0.85);
+  color: #ffe9bf;
 }
 
 /* paying life: the red of your life shield on the slate button */
