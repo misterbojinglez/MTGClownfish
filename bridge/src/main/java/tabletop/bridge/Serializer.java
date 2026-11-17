@@ -167,10 +167,20 @@ public final class Serializer {
             return ids;
         }
         for (final CardView c : zoneCards) {
+            if (isBookkeeping(c)) continue;
             ids.add(c.getId());
             putCard(cards, c, mayView);
         }
         return ids;
+    }
+
+    /**
+     * Forge's own bookkeeping, not a card anyone plays: the "Keyword Effects" holder it files in the command zone
+     * when a player is given a keyword (K'rrik's "pay 2 life rather than {B}"), with a blank face and text that
+     * reads "You has:". It keeps working in the engine; it just isn't shown.
+     */
+    private static boolean isBookkeeping(final CardView c) {
+        return c != null && c.isImmutable() && !c.isEmblem() && "Keyword Effects".equals(c.getName());
     }
 
     private static void putCard(final JsonObject cards, final CardView c, final Predicate<CardView> mayView) {
