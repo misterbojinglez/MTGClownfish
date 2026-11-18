@@ -341,12 +341,16 @@ export class Hud {
     else if (prompt.input === 'InputBlock') msg += '\n(Drag a creature onto an attacker to block it. Drag a box on the table to select several, then drag one of them)';
     this.promptText.textContent = msg;
     const ok = prompt.ok;
-    const cancel = prompt.cancel;
+    // your priority prompt: Forge's own "End Turn" secondary does what Pass Turn does (minus its guards against
+    // stale presses and unseen opponent spells), so it isn't offered, and OK, which passes priority once, says so
+    const priority = prompt.input === 'InputPassPriority';
+    const cancel = priority && /^end turn$/i.test(prompt.cancel?.label ?? '') ? undefined : prompt.cancel;
+    const okLabel = priority && /^OK$/i.test(ok?.label ?? '') ? 'Pass Priority' : ok?.label || 'OK';
     // "up to one target" and other choices where nothing is allowed: until something is picked, OK means
     // choosing nothing. Say so, drop the "your move" glow, and keep Space/Enter from doing it by accident
     // (passing through a pile of triggers would otherwise skip Summon: Bahamut's destroy).
     this.skipping = !!ok?.enabled && SKIPPABLE_INPUTS.has(prompt.input ?? '') && sel.min === 0 && sel.chosen.length === 0 && (sel.cards.length > 0 || sel.targets.length > 0);
-    this.okBtn.textContent = this.skipping ? 'Choose nothing' : ok?.label || 'OK';
+    this.okBtn.textContent = this.skipping ? 'Choose nothing' : okLabel;
     this.okBtn.disabled = !ok?.enabled || waiting;
     this.okBtn.classList.toggle('glow', !!ok?.enabled && !waiting && !this.skipping);
     this.okBtn.classList.toggle('skip', this.skipping);

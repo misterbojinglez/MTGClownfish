@@ -311,7 +311,7 @@
   box-shadow: inset 0 0 14px rgba(190, 40, 30, 0.35);
 }
 
-/* the prompt's own pair stacks under Undo, secondary (End Turn, Cancel, Alpha Strike) above OK, so the
+/* the prompt's own pair stacks under Undo, secondary (Cancel, Undo, Alpha Strike) above OK, so the
    column stays narrow and never covers the right end of your hand */
 .action-column > .actions {
   display: flex;
