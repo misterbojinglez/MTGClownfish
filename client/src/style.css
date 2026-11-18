@@ -22,7 +22,9 @@ body {
   overflow: hidden;
   background: #07060a;
   color: var(--text);
-  font-family: Inter, system-ui, sans-serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
+  /* Alegreya's default old-style figures sink and shrink (a 1 reads as ı): numbers stand upright everywhere */
+  font-variant-numeric: lining-nums;
   user-select: none;
 }
 
@@ -89,7 +91,7 @@ button {
  * Action buttons (.main-btn primary, .sub-btn secondary) share height, font, radius and border width so
  * they sit level in any row; only the fill says which is primary. The container sets the size through
  * --btn-h: dialogs use the standard 44px, the in-game prompt and setup screen the large 56px.
- * Toolbar pills (.chip, .view-btn, .seg) are the small tier: 30px, Inter.
+ * Toolbar pills (.chip, .view-btn, .seg) are the small tier: 30px, Alegreya.
  */
 .main-btn,
 .sub-btn {
@@ -99,7 +101,7 @@ button {
   padding: 0 calc(var(--h) * 0.45);
   border-radius: calc(var(--h) / 2);
   border: 2px solid var(--gold-dim);
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-weight: 700;
   font-size: calc(var(--h) * 0.33);
   letter-spacing: 0.04em;
@@ -186,7 +188,7 @@ button {
   min-width: 0;
   width: var(--h);
   padding: 0;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: calc(var(--h) * 0.45);
 }
 
@@ -217,7 +219,7 @@ button {
 }
 
 .turn-label {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 14px;
   color: var(--muted);
 }
@@ -291,7 +293,7 @@ button {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 24px;
   font-weight: 700;
   color: #fff;
@@ -300,7 +302,7 @@ button {
 }
 
 .life {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 30px;
   font-weight: 700;
   min-width: 46px;
@@ -480,7 +482,7 @@ button {
 .float-text {
   position: absolute;
   transform: translate(-50%, -50%);
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-weight: 700;
   font-size: 38px;
   pointer-events: none !important;
@@ -518,7 +520,7 @@ button {
   left: 50%;
   top: 42%;
   transform: translate(-50%, -50%);
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 46px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -624,7 +626,7 @@ button {
 }
 
 .overlay h1 {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 58px;
   margin: 0;
   letter-spacing: 0.06em;
@@ -682,7 +684,7 @@ button {
 }
 
 .menu-title {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 8px;
@@ -756,7 +758,7 @@ button {
 }
 
 .modal-title {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 19px;
   text-align: center;
   white-space: pre-line;
@@ -933,7 +935,7 @@ button {
 }
 
 .browser-title {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 19px;
   max-width: 900px;
   text-align: center;
@@ -992,7 +994,7 @@ button {
 }
 
 .cast-caption {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 18px;
   white-space: nowrap;
   padding: 6px 16px;
@@ -1040,7 +1042,7 @@ button {
 }
 
 .share {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 22px;
   font-weight: 700;
   text-align: center;
@@ -1079,7 +1081,7 @@ button {
 }
 
 .source-name {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-weight: 700;
   font-size: 16px;
   color: var(--gold);
@@ -1119,7 +1121,7 @@ button {
 }
 
 .setup-head h2 {
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 34px;
   margin: 0;
   color: #ffe2a0;
@@ -1176,7 +1178,7 @@ button {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-weight: 700;
   font-size: 20px;
   background: radial-gradient(circle at 35% 30%, hsl(var(--hue), 55%, 52%), hsl(var(--hue), 50%, 18%));
@@ -1272,7 +1274,7 @@ button {
   background: #1d1828 center / cover no-repeat;
   display: grid;
   place-items: center;
-  font-family: Cinzel, Georgia, serif;
+  font-family: var(--display, Alegreya, Georgia, serif);
   font-size: 26px;
   color: var(--gold);
 }

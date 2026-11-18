@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OVERLAY_LAYER } from './stage';
 import type { CardState } from '../protocol';
-import { cardBackTexture, cardFaceTexture, roundRect } from './textures';
+import { CANVAS_FONT, cardBackTexture, cardFaceTexture, roundRect } from './textures';
 
 /** Card size at scale 1 in table units (Arena's creature row of 47 fits ~13 cards at 1.2×). */
 export const CARD_W = 2.5;
@@ -239,14 +239,14 @@ export class CardObject {
       g.strokeStyle = 'rgba(0,0,0,0.55)';
       g.stroke();
       g.fillStyle = icon.fg;
-      g.font = `800 ${icon.glyph.length > 1 ? 15 : 21}px Inter, sans-serif`;
+      g.font = `800 ${icon.glyph.length > 1 ? 15 : 21}px ${CANVAS_FONT}`;
       g.textAlign = 'center';
       g.fillText(icon.glyph, left + 17, 58);
       g.textAlign = 'left';
     }
     if (counters.length) {
       const label = counters.map(([k, n]) => (n > 1 ? `${prettyCounter(k)} ×${n}` : prettyCounter(k))).join('  ');
-      g.font = '700 26px Inter, sans-serif';
+      g.font = `700 26px ${CANVAS_FONT}`;
       const w = Math.min(Math.max(40, left - 8), g.measureText(label).width + 22);
       // P/T counters take the colour of the way they push the creature
       const tone = counterTone(counters);
@@ -270,7 +270,7 @@ export class CardObject {
       g.stroke();
       // power and toughness coloured separately: a +2/-1 shows green over red
       const [pw, tg] = pt.split('/');
-      g.font = '800 40px Inter, sans-serif';
+      g.font = `800 40px ${CANVAS_FONT}`;
       const sw = g.measureText('/').width;
       const pwW = g.measureText(pw).width;
       const total = pwW + sw + g.measureText(tg).width;
@@ -293,7 +293,7 @@ export class CardObject {
       g.lineWidth = 4;
       g.stroke();
       g.fillStyle = '#f2e3b8';
-      g.font = '800 40px Inter, sans-serif';
+      g.font = `800 40px ${CANVAS_FONT}`;
       g.textAlign = 'center';
       g.fillText(loyalty, 206, 66, 84);
       g.textAlign = 'left';

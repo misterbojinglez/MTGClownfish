@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import type { CardState } from '../protocol';
 
+/** The interface's typeface (theme.css --display), for text drawn onto card textures. */
+export const CANVAS_FONT = 'Alegreya, Georgia, serif';
+// a canvas draws with whatever is loaded at that moment and keeps it: load the weights card text uses now,
+// so a card drawn early doesn't keep a fallback face
+if (typeof document !== 'undefined' && document.fonts) {
+  for (const w of ['500', '600', '700', '800']) void document.fonts.load(`${w} 20px Alegreya`).catch(() => {});
+}
+
 /**
  * Card art from Scryfall. Unknown cards are resolved in batches through /cards/collection (75 per call,
  * spaced to respect Scryfall's rate guidance); images then come straight from the CDN.
@@ -277,27 +285,27 @@ function drawnFace(card: CardState): THREE.Texture {
   roundRect(g, 26, 28, W - 52, 46, 10);
   g.fill();
   g.fillStyle = '#111';
-  g.font = '600 26px Cinzel, Georgia, serif';
+  g.font = `600 26px ${CANVAS_FONT}`;
   g.fillText(fit(g, card.name ?? 'Card', W - 90), 40, 60);
   // type bar
   g.fillStyle = 'rgba(245,240,225,0.92)';
   roundRect(g, 26, 394, W - 52, 40, 10);
   g.fill();
   g.fillStyle = '#111';
-  g.font = '600 20px Inter, sans-serif';
+  g.font = `600 20px ${CANVAS_FONT}`;
   g.fillText(fit(g, card.typeLine ?? '', W - 90), 40, 421);
   // rules text
   g.fillStyle = 'rgba(250,247,238,0.94)';
   g.fillRect(34, 444, W - 68, 190);
   g.fillStyle = '#222';
-  g.font = '18px Inter, sans-serif';
+  g.font = `500 18px ${CANVAS_FONT}`;
   wrap(g, (card.text ?? '').replace(/\r?\n/g, ' ⏎ '), 46, 470, W - 92, 22, 7);
   if (card.power !== undefined && card.toughness !== undefined) {
     g.fillStyle = 'rgba(245,240,225,0.95)';
     roundRect(g, W - 128, H - 74, 100, 48, 12);
     g.fill();
     g.fillStyle = '#111';
-    g.font = '700 30px Inter, sans-serif';
+    g.font = `700 30px ${CANVAS_FONT}`;
     g.textAlign = 'center';
     g.fillText(`${card.power}/${card.toughness}`, W - 78, H - 40);
   }

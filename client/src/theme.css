@@ -1180,7 +1180,7 @@ body:not(.in-game) .plate {
 
 /* the code field's hint reads as ordinary text; only a typed code gets the big spaced letters */
 .join-code::placeholder {
-  font: 400 15px Inter, system-ui, sans-serif;
+  font: 500 15px var(--display);
   letter-spacing: normal;
   text-transform: none;
 }
