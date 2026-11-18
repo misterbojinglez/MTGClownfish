@@ -338,7 +338,9 @@ export function joinScreen(root: HTMLElement, prefill: string, message: string |
   const ov = h('div', 'overlay menu join');
   const title = h('h1', 'menu-logo');
   const logo = h('img');
-  logo.src = '/logo.webp';
+  logo.src = '/logo-large.webp';
+  logo.srcset = '/logo-360.webp 360w, /logo-large.webp 960w';
+  logo.sizes = 'min(560px, 72vw)';
   logo.alt = 'MTGClownfish';
   title.append(logo);
   ov.append(title, h('p', 'sub tagline', 'Join a friend’s game'));

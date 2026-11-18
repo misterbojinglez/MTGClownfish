@@ -42,7 +42,7 @@ rm -rf "$PAYLOAD"
 mkdir -p "$PAYLOAD/forge"
 cp "$JAR" "$PAYLOAD/forge-bridge.jar"
 cp -R "$ROOT/client/dist" "$PAYLOAD/client"
-rm -f "$PAYLOAD/client/clownfishlog.png"  # the full-size source art; the start screen uses logo.webp
+rm -f "$PAYLOAD/client/clownfishlog.png"  # the full-size source art; the start screen uses logo-large.webp / logo-360.webp
 echo "copying Forge's card data…"
 # Forge's Adventure mode and its music aren't used here
 rsync -a --exclude 'adventure/' --exclude 'music/' "$RES" "$PAYLOAD/forge/"
