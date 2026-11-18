@@ -377,11 +377,20 @@ button {
 
 /* ---- zoom ---- */
 
+/* the hover zoom's column at the right edge (where dialogs and the card browser show it): its width plus
+   the gap on either side, which those keep clear so the card being read never covers the one it shows */
+:root {
+  --zoom-w: min(330px, 24vw);
+  --zoom-room: calc(var(--zoom-w) + 52px);
+}
+
 .zoom {
   position: absolute;
+  /* above dialogs' scrim (10) and the card browser (5): you're hovering a card in them */
+  z-index: 30;
   left: 26px;
   top: 50%;
-  width: min(330px, 24vw);
+  width: var(--zoom-w);
   aspect-ratio: 488 / 680;
   transform: translateY(-50%) scale(0.92);
   opacity: 0;
@@ -711,6 +720,15 @@ button {
   z-index: 10;
 }
 
+/* a dialog showing cards centres in the room left of the hover zoom */
+.modal:has(.thumb) {
+  padding-right: var(--zoom-room);
+}
+
+.modal:has(.thumb) .modal-panel {
+  max-width: min(1100px, calc(100vw - var(--zoom-room) - 32px));
+}
+
 .modal.out {
   opacity: 0;
   transition: opacity 0.15s;
@@ -901,7 +919,7 @@ button {
 .browser {
   position: absolute;
   left: 0;
-  right: 0;
+  right: var(--zoom-room);
   top: 10%;
   bottom: 22%;
   display: flex;
@@ -928,7 +946,7 @@ button {
   flex-wrap: wrap;
   justify-content: center;
   gap: 12px;
-  max-width: 94vw;
+  max-width: 100%;
   min-height: 0;
   overflow-y: auto;
   padding: 12px 20px;
