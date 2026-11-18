@@ -115,6 +115,16 @@ WIN_HOW='To start:
   3. If Windows SmartScreen warns you: More info > Run anyway. It only does this the first time.'
 
 # ---- one app per platform ----
+# deletes a previous build's output; a Finder window open on it keeps writing .DS_Store files into it while
+# it's being deleted ("Directory not empty"), so try again a few times
+remove_old() {
+  local i
+  for i in 1 2 3 4 5; do
+    rm -rf "$@" 2>/dev/null && return 0
+    sleep 1
+  done
+  rm -rf "$@"
+}
 rm -rf "$DIST/MTGClownfish" "$DIST/MTGClownfish.zip"
 STAGE="$DIST/.stage"
 for t in "${TARGETS[@]}"; do
@@ -144,7 +154,7 @@ for t in "${TARGETS[@]}"; do
   built="$STAGE/$name/electron/MTGClownfish-$eplat-$earch"
 
   out="$DIST/MTGClownfish-$name"
-  rm -rf "$out" "$out.zip"
+  remove_old "$out" "$out.zip"
   mkdir -p "$out"
   case "$os" in
     mac)
