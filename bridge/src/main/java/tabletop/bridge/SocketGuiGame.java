@@ -773,8 +773,12 @@ public class SocketGuiGame extends AbstractGuiGame {
         }
         if (abilities.size() == 1) {
             // A land that can't be played right now offers only its other ability (cycling, channel...);
-            // say why instead of silently starting that
-            final String blocked = landPlayBlocked(hostCard);
+            // say why instead of silently starting that. Only for a click: the engine also comes here with no
+            // click and a single ability already decided on (every ability put on the stack passes through its
+            // optional-costs step this way), and asking then let a bounce land's own "return a land you
+            // control" trigger, right after the land was played, be answered No and dropped, so the bounce
+            // land stayed for free
+            final String blocked = triggerEvent == null ? null : landPlayBlocked(hostCard);
             final String only = abilities.get(0).getDescription();
             if (blocked != null && only != null && !only.startsWith("Play land")) {
                 return ask(blocked + "\n\nUse " + only + " instead?", hostCard, "Yes", "No") ? abilities.get(0) : null;
