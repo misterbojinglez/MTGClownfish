@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import type { Stage } from './stage';
+import { particleAllowed } from '../settings';
 
 /**
  * Coloured magic. Each colour of mana has its own look, drawn with textured sprites (a procedural atlas):
@@ -256,6 +257,9 @@ class SpriteParticles {
   private readonly frame: Float32Array;
   private cursor = 0;
   private t = 0;
+  /** sprites alive; with none, and the buffers already cleared, a frame does no work */
+  private live = 0;
+  private cleared = true;
 
   constructor(stage: Stage, atlas: THREE.Texture, private readonly max: number, additive: boolean) {
     this.pos = new Float32Array(max * 3);
@@ -318,11 +322,15 @@ class SpriteParticles {
       mat.uniforms.uScale.value = buf.y / (2 * Math.tan(THREE.MathUtils.degToRad(stage.camera.fov / 2)));
       this.tick(dt);
     });
+    stage.onBusy(() => this.live > 0);
   }
 
   emit(o: SpriteOpts): void {
+    if (!particleAllowed()) return;
     const p = this.items[this.cursor];
     this.cursor = (this.cursor + 1) % this.max;
+    if (!p.alive) this.live++;
+    this.cleared = false;
     p.alive = true;
     p.landed = false;
     p.pos.copy(o.pos);
@@ -346,6 +354,7 @@ class SpriteParticles {
 
   private tick(dt: number): void {
     this.t += dt;
+    if (this.cleared) return;
     const tmp = new THREE.Color();
     for (let i = 0; i < this.max; i++) {
       const p = this.items[i];
@@ -356,6 +365,7 @@ class SpriteParticles {
       p.life -= dt;
       if (p.life <= 0) {
         p.alive = false;
+        this.live--;
         this.alpha[i] = 0;
         continue;
       }
@@ -393,6 +403,7 @@ class SpriteParticles {
       this.alpha[i] = p.alpha * fadeIn * Math.min(1, k * 2.5);
     }
     for (const n of ['position', 'color', 'size', 'alpha', 'rot', 'frame']) (this.geo.attributes[n] as THREE.BufferAttribute).needsUpdate = true;
+    if (this.live === 0) this.cleared = true;
   }
 }
 

@@ -5,6 +5,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { onSettings, settings } from '../settings';
 
 // Camera framing measured from Arena's battlefield scenes (docs/arena-reference.md).
 export const CAMERA_FOV = 34;
@@ -75,12 +76,22 @@ export class Stage {
   private readonly basePos = new THREE.Vector3();
   /** a scratch camera for framing calculations */
   private readonly probe = new THREE.PerspectiveCamera();
+  /** frame-rate governor: when the next frame is due (ms), and until when the table counts as moving */
+  private nextFrameAt = 0;
+  private wakeUntil = 0;
+  /** idle frames since shadows were last drawn */
+  private idleShadowFrames = 0;
+  /** other systems that are mid-animation (particles still alive...) */
+  private readonly busyChecks = new Set<() => boolean>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // shadows are drawn only on frames where something may have moved (see frame())
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
@@ -129,8 +140,57 @@ export class Stage {
     this.composer.addPass(new OutputPass());
 
     window.addEventListener('resize', () => this.resize());
+    // anything the player does may move something: draw at the full rate for a moment
+    for (const ev of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) window.addEventListener(ev, () => this.wake(), { passive: true });
+    onSettings((st) => {
+      const ratio = st.resolution === 'high' ? Math.min(window.devicePixelRatio, 2) : 1;
+      if (this.renderer.getPixelRatio() !== ratio) {
+        this.renderer.setPixelRatio(ratio);
+        this.resize();
+      }
+      const low = st.floorDetail === 'low';
+      if (('LOW_DETAIL' in this.tableMaterial.defines) !== low) {
+        if (low) this.tableMaterial.defines.LOW_DETAIL = '';
+        else delete this.tableMaterial.defines.LOW_DETAIL;
+        this.tableMaterial.needsUpdate = true;
+      }
+      this.wake();
+    });
     this.resize();
-    this.renderer.setAnimationLoop(() => this.frame());
+    this.renderer.setAnimationLoop((now: number) => this.frame(now));
+  }
+
+  /** Draw at the full frame rate for a while (seconds): input, incoming changes. */
+  wake(seconds = 0.6): void {
+    this.wakeUntil = Math.max(this.wakeUntil, performance.now() + seconds * 1000);
+  }
+
+  /** Register a check for something mid-animation that gsap doesn't drive (live particles). */
+  onBusy(check: () => boolean): void {
+    this.busyChecks.add(check);
+  }
+
+  /** Something on screen is moving fast enough to want the full frame rate. */
+  private moving(now: number): boolean {
+    if (now < this.wakeUntil || this.shake > 0.001 || this.hitAmt > 0.002) return true;
+    // card flights, camera glides, counters: gsap removes finished tweens from its global timeline
+    if (gsap.globalTimeline.getChildren(false, true, true).length > 0) return true;
+    for (const busy of this.busyChecks) if (busy()) return true;
+    return false;
+  }
+
+  /** Milliseconds between frames under the frame-rate setting; 0 = every display refresh. */
+  private frameInterval(moving: boolean): number {
+    switch (settings.frameRate) {
+      case 'max':
+        return 0;
+      case '60':
+        return 1000 / 60;
+      case '30':
+        return 1000 / 30;
+      default:
+        return moving ? 1000 / 60 : 1000 / 30;
+    }
   }
 
   onTick(fn: (dt: number, t: number) => void): () => void {
@@ -258,6 +318,8 @@ export class Stage {
     this.keyLight.shadow.mapSize.set(half > 40 ? 4096 : 2048, half > 40 ? 4096 : 2048);
     this.keyLight.shadow.map?.dispose();
     this.keyLight.shadow.map = null;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.wake();
   }
 
   /** A short camera jolt for heavy hits; strength ~0.2–1. */
@@ -283,7 +345,22 @@ export class Stage {
     this.camera.updateProjectionMatrix();
   }
 
-  private frame(): void {
+  private frame(now: number): void {
+    // the display refreshes at 60-144 Hz; draw only as often as the setting asks (Auto: 60 fps while
+    // anything moves, 30 when the table is still, where the lava and embers drift slowly enough to look the same)
+    const moving = this.moving(now);
+    const interval = this.frameInterval(moving);
+    if (interval > 0) {
+      // 1 ms early is fine: vsync timestamps jitter, and a frame missed by a hair would wait a whole refresh
+      if (now < this.nextFrameAt - 1) return;
+      this.nextFrameAt += interval;
+      if (this.nextFrameAt < now) this.nextFrameAt = now;
+    }
+    // shadows only change when something moves; while still, a slow refresh keeps flyers' bobbing shadows along
+    if (moving || ++this.idleShadowFrames >= 3) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.idleShadowFrames = 0;
+    }
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = this.clock.elapsedTime;
     this.tableMaterial.uniforms.uTime.value = t;
@@ -324,14 +401,12 @@ export class Stage {
     const r = this.renderer;
     const bg = this.scene.background;
     r.autoClear = false;
-    r.shadowMap.autoUpdate = false;
     this.scene.background = null;
     r.clearDepth();
     this.camera.layers.set(OVERLAY_LAYER);
     r.render(this.scene, this.camera);
     this.camera.layers.set(0);
     this.scene.background = bg;
-    r.shadowMap.autoUpdate = true;
     r.autoClear = true;
   }
 
@@ -399,7 +474,13 @@ export class Stage {
           vec2 u = f * f * (3.0 - 2.0 * f);
           return mix(mix(hash(i), hash(i + vec2(1,0)), u.x), mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), u.x), u.y);
         }
-        float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; } return v; }
+        // Low floor detail: fewer noise layers (the finest ones), no fine warp, no drifting crust
+        #ifdef LOW_DETAIL
+        #define FBM_OCTAVES 2
+        #else
+        #define FBM_OCTAVES 5
+        #endif
+        float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < FBM_OCTAVES; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; } return v; }
         float ring(float d, float r, float w) { return smoothstep(w, 0.0, abs(d - r)); }
         // how far round a box's edge (centre-relative q, half-size h) a point lies, 0..1, so colours share it evenly
         float perimeter(vec2 q, vec2 h) {
@@ -411,33 +492,57 @@ export class Stage {
         float sdBox(vec2 p, vec4 b) { vec2 q = abs(p - (b.xy + b.zw) * 0.5) - (b.zw - b.xy) * 0.5; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
         void main() {
           vec2 p = vWorld.xz;
-          float n = fbm(p * 0.09) * 0.6 + fbm(p * 0.6) * 0.4;
-          float vn = fbm(p * 0.21 + 3.1); float veins = smoothstep(0.012, 0.0, abs(vn - 0.5)) * 0.55;
-          vec3 stone = mix(vec3(0.035, 0.035, 0.05), vec3(0.11, 0.1, 0.13), n);
-          stone += veins * vec3(0.16, 0.12, 0.06);
-
-          // ritual circle at the table's centre line, slowly breathing
-          vec2 c = (p - uCircle.xy) * (9.0 / uCircle.z);
-          float d = length(c);
-          float pulse = 0.65 + 0.35 * sin(uTime * 0.6);
-          float glyph = ring(d, 9.0, 0.06) + ring(d, 8.4, 0.03) + ring(d, 3.2, 0.04);
-          float spokes = smoothstep(0.03, 0.0, abs(sin(atan(c.y, c.x) * 6.0 + uTime * 0.05))) * step(3.2, d) * step(d, 8.4);
-          stone += (glyph + spokes * 0.35) * vec3(0.35, 0.24, 0.85) * 0.45 * pulse;
 
           // the painted arena floor over the procedural stone, its ring on the table's circle; the painting
-          // fades into darker stone past its edges so the arena never ends in a hard line
+          // fades into darker stone past its edges so the arena never ends in a hard line. Worked out first:
+          // where it covers fully, the stone beneath can't be seen and isn't computed
+          float inside = 0.0;
+          vec3 floorCol = vec3(0.0);
           if (uHasFloor > 0.5) {
             vec2 fuv = vec2(0.5 + (p.x - uFloorRect.x) / uFloorRect.z, ${FLOOR_RING_V.toFixed(3)} - (p.y - uFloorRect.y) / uFloorRect.w);
-            vec3 floorCol = texture2D(uFloor, clamp(fuv, 0.0, 1.0)).rgb;
-            float inside = smoothstep(0.0, 0.06, fuv.x) * smoothstep(1.0, 0.94, fuv.x) * smoothstep(0.0, 0.08, fuv.y) * smoothstep(1.0, 0.92, fuv.y);
-            stone = mix(stone * 0.35, floorCol * 0.92, inside);
+            floorCol = texture2D(uFloor, clamp(fuv, 0.0, 1.0)).rgb;
+            inside = smoothstep(0.0, 0.06, fuv.x) * smoothstep(1.0, 0.94, fuv.x) * smoothstep(0.0, 0.08, fuv.y) * smoothstep(1.0, 0.92, fuv.y);
+          }
+          vec3 stone;
+          if (inside > 0.999) {
+            stone = floorCol * 0.92;
+          } else {
+            float n = fbm(p * 0.09) * 0.6 + fbm(p * 0.6) * 0.4;
+            float vn = fbm(p * 0.21 + 3.1); float veins = smoothstep(0.012, 0.0, abs(vn - 0.5)) * 0.55;
+            stone = mix(vec3(0.035, 0.035, 0.05), vec3(0.11, 0.1, 0.13), n);
+            stone += veins * vec3(0.16, 0.12, 0.06);
+
+            // ritual circle at the table's centre line, slowly breathing
+            vec2 c = (p - uCircle.xy) * (9.0 / uCircle.z);
+            float d = length(c);
+            float pulse = 0.65 + 0.35 * sin(uTime * 0.6);
+            float glyph = ring(d, 9.0, 0.06) + ring(d, 8.4, 0.03) + ring(d, 3.2, 0.04);
+            float spokes = smoothstep(0.03, 0.0, abs(sin(atan(c.y, c.x) * 6.0 + uTime * 0.05))) * step(3.2, d) * step(d, 8.4);
+            stone += (glyph + spokes * 0.35) * vec3(0.35, 0.24, 0.85) * 0.45 * pulse;
+            if (uHasFloor > 0.5) stone = mix(stone * 0.35, floorCol * 0.92, inside);
           }
 
           // player mats: slightly darker inset, bounded by cracks in the stone with lava flowing beneath.
-          // Distances are measured from a gently warped point so the edges meander organically.
+          // Distances are measured from a gently warped point so the edges meander organically. The warp moves
+          // a point at most ~1.06 units and a box's distance changes no faster than the point moves, while
+          // nothing about an edge (crack, scorch, offshoots, glow) shows more than ~2.5 units out: so farther
+          // than 3.6 from every edge only the inset darkening applies, and the rest is skipped
+          float near = 1e3, mat0 = 0.0;
+          for (int i = 0; i < 4; i++) {
+            if (i >= uMatCount) break;
+            float s0 = sdBox(p, uMats[i]);
+            near = min(near, abs(s0));
+            if (s0 < 0.0) mat0 = 1.0;
+          }
+          if (near > 3.6) {
+            stone = mix(stone, stone * 0.82, mat0 * 0.5);
+          } else {
           vec2 pw = p + (vec2(fbm(p * 0.33 + 11.0), fbm(p * 0.33 + 27.0)) - 0.5) * 1.1
                       + (vec2(noise(p * 1.7), noise(p * 1.7 + 5.0)) - 0.5) * 0.3
-                      + (vec2(noise(p * 4.3 + 2.0), noise(p * 4.3 + 8.0)) - 0.5) * 0.1;
+          #ifndef LOW_DETAIL
+                      + (vec2(noise(p * 4.3 + 2.0), noise(p * 4.3 + 8.0)) - 0.5) * 0.1
+          #endif
+                      ;
           float mat = 0.0, e = 1e3;
           int owner = 0;
           for (int i = 0; i < 4; i++) {
@@ -472,7 +577,11 @@ export class Stage {
           lava = mix(lava, mix(tint * 1.2, vec3(1.6, 1.5, 1.3), 0.45), smoothstep(0.65, 0.95, heat));
           lava *= 0.65 + 0.55 * smoothstep(w, 0.0, e);
           // cooled crust drifts over stretches of the flow, leaving it dim and dark
+          #ifdef LOW_DETAIL
+          float crust = 0.0;
+          #else
           float crust = smoothstep(0.5, 0.7, fbm(pw * 0.6 + vec2(-t * 0.05, t * 0.04) + 40.0));
+          #endif
           lava = mix(lava, tint * 0.12 + 0.02, crust * 0.8);
 
           // scorched lip, then heat glowing out across the stone
@@ -481,6 +590,7 @@ export class Stage {
           // offshoots: dark fissures with only a faint ember line deep inside
           stone = mix(stone, mix(vec3(0.02, 0.01, 0.01), lava * 0.45, smoothstep(0.985, 1.0, ridge)), branch * (1.0 - crack));
           stone = mix(stone, lava, crack);
+          }
 
           if (uHasFloor < 0.5) {
             // light pool + vignette (wider for a multiplayer table)
@@ -619,5 +729,10 @@ export class Stage {
     motes.frustumCulled = false;
     this.scene.add(motes);
     this.onTick((_, t) => (mat.uniforms.uTime.value = t));
+    // spawn points are shuffled, so the first third is a fair sample of the whole floor
+    onSettings((st) => {
+      motes.visible = st.particles !== 'off';
+      geo.setDrawRange(0, st.particles === 'reduced' ? Math.round(count / 3) : count);
+    });
   }
 }

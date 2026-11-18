@@ -1,4 +1,5 @@
 import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, ResolvingSource, Selection } from '../protocol';
+import { DEFAULT_SETTINGS, onSettings, setSetting, type Settings } from '../settings';
 import { cardImageUrl, cardZoomUrl } from '../scene/textures';
 import { sfx } from '../audio';
 
@@ -172,7 +173,10 @@ export class Hud {
     document.addEventListener('click', () => soundWrap.classList.remove('open'));
     soundWrap.append(sound, soundMenu);
     showSound();
-    menu.append(soundWrap, concede);
+    const settingsChip = h('button', 'chip', 'Settings');
+    settingsChip.title = 'Frame rate, effects and graphics detail';
+    settingsChip.onclick = () => this.openSettings();
+    menu.append(settingsChip, soundWrap, concede);
     // every button gets a soft click
     document.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest?.('button, .thumb')) sfx.click();
@@ -245,7 +249,82 @@ export class Hud {
       row.append(b);
     }
     ov.append(row);
+    const settingsChip = h('button', 'chip menu-settings', 'Settings');
+    settingsChip.title = 'Frame rate, effects and graphics detail';
+    settingsChip.onclick = () => this.openSettings();
+    ov.append(settingsChip);
     this.root.append(ov);
+  }
+
+  /** Graphics and performance settings: each choice applies at once and is remembered on this device. */
+  openSettings(): void {
+    if (document.querySelector('.modal.settings')) return;
+    const modal = h('div', 'modal settings');
+    const panel = h('div', 'modal-panel');
+    panel.append(h('div', 'modal-title', 'Settings'), h('div', 'modal-sub', 'Lower settings run cooler and quieter. Changes apply right away.'));
+    const rows = h('div', 'settings-rows');
+    const syncs: ((st: Readonly<Settings>) => void)[] = [];
+    const row = <K extends keyof Settings>(key: K, label: string, hint: string, choices: [Settings[K], string][]) => {
+      const r = h('div', 'settings-row');
+      const text = h('div', 'settings-text');
+      text.append(h('div', 'settings-label', label), h('div', 'settings-hint', hint));
+      const seg = h('div', 'seg');
+      const buttons = choices.map(([value, name]) => {
+        const b = h('button', '', name);
+        b.onclick = () => setSetting(key, value);
+        seg.append(b);
+        return [value, b] as const;
+      });
+      syncs.push((st) => buttons.forEach(([value, b]) => b.classList.toggle('on', st[key] === value)));
+      r.append(text, seg);
+      rows.append(r);
+    };
+    row('frameRate', 'Frame rate', 'Auto draws 60 frames a second while things move and 30 when the table is still. Max matches your display.', [
+      ['auto', 'Auto'],
+      ['30', '30'],
+      ['60', '60'],
+      ['max', 'Max'],
+    ]);
+    row('particles', 'Effects', 'Spell and combat effects, sparks, and the embers rising off the floor.', [
+      ['full', 'Full'],
+      ['reduced', 'Reduced'],
+      ['off', 'Off'],
+    ]);
+    row('floorDetail', 'Table detail', 'The carved stone and lava cracks around each player’s mat.', [
+      ['high', 'High'],
+      ['low', 'Low'],
+    ]);
+    row('resolution', 'Resolution', 'High uses your screen’s full sharpness. Standard draws fewer pixels on high-density screens.', [
+      ['high', 'High'],
+      ['standard', 'Standard'],
+    ]);
+    panel.append(rows);
+    const unsubscribe = onSettings((st) => syncs.forEach((f) => f(st)));
+    const buttons = h('div', 'modal-buttons');
+    const reset = h('button', 'sub-btn wide', 'Reset to defaults');
+    reset.onclick = () => (Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]).forEach((k) => setSetting(k, DEFAULT_SETTINGS[k] as never));
+    const done = h('button', 'main-btn wide', 'Done');
+    const close = () => {
+      unsubscribe();
+      window.removeEventListener('keydown', onKey, true);
+      modal.classList.add('out');
+      setTimeout(() => modal.remove(), 160);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    done.onclick = close;
+    modal.onclick = (e) => {
+      if (e.target === modal) close();
+    };
+    window.addEventListener('keydown', onKey, true);
+    buttons.append(reset, done);
+    panel.append(buttons);
+    modal.append(panel);
+    this.root.append(modal);
   }
 
   loading(text: string): void {

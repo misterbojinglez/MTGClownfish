@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
 import type { Stage } from './stage';
+import { particleAllowed } from '../settings';
 
 const MAX_PARTICLES = 6000;
 
@@ -25,6 +26,9 @@ export class Particles {
   private readonly sizes = new Float32Array(MAX_PARTICLES);
   private readonly alphas = new Float32Array(MAX_PARTICLES);
   private cursor = 0;
+  /** particles alive; with none, and the buffers already cleared, a frame does no work */
+  private live = 0;
+  private cleared = true;
 
   constructor(stage: Stage) {
     for (let i = 0; i < MAX_PARTICLES; i++) {
@@ -60,11 +64,15 @@ export class Particles {
     points.renderOrder = 10;
     stage.scene.add(points);
     stage.onTick((dt) => this.tick(dt));
+    stage.onBusy(() => this.live > 0);
   }
 
   emit(o: { pos: THREE.Vector3; vel: THREE.Vector3; color: THREE.ColorRepresentation; size: number; life: number; drag?: number; gravity?: number }): void {
+    if (!particleAllowed()) return;
     const p = this.particles[this.cursor];
     this.cursor = (this.cursor + 1) % MAX_PARTICLES;
+    if (!p.alive) this.live++;
+    this.cleared = false;
     p.alive = true;
     p.pos.copy(o.pos);
     p.vel.copy(o.vel);
@@ -76,6 +84,7 @@ export class Particles {
   }
 
   private tick(dt: number): void {
+    if (this.cleared) return;
     for (let i = 0; i < MAX_PARTICLES; i++) {
       const p = this.particles[i];
       if (!p.alive) {
@@ -85,6 +94,7 @@ export class Particles {
       p.life -= dt;
       if (p.life <= 0) {
         p.alive = false;
+        this.live--;
         this.alphas[i] = 0;
         continue;
       }
@@ -98,6 +108,8 @@ export class Particles {
       this.alphas[i] = Math.min(1, k * 2.2);
     }
     for (const name of ['position', 'color', 'size', 'alpha']) (this.geo.attributes[name] as THREE.BufferAttribute).needsUpdate = true;
+    // the last ones just died and their alphas went out as 0: nothing to do until the next emit
+    if (this.live === 0) this.cleared = true;
   }
 }
 

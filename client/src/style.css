@@ -1753,3 +1753,81 @@ button {
   box-shadow: 0 0 0 3px #ff4a3a, 0 0 28px rgba(255, 74, 58, 0.75);
   transform: translate(-50%, -50%) scale(1.06);
 }
+
+/* ---- settings ---- */
+
+/* the main menu's way in, where the in-game chips sit */
+.overlay .menu-settings {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+}
+
+/* fits a phone's width with a 16px gutter, and scrolls if the screen is too short for every row */
+.modal.settings .modal-panel {
+  box-sizing: border-box;
+  width: min(680px, calc(100vw - 32px));
+  max-width: none;
+  overflow-y: auto;
+}
+
+.modal.settings .modal-panel > * {
+  max-width: 100%;
+}
+
+.modal.settings .modal-sub {
+  text-align: center;
+  text-wrap: balance;
+}
+
+.settings-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(217, 180, 95, 0.18);
+}
+
+.settings-row:first-child {
+  border-top: 0;
+}
+
+.settings-text {
+  min-width: 0;
+  text-align: left;
+}
+
+.settings-label {
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.settings-hint {
+  margin-top: 3px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+.settings-row .seg {
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .settings-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}
