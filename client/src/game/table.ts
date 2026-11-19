@@ -175,9 +175,11 @@ export class Table {
         // A card between zones (cast but not yet on the stack, etc.) stays where it is until it lands;
         // only a card that really went to its library or out of the game leaves the table.
         const zone = cards[id]?.zone;
-        // ...except tokens: one reported anywhere but the battlefield or stack has ceased to exist (it died,
-        // was exiled or bounced) and will never be listed again
-        const tokenGone = cards[id]?.token && zone !== 'Battlefield' && zone !== 'Stack';
+        // ...except tokens (copies of cards and spells count): they exist only on the battlefield and the stack,
+        // so one listed in neither has ceased to exist and will never be listed again. Its last report can still
+        // say Stack or Battlefield (a copied spell that resolved, a token that died and left the graveyard within
+        // one update), so it can't wait to land.
+        const tokenGone = !!cards[id]?.token;
         if (zone && IN_TRANSIT_ZONES.has(zone) && !tokenGone) continue;
         const snap = snapshots.get(id);
         tasks.push(tokenGone ? deathsGo.then(() => this.vanish(obj, prev, snap)) : this.vanish(obj, prev, snap));
@@ -519,6 +521,7 @@ export class Table {
   /** A card left every zone we draw (library, or out of the game): send it home and drop it. */
   private async vanish(obj: CardObject, prev: GameState | null, snap?: Snapshot): Promise<void> {
     this.cards.delete(obj.id);
+    this.tucked.delete(obj.id);
     const s = this.state!;
     const owner = obj.state.owner;
     const lib = owner != null ? libraryAnchor(s, this.localId, owner) : null;
