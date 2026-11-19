@@ -1,0 +1,101 @@
+diff --git a/forge-game/src/main/java/forge/game/cost/CostExile.java b/forge-game/src/main/java/forge/game/cost/CostExile.java
+index d70aac7eaa4..bc6278fb3a0 100644
+--- a/forge-game/src/main/java/forge/game/cost/CostExile.java
++++ b/forge-game/src/main/java/forge/game/cost/CostExile.java
+@@ -206,6 +206,17 @@ public class CostExile extends CostPartWithList {
+             type = TextUtil.fastReplace(type, TextUtil.concatNoSpace("+withTotalCMCGE", totalM), "");
+         }
+ 
++        // "+withTotalManaSymbols_Black_GE15" (Baron Helmut Zemo): a condition on the chosen cards together, not on
++        // each card; left in the type it was read as a card property no card has, so the cost could never be paid
++        String totalManaSymbolsColor = null;
++        String totalManaSymbolsCmp = null;
++        if (type.contains("+withTotalManaSymbols_")) {
++            final String[] details = type.split("withTotalManaSymbols_")[1].split("_");
++            totalManaSymbolsColor = details[0];
++            totalManaSymbolsCmp = details[1];
++            type = TextUtil.fastReplace(type, TextUtil.concatNoSpace("+withTotalManaSymbols_", totalManaSymbolsColor, "_", totalManaSymbolsCmp), "");
++        }
++
+         boolean sharedType = false;
+         if (type.contains("+withSharedCardType")) {
+             sharedType = true;
+@@ -223,6 +234,14 @@ public class CostExile extends CostPartWithList {
+             list = CardLists.getValidCards(list, type.split(";"), payer, source, ability);
+         }
+ 
++        if (totalManaSymbolsColor != null) {
++            // payable when every eligible card together could meet it (any number of them may be exiled)
++            final int sum = CardLists.getTotalChroma(list, forge.card.MagicColor.fromName(totalManaSymbolsColor));
++            final int right = AbilityUtils.calculateAmount(source, totalManaSymbolsCmp.substring(2), ability);
++            final String op = totalManaSymbolsCmp.substring(0, 2);
++            return op.equals("GE") || op.equals("GT") ? forge.util.Expressions.compare(sum, totalManaSymbolsCmp, right) : !list.isEmpty();
++        }
++
+         if (nTypes > -1 && AbilityUtils.countCardTypesFromList(list, false) < nTypes) {
+             return false;
+         }
+diff --git a/forge-gui/src/main/java/forge/gamemodes/match/input/InputSelectEntitiesFromList.java b/forge-gui/src/main/java/forge/gamemodes/match/input/InputSelectEntitiesFromList.java
+index 0d66b4953d8..f1374f44f89 100644
+--- a/forge-gui/src/main/java/forge/gamemodes/match/input/InputSelectEntitiesFromList.java
++++ b/forge-gui/src/main/java/forge/gamemodes/match/input/InputSelectEntitiesFromList.java
+@@ -124,7 +124,28 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
+ 
+     // might re-define later
+     @Override
+-    protected boolean hasEnoughTargets() { return selected.size() >= min; }
++    protected boolean hasEnoughTargets() {
++        if (selected.size() < min) {
++            return false;
++        }
++        // "fifteen or more black mana symbols among them": OK only once the chosen cards reach it
++        final int[] symbols = manaSymbolTally();
++        return symbols == null || symbols[0] >= symbols[1];
++    }
++
++    /** For a cost counting mana symbols of a colour among the chosen cards (at least N): {chosen so far, needed}, else null. */
++    @SuppressWarnings("unchecked")
++    private int[] manaSymbolTally() {
++        if (tallyType == null || !tallyType.startsWith("ManaSymbols_") || tally <= 0) {
++            return null;
++        }
++        final String[] parts = tallyType.split("_");
++        if (parts.length < 3 || !(parts[2].equals("GE") || parts[2].equals("GT"))) {
++            return null;
++        }
++        final int sum = CardLists.getTotalChroma((FCollection<Card>) getSelected(), forge.card.MagicColor.fromName(parts[1]));
++        return new int[] {sum, parts[2].equals("GT") ? tally + 1 : tally};
++    }
+     @Override
+     protected boolean hasAllTargets() { return (massSelectMode == null || massSelectMode == MassSelectMode.NONE) && selected.size() >= max; }
+ 
+@@ -153,6 +174,11 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
+                     msg.append(Localizer.getInstance().getMessage("lblTypes")).append(": ");
+                     msg.append(AbilityUtils.countCardTypesFromList((FCollection<Card>)getSelected(), false));
+                     msg.append(" / ").append(tally);
++                } else if (tallyType.startsWith("ManaSymbols_")) {
++                    final int[] symbols = manaSymbolTally();
++                    if (symbols != null) {
++                        msg.append(tallyType.split("_")[1]).append(" mana symbols: ").append(symbols[0]).append(" / ").append(symbols[1]);
++                    }
+                 }
+             }
+         }
+diff --git a/forge-gui/src/main/java/forge/player/HumanCostDecision.java b/forge-gui/src/main/java/forge/player/HumanCostDecision.java
+index c17f8ae618a..3f84e3a97a9 100644
+--- a/forge-gui/src/main/java/forge/player/HumanCostDecision.java
++++ b/forge-gui/src/main/java/forge/player/HumanCostDecision.java
+@@ -305,9 +305,11 @@ public class HumanCostDecision extends CostDecisionMakerBase {
+ 
+         if (totalManaSymbolsColor != null) {
+             int needed = Integer.parseInt(cost.getAmount().split("\\+")[0]);
+-            final int total = AbilityUtils.calculateAmount(source, totalM, ability);
++            // the picker shows the running count against this and holds OK until it's met
++            final int total = AbilityUtils.calculateAmount(source, totalManaSymbolsCmp.substring(2), ability);
+             final InputSelectCardsFromList inp =
+-                    new InputSelectCardsFromList(controller, needed, list.size(), list, ability, "ManaSymbols", total);
++                    new InputSelectCardsFromList(controller, needed, list.size(), list, ability,
++                            "ManaSymbols_" + totalManaSymbolsColor + "_" + totalManaSymbolsCmp.substring(0, 2), total);
+             inp.setMessage(Localizer.getInstance().getMessage("lblSelectToExile", Lang.getNumeral(needed)));
+             inp.setCancelAllowed(true);
+             inp.showAndWait();

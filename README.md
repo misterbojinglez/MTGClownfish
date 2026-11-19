@@ -6,7 +6,8 @@ No store, no deckbuilding, no networking: you play against the AI, 1v1 or 4-play
 ```
 client/   Three.js + Tauri 3D table (TypeScript)
 bridge/   Java WebSocket bridge: runs Forge headless and speaks JSON to the client
-engine/   Forge (cloned by scripts/build-engine.sh, not committed)
+engine/   Forge (cloned by scripts/build-engine.sh, not committed), plus engine/patches/: our fixes to
+          Forge itself, applied by the build
 scripts/  build + smoke-test helpers
 docs/     protocol and Arena reference notes
 ```

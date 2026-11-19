@@ -10,6 +10,21 @@ if [ ! -d "$ROOT/engine/forge" ]; then
 fi
 
 cd "$ROOT/engine/forge"
+# our fixes to Forge itself (engine/patches/*.patch, in order), for bugs the bridge can't work around from
+# outside; each is applied once, so this can run again on the same checkout. A patch that no longer applies
+# (Forge changed under it, or fixed it upstream) stops the build rather than going missing
+for patch in "$ROOT"/engine/patches/*.patch; do
+  [ -e "$patch" ] || continue
+  if git apply --reverse --check "$patch" 2>/dev/null; then
+    continue
+  elif git apply --check "$patch" 2>/dev/null; then
+    git apply "$patch"
+    echo "applied $(basename "$patch")"
+  else
+    echo "engine/patches/$(basename "$patch") doesn't apply to this Forge checkout: update or remove it" >&2
+    exit 1
+  fi
+done
 REV=$(mvn -q -N help:evaluate -Dexpression=revision -DforceStdout 2>/dev/null || true)
 mvn -q -B -N install -Dcheckstyle.skip
 mvn -q -B -pl forge-gui -am install -DskipTests -Dcheckstyle.skip
