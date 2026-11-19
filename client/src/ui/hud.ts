@@ -224,7 +224,8 @@ export class Hud {
 
   menu(onStart: (format: 'constructed' | 'commander', players: number, title: string) => void, onOnline?: () => void): void {
     this.closeOverlay();
-    const ov = h('div', 'overlay menu');
+    // "start": the screen builds in on arrival and out again when a game is chosen (theme.css)
+    const ov = h('div', 'overlay menu start');
     const title = h('h1', 'menu-logo');
     const logo = h('img');
     logo.src = '/logo-large.webp';
@@ -243,8 +244,20 @@ export class Hud {
       const b = h('button', 'menu-card');
       b.append(h('div', 'menu-title', title), h('div', 'menu-desc', desc));
       b.onclick = () => {
-        this.closeOverlay();
-        onStart(format, players, title);
+        if (ov.classList.contains('leaving')) return;
+        ov.classList.add('leaving');
+        // on to the game as soon as the (quick) build-out is over: the last option is the last to go
+        let started = false;
+        const start = () => {
+          if (started) return;
+          started = true;
+          this.closeOverlay();
+          onStart(format, players, title);
+        };
+        row.lastElementChild?.addEventListener('animationend', (e) => {
+          if ((e as AnimationEvent).animationName.startsWith('start-') && (e as AnimationEvent).animationName.includes('out')) start();
+        });
+        setTimeout(start, 450);
       };
       row.append(b);
     }

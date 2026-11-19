@@ -1347,3 +1347,90 @@ body:not(.in-game) .plate {
   color: var(--gilt-hi);
   border-color: var(--gilt);
 }
+
+/* ---- the start screen builds in (about 1.3s: the crest, then the tagline, the options one after another and
+   the Settings chip) and out again, quicker, when a game is chosen. Build-ins only hold their start pose during
+   their delay (fill: backwards), so the cards' hover lift still works once they've landed ---- */
+.overlay.start .menu-logo {
+  animation: start-crest 0.8s cubic-bezier(0.34, 1.4, 0.64, 1) backwards;
+}
+
+.overlay.start .tagline {
+  animation: start-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.3s backwards;
+}
+
+.overlay.start .menu-card {
+  animation: start-rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.overlay.start .menu-card:nth-child(1) { animation-delay: 0.45s; }
+.overlay.start .menu-card:nth-child(2) { animation-delay: 0.53s; }
+.overlay.start .menu-card:nth-child(3) { animation-delay: 0.61s; }
+.overlay.start .menu-card:nth-child(4) { animation-delay: 0.69s; }
+
+.overlay.start .menu-settings {
+  animation: start-fade 0.45s ease-out 0.85s backwards;
+}
+
+@keyframes start-crest {
+  from {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.86);
+  }
+}
+
+@keyframes start-rise {
+  from {
+    opacity: 0;
+    transform: translateY(26px);
+  }
+}
+
+@keyframes start-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* building out: everything lifts away together, the options a touch after the crest */
+.overlay.start.leaving {
+  pointer-events: none;
+}
+
+.overlay.start.leaving .menu-logo,
+.overlay.start.leaving .tagline,
+.overlay.start.leaving .menu-card,
+.overlay.start.leaving .menu-settings {
+  animation: start-out 0.2s cubic-bezier(0.55, 0, 1, 0.45) forwards;
+}
+
+.overlay.start.leaving .menu-card {
+  animation-delay: 0.06s;
+}
+
+@keyframes start-out {
+  to {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay.start .menu-logo,
+  .overlay.start .tagline,
+  .overlay.start .menu-card,
+  .overlay.start .menu-settings {
+    animation-name: start-fade;
+  }
+  .overlay.start.leaving .menu-logo,
+  .overlay.start.leaving .tagline,
+  .overlay.start.leaving .menu-card,
+  .overlay.start.leaving .menu-settings {
+    animation: start-fade-out 0.15s ease-in forwards;
+  }
+  @keyframes start-fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+}
