@@ -49,7 +49,26 @@ final class DeckImport {
         ctl.setAllowedSections(commander ? List.of(DeckSection.Main, DeckSection.Sideboard, DeckSection.Commander)
                 : List.of(DeckSection.Main, DeckSection.Sideboard));
         ctl.importBannedAndRestrictedCards(true);
-        final List<Token> tokens = ctl.parseInput(normalise(text, commander));
+        final String list = normalise(text, commander);
+        List<Token> tokens = ctl.parseInput(list);
+        // A line naming a printing Forge doesn't have (a promo set like PGRN, Summer Magic, a reprint missing
+        // from Forge's set list) is refused outright, card and all. Those lines get another try by name alone,
+        // so the card comes in with a printing Forge does know
+        final Set<String> refused = new LinkedHashSet<>();
+        for (final Token t : tokens) {
+            if (t.getType() == TokenType.UNKNOWN_CARD || t.getType() == TokenType.UNSUPPORTED_CARD) {
+                final String name = t.getText().replaceFirst("\\s*\\[[^\\]]*\\].*$", "").strip();
+                if (!name.equals(t.getText().strip())) refused.add(name.toLowerCase());
+            } else if (t.getType() == TokenType.UNKNOWN_TEXT) {
+                // "(PDMU:97s)" and the like: Forge doesn't even read the line as a card
+                final java.util.regex.Matcher m = PRINTING_LINE.matcher(t.getText());
+                if (m.matches()) refused.add(m.group(2).strip().toLowerCase());
+            }
+        }
+        if (!refused.isEmpty()) {
+            final String retry = withoutPrintings(list, refused);
+            if (!retry.equals(list)) tokens = ctl.parseInput(retry);
+        }
         for (final Token t : tokens) {
             if (t.getType() == TokenType.UNKNOWN_CARD || t.getType() == TokenType.UNSUPPORTED_CARD
                     || t.getType() == TokenType.UNKNOWN_TEXT && t.getText().matches("^\\d+x?\\s+.*")) {
@@ -137,6 +156,20 @@ final class DeckImport {
             o.addProperty("problem", r.problem);
         }
         return o;
+    }
+
+    /** "1 Dark Ritual (SUM) 98" or "1 Dark Ritual [SUM:98]": the count, the name, then the printing. */
+    private static final java.util.regex.Pattern PRINTING_LINE =
+            java.util.regex.Pattern.compile("^(\\s*\\d+x?\\s+)(.+?)\\s+[(\\[][A-Za-z0-9]{2,8}(?::[^)\\]]*)?[)\\]].*$");
+
+    /** The list with the set code and collector number dropped from the lines for these cards (lower-case names). */
+    static String withoutPrintings(final String list, final Set<String> names) {
+        final StringBuilder out = new StringBuilder();
+        for (final String line : list.split("\n", -1)) {
+            final java.util.regex.Matcher m = PRINTING_LINE.matcher(line);
+            out.append(m.matches() && names.contains(m.group(2).strip().toLowerCase()) ? m.group(1) + m.group(2).strip() : line).append('\n');
+        }
+        return out.substring(0, out.length() - 1);
     }
 
     /**
