@@ -568,6 +568,14 @@ public class SocketGuiGame extends AbstractGuiGame {
         return false;
     }
 
+    /** The label on the prompt's second button as last shown (e.g. InputAttack's "Call Back" or "Alpha Strike"), or null. */
+    String cancelLabel() {
+        synchronized (snapshotLock) {
+            return prompt.has("cancel") && prompt.getAsJsonObject("cancel").has("label") && !prompt.getAsJsonObject("cancel").get("label").isJsonNull()
+                    ? prompt.getAsJsonObject("cancel").get("label").getAsString() : null;
+        }
+    }
+
     /** The Forge input class showing now (InputPassPriority, InputAttack…), or null. */
     String currentInputSimpleName() {
         return currentInputName();

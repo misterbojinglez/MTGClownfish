@@ -764,6 +764,9 @@
   /* each card's width: 192px, less on smaller windows so the panel stays out of the middle of the board */
   --stack-card: clamp(110px, min(12.7vw, 20vh), 192px);
   position: absolute;
+  /* over everything else on the table's HUD (players' badges, the view bar, a spell being revealed), under
+     dialogs (10) and the card zoom (30) */
+  z-index: 8;
   right: 18px;
   top: 30%;
   width: auto;

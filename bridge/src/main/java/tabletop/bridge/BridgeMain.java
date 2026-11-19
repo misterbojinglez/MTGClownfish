@@ -591,6 +591,14 @@ public final class BridgeMain {
                         gui.tell(unseen + " just went on the stack, so Pass Turn waited for you. Pass again to let it resolve.");
                     } else {
                         YieldController.endTurn(controller, gui.getCurrentPlayer());
+                        // declaring attackers isn't a priority prompt, so the yield alone never moves past it and
+                        // Pass Turn seemed to do nothing: it means attacking with nothing, so any attackers picked
+                        // so far are called back (only when that's what the second button does: with none picked
+                        // it's Alpha Strike) and the empty attack is confirmed; the yield then passes the rest
+                        if ("InputAttack".equals(gui.currentInputSimpleName())) {
+                            if ("Call Back".equals(gui.cancelLabel())) controller.selectButtonCancel();
+                            controller.selectButtonOk();
+                        }
                     }
                 }
             }
