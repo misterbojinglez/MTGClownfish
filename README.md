@@ -1,11 +1,14 @@
 # MTGClownfish
 
-A local, single-player Magic: The Gathering table with an Arena-style 3D client and Forge AI opponents.
-No store, no deckbuilding, no networking: you play against the AI, 1v1 or 4-player Commander.
+A Magic: The Gathering table with an Arena-style 3D client and Forge AI opponents: 1v1 or 4-player Commander
+against the AI, or online with friends through a relay. Ships as a desktop app (Electron) for macOS and Windows.
+Picking the project up? Start with [docs/handoff.md](docs/handoff.md).
 
 ```
-client/   Three.js + Tauri 3D table (TypeScript)
+client/   Three.js 3D table + HTML HUD (TypeScript, Vite)
 bridge/   Java WebSocket bridge: runs Forge headless and speaks JSON to the client
+relay/    Cloudflare Worker for online lobbies
+desktop/  Electron shell that packages the bridge, a Java runtime and the client
 engine/   Forge (cloned by scripts/build-engine.sh, not committed), plus engine/patches/: our fixes to
           Forge itself, applied by the build
 scripts/  build + smoke-test helpers
