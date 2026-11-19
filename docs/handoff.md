@@ -1,7 +1,8 @@
 # MTGClownfish handoff notes
 
 Where the project stands and how to work on it: read this first when picking the project back up. Last updated
-2026-11-18 (branch `online-play`, 25 commits ahead of `main`, nothing pushed).
+2026-11-18, evening (branch `online-play`, 33 commits ahead of `main`, nothing pushed). Next session: more VFX,
+plus sound effect and music upgrades (see "Starting points for the next session").
 
 ## What it is
 
@@ -26,7 +27,7 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
 | Build Forge + bridge (also applies `engine/patches/*.patch`) | `scripts/build-engine.sh` |
 | Dev: bridge + Vite client in the browser | `scripts/play.sh` (bridge on ws 7777, client on 5173) |
 | Headless full game | `node scripts/smoke-test.mjs commander 4` (needs a running bridge on 7777) |
-| Desktop packages (all three zips into `dist/`) | `scripts/package.sh` (must run on an Apple Silicon Mac) |
+| Desktop packages (zips into `dist/`) | `scripts/package.sh` for all three; `scripts/package.sh mac-apple-silicon` (or `mac-intel`, `windows`) for some. Must run on an Apple Silicon Mac |
 | Client type check / build | `cd client && npx tsc --noEmit && npx vite build` |
 
 - **Forge version.** The bridge pom defaults `forge.version` to a stale 2.0.16. Always build against the version
@@ -48,8 +49,13 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
   Prefer fixing in the bridge when possible; patch Forge only for bugs the bridge can't reach from outside.
 - **Packaging gotcha.** A Finder window open on `dist/` writes `.DS_Store` files back while folders are being
   deleted. `package.sh` retries the deletion, but closing that window avoids the problem.
-- After each set of committed changes, the user expects the packages to be rebuilt, then a check that the zip
-  contains the change (e.g. grep the Windows zip's client JS, or `cmp` its `forge-bridge.jar` with `bridge/target`).
+- **Rebuilding for the user:** "rebuild" means the Apple Silicon app only (`scripts/package.sh mac-apple-silicon`).
+  Build all three only when asked for new distributables. Don't quit their running app to relaunch it; tell them to
+  reopen it. When they ask to try a change first, point them at `scripts/play.sh` and http://127.0.0.1:5173/.
+- **"Wants access to your Documents folder" on launch:** the app run from `dist/` lives under `~/Documents`, and
+  its bundled Java reads Forge's data from inside the bundle. Ad hoc signing means each rebuild is a new app to
+  macOS, so it asks again. Running a copy from `/Applications` should stop it (inferred, not yet confirmed by the
+  user). A Developer ID signature would make the answer stick across rebuilds.
 
 ## How the pieces talk
 
@@ -63,10 +69,15 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
 - **The client:**
   - `main.ts` routes messages and wires handlers.
   - `game/table.ts` holds card objects, the update pipeline and animations.
-  - `scene/` holds the 3D side: `stage.ts` (renderer, frame governor, floor shader, embers), `cardMesh.ts` (card,
-    badges, token tag), `fx.ts` (sparks, arrows), `magic.ts` (sprite spell effects), `layout.ts`, `textures.ts`.
-  - `ui/hud.ts` holds all HTML UI: prompt, buttons, The Stack, zoom, dialogs, menus, Settings.
-  - `ui/decks.ts` is deck setup and `ui/lobby.ts` is online play.
+  - `scene/` holds the 3D side: `stage.ts` (renderer, frame governor, floor shader, post passes, embers),
+    `cardMesh.ts` (card, badges, token tag, dissolve), `fx.ts` (sparks, arrows), `magic.ts` (sprite spell effects),
+    `spotlight.ts` (commander cast), `collapse.ts` (a lost player's mat), `layout.ts`, `textures.ts`.
+  - `ui/hud.ts` holds all HTML UI: prompt, buttons, The Stack, zoom, dialogs, menus, Settings, player badges.
+  - `ui/decks.ts` is deck setup, `ui/lobby.ts` is online play, `ui/buildin.ts` the menus' build-in/out helpers.
+  - `audio.ts` synthesizes every sound and the music bed (see "Starting points for the next session").
+- **The client's card cache:** each update sends only the cards still in play; the client merges them over the
+  last known copies, so a card that stops existing keeps its last report. A card missing from every zone list is
+  kept where it is while its last zone says it's between zones, except tokens (copies count), which go at once.
 - **Dev mode** (`java -Dbridge.dev=true …`): the client message `{type:'devState', text}` applies a Forge
   GameState to the running game. Keys:
   - `humanbattlefield=Card|Counters:P1P1=2|Id:900;…`
@@ -74,8 +85,16 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
   - `aiputonstack=Wrath of God;…`
   - `t:Name,P:2,T:4,Cost:…,Types:Creature-Zombie,…` (a token)
   - `activeplayer=human`, `activephase=MAIN1`
-  - **Always** set `humanlife`/`ailife`, or both players are set to -1 life and the game ends.
-  - Apply it only once you have priority, not during the mulligan.
+  - `humancommand=Card|IsCommander` makes a commander. `humanlibrary=…` sets a library (set one for every
+    player, or the next draw loses the game).
+  - More than two players: `p0life`…`p3life`, `p0battlefield`, etc. (`human`/`ai` are p0/p1). After someone
+    loses, the indices renumber over the players still in (a board naming four players in a three-player game
+    throws "Non-matching number of players").
+  - **Always** set every player's life (a player left out gets -1 and loses). Life 0 makes that player lose,
+    which is the easy way to test a loss.
+  - Apply it only once you have priority, not during the mulligan, and not mid-combat (one applied during an
+    attack declaration left Forge with no defender). Several boards in one game can leave stale state: start a
+    fresh game for a clean test.
 
 ## Testing recipes that worked
 
@@ -98,6 +117,15 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
   - In zsh, `set -- $var` doesn't split words: pass numbers explicitly.
   - Without the Chrome extension, `--headless=new --screenshot` works for static pages, but it catches CSS
     fade-ins midway.
+  - Three.js animation can't be paused like CSS: take bursts of screenshots ~120–300 ms apart instead.
+  - Hover goes through raycasting, so send real mouse moves (`Input.dispatchMouseEvent` `mouseMoved`), not DOM
+    events. HTML hovers (badges) do respond to a dispatched `mouseenter`.
+  - Capture the game socket by wrapping `WebSocket.prototype.send` in `Page.addScriptToEvaluateOnNewDocument`;
+    then `devState` and actions can be sent from the page, and its messages read.
+  - Dialog option cards are `.choice-cards .thumb` buttons; prompts' buttons are found by their text.
+- **A bridge driver over HTTP** (one node process holding the socket, taking `?send=`/`?card=`/`?ok`/`?req=`
+  queries and printing the prompt, selectable cards and zones) made long scripted scenarios easy to step. Use
+  `curl -g`, or curl treats `[0]` in a URL as a pattern and sends nothing.
 - **Performance.**
   - Most reliable measure: `ps` CPU of all Chrome processes with the game in a throwaway `--app` window.
   - macOS GPU "Device Utilization" (`ioreg -c IOAccelerator`) is only a rough guide (it's relative to the GPU's
@@ -120,7 +148,31 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
 - **Settings** (`client/src/settings.ts`, saved in localStorage) cover frame rate, effects, table detail and
   resolution. The renderer reads them every frame or subscribes with `onSettings`.
 
-## Notes for the coming particle / shader work
+## Notes for VFX work
+
+- **three.js is r186** (0.186.1), the version the installed `threejs-*` skills are written for: load the matching
+  skill before effect work (`threejs-shaders`, `threejs-postprocessing`, `threejs-performance`,
+  `threejs-geometry`, `threejs-textures`, `threejs-materials`, `threejs-animation`). The client is WebGLRenderer
+  + GLSL, so the skills' WebGPU/TSL sections don't apply. The stage clock is `THREE.Timer`; shadows use
+  `PCFShadowMap`, which honours `shadow.radius`.
+- **Post passes:** RenderPass → UnrealBloomPass (threshold 1.02) → the hit pass (colour split on blows, plus the
+  spotlight vignette: `stage.hitPulse`, `stage.setSpotlight`; it runs only while either shows) → OutputPass.
+  Then the overlay layer is drawn untouched.
+- **Bloom:** anything above ~1.0 glows and spreads. Keep broad surfaces (magma, light sheets) below it and let
+  only thin peaks cross it, or a whole area washes out (both effects today needed toning down for this).
+- **Per pixel, not per vertex:** values interpolated across mesh triangles show the triangles (stair-stepped
+  edges). Work out anything with a visible edge in the fragment shader; the collapse shares one GLSL block
+  between both stages for this. Use gradient noise, not value noise, for anything seen up close, and
+  `fwidth`-based smoothsteps for anti-aliased edges.
+- **Matching the floor:** `stage.floorUniforms()` shares the floor painting's uniforms by reference, and
+  `FLOOR_RING_V` maps world positions onto it, so an effect can draw the battlefield exactly as it is.
+  `stage.setFloorHoles()` stops the floor drawing inside boxes (for anything that goes below it). The mats'
+  lava palette is `TINT = vec3(1.0, 0.3, 0.04)` with a white-hot peak.
+- **The commander spotlight** (`spotlight.ts`): an additive shader plane in the camera rig (main pass, so it
+  blooms) behind a card held on the overlay layer at `SPOT_POS`/`SPOT_SCALE`, plus the vignette. A pattern for
+  other "hold a card centre stage" moments.
+- **The collapse** (`collapse.ts`): a gsap timeline drives uniforms, shakes, sounds and particle bursts over
+  `COLLAPSE_SECONDS`; the table awaits it, and `table.settled()` lets the game-over screen wait for it.
 
 - **Particles:**
   - New emitters should gate each emission with `particleAllowed()` (it handles Full/Reduced/Off).
@@ -140,7 +192,23 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
 - **Overlay pass:** hand, stack and command-zone cards render in `OVERLAY_LAYER` after post-processing, so
   their art keeps its true colours. Meshes attached to those cards must switch layers too (see `setSpace`).
 - **Measuring cost:** at idle, the main menu ran at about 21% Chrome CPU on an M5 Max (55% before this
-  session's work), and about 22% in-game.
+  session's work), and about 22% in-game. Not re-measured after today's effects (they cost nothing at rest:
+  hidden, or a static scar).
+
+## Starting points for the next session (VFX, sound effects, music)
+
+- **Audio today** (`client/src/audio.ts`, `sfx`): everything is synthesized with Web Audio, with no audio files.
+  `tone()` (oscillator with glide, vibrato, attack) and `noise()` (filtered noise burst) feed an sfx bus and a
+  shared convolver reverb (`impulse()`), with stereo pan from the table position. `begin(name, gap)` rate-limits
+  each sound. The "music" is `startAmbient()`: a low pad with a breathing filter and occasional shimmer on its
+  own bus (Sound menu: effects and music on/off, volume; saved in localStorage).
+- **Sounds added today:** `commander` (swell), `thunk` (commander landing), `rumble`, `collapse`, `sizzle` (the
+  lava collapse).
+- **Options to raise for music:** a richer generative score (chord progressions per colour, turn/phase-aware
+  intensity, a victory/defeat sting), or licensed/recorded tracks as files (the packages would carry them;
+  Forge's own `res/music` is excluded from packaging today).
+- **VFX candidates:** effects for other big moments (a player winning, extra turns, board wipes, planeswalker
+  ultimates), more per-colour spell effects, and the Low-detail paths for anything heavy.
 
 ## Work done on 2026-11-17/18 (newest last)
 
@@ -171,7 +239,35 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
     - Copies come only from this activation's exiles (patch 0002).
 12. **Build script:** the version fallback picks the newest Forge in the Maven cache.
 13. **Start screen build-in/out** (crest, tagline, staggered cards, chip: 1.3 s in, about 0.28 s out).
-    Committed with these notes.
+
+## Work done on 2026-11-18, evening (newest last)
+
+1. **three.js r170 → r186**, to match the installed skills. `Clock` → `Timer`, `PCFSoftShadowMap` →
+   `PCFShadowMap`. Compared side by side with an r170 build: identical apart from noise.
+2. **Copies that ceased to exist stayed on the table** (a resolved copied Entomb, a sacrificed copy of Doomsday
+   Excruciator from Zemo's boast): tokens missing from every zone now leave whatever their last report said.
+   The bridge can still report a resolved copy's zone as Stack while it's on the battlefield; the client no
+   longer depends on it, but that bridge quirk itself wasn't fixed.
+3. **Menu build-ins** for the game setup screen and its dialogs (deck picker, precon browser, pasted lists,
+   gameplans, API key), in the start screen's manner.
+4. **The Stack with one item** wraps its text under the card (at least 340px wide) instead of stretching across
+   the table.
+5. **Commander spotlight:** once a commander's cast is paid for, it rises centre screen for 1.5 s with a
+   waterfall of light in its colours and a darkened, tinted fringe, then lands with a thunk, slow-motion beat and
+   shake. Any player's commander (it replaces an opponent's cast reveal); off with Effects off.
+6. **Commander art on player badges** (inside opponents' medallions, partners split; across your own panel),
+   hover for the card.
+7. **Pass Turn at the declare attackers step** works: it calls back picked attackers (only when the button says
+   "Call Back", never Alpha Strike), confirms no attack, then passes the turn. The Stack panel now sits above
+   badges (below dialogs and the zoom).
+8. **A losing player's mat collapses into magma** (4 s): cracks, falling plates, flood, cooling into a scar of the
+   battlefield's own painted ground with a few molten fissures. The scar stays; the game-over screen waits.
+   Reworked once after feedback (pixelated lava, a scar that didn't match the terrain).
+9. **The hand is 15% larger** (a full hand spans no wider than before).
+10. **Your commander grows in place on hover** instead of opening a duplicate zoom.
+11. **Reveals show cards, not text labels:** cards from a hidden hand used the table's face-down copy; face-down
+    cards being revealed now show their real face (reveals only, never target choices).
+12. **`scripts/package.sh` takes platform names.** All three packages built from `5730641`.
 
 ## Open items
 
@@ -179,6 +275,10 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
   during an ability's resolution ignores card-type timing (same rule as cascade), so this was not changed. Revisit
   only if an official ruling says otherwise.
 - **Not verified:**
+  - A face-down card being revealed (code path only; no easy dev setup).
+  - The Intel and Windows builds on real machines.
+  - The commander landing's shake and slow-motion beat, and all the new sounds (still frames can't show them;
+    the user tested the build and was happy with it).
   - The Stack tab's pulse when something is added while it's tucked.
   - The token tag's readability from the 4-player view.
   - Performance on Windows.
@@ -190,3 +290,8 @@ docs/      this file, arena-reference.md (camera/layout measurements from Arena)
 - **Commander bans:** the next announcement is expected 2026-11-30. Forge's `formats/Casual/Commander.txt`
   matched upstream as of 2026-11-18.
 - **Design hook:** it flags an "overused font" when Inter appears. Inter is gone now, so it shouldn't fire.
+- **Your own panel's commander art** still opens the zoom on hover (useful once the commander is on the
+  battlefield); the user may want it to match the in-place hover of the command-zone card.
+- **The victory screen reads "You wins"** (the winner's name is "You"); worth a grammar fix.
+- **Dev only:** the badges remember every commander seen, so swapping commanders with dev boards shows stale
+  ones (real games can't change commanders).
