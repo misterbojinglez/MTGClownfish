@@ -376,6 +376,32 @@ class AudioEngine {
     this.noise(t, 0.06, 0.12, { filter: 'bandpass', from: 1800, q: 1.5, pan, wet: 0.15 });
   }
 
+  /** The ground under a lost player's mat starts to go: a long low rumble that swells and fades. */
+  rumble(pan = 0): void {
+    const t = this.begin('rumble', 1);
+    if (t == null) return;
+    this.noise(t, 2.6, 0.32, { filter: 'lowpass', from: 160, to: 70, attack: 0.5, pan, wet: 0.35 });
+    this.tone(38, t, 2.4, 0.22, { attack: 0.6, vibrato: 0.08, pan, wet: 0.3 });
+    this.tone(55, t + 0.3, 1.8, 0.12, { attack: 0.5, vibrato: 0.05, pan, wet: 0.3 });
+  }
+
+  /** The plates give way: a deep crash with stone breaking on top. */
+  collapse(pan = 0): void {
+    const t = this.begin('collapse', 0.5);
+    if (t == null) return;
+    this.tone(48, t, 1.1, 0.55, { glide: 24, pan, wet: 0.4 });
+    this.noise(t, 0.9, 0.4, { filter: 'lowpass', from: 900, to: 80, pan, wet: 0.4 });
+    for (let i = 0; i < 4; i++) this.noise(t + 0.05 + i * 0.09, 0.12, 0.12, { filter: 'bandpass', from: 1400 + i * 500, q: 1.2, pan, wet: 0.3 });
+  }
+
+  /** Magma crusting over: a long hiss of steam, thinning out. */
+  sizzle(pan = 0): void {
+    const t = this.begin('sizzle', 0.5);
+    if (t == null) return;
+    this.noise(t, 1.6, 0.1, { filter: 'highpass', from: 3200, to: 5200, attack: 0.15, pan, wet: 0.4 });
+    this.noise(t + 0.1, 1.2, 0.05, { filter: 'bandpass', from: 1800, to: 900, q: 0.8, pan, wet: 0.5 });
+  }
+
   /** A permanent lands: a thump scaled by size, then the colour chord rings out. */
   etb(colors?: string, power = 0, pan = 0): void {
     const t = this.begin('etb', 0.08);

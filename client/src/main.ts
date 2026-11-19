@@ -401,8 +401,11 @@ function showGameOver(): void {
   gameOverShown = true;
   const me = s.players.find((p) => p.id === table.localId);
   const won = !!me && s.winner === me.name;
-  setTimeout(() => (won ? sfx.victory() : sfx.defeat()), 700);
-  setTimeout(() => hud.gameOver(won, s.winner, () => startGame(lastSetup)), 900);
+  // the loser's mat collapses first (a few seconds), however the game's end reached us
+  void table.settled().then(() => {
+    setTimeout(() => (won ? sfx.victory() : sfx.defeat()), 700);
+    setTimeout(() => hud.gameOver(won, s.winner, () => startGame(lastSetup)), 900);
+  });
 }
 
 function startGame(setup: GameSetup): void {
@@ -796,9 +799,12 @@ const input = new Input(stage, table, {
     const inHand = id != null && table.isLocalHand(id);
     if (inHand && id !== table.hoveredHand) sfx.hover();
     table.hoveredHand = inHand ? id : null;
+    // your commander by the hand grows in place, so it needs no zoom either
+    const inCommand = id != null && table.isLocalCommand(id);
+    table.hoveredCommand = inCommand ? id : null;
     table.relayout(0.16);
     const card = id != null ? table.cards.get(id)?.state ?? null : null;
-    hud.showZoom(inHand ? null : card, 'left', card ? stackNotes(card) : []);
+    hud.showZoom(inHand || inCommand ? null : card, 'left', card ? stackNotes(card) : []);
   },
 });
 

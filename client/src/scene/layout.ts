@@ -70,11 +70,13 @@ const OPP_PILES = {
 // Hand fan (desktop 16:9 expanded layout) in camera space.
 export const HAND = {
   distance: 26,
-  baseY: -7.15,
-  radius: 45,
-  fitAngle: 24,
+  // cards 15% larger than they were (0.98): the fan widens with them (radius), a full hand spans no wider
+  // than before (fitAngle, or it would reach the command slot), and as much more of each card shows (baseY)
+  baseY: -7.04,
+  radius: 51.75,
+  fitAngle: 18.75,
   maxDelta: 3.6,
-  scale: 0.98,
+  scale: 1.13,
   overlapTilt: -7,
   hoverScale: 1.5,
   /** half the visible height at the hand's distance (34° FOV): the popped card stops just inside the screen */
@@ -246,7 +248,7 @@ export function computeLayout(
   state: GameState,
   localId: number,
   /** liftedHand: hand cards picked in a choice (mulligan bottom, discard), raised out of the fan */
-  opts: { hoveredHand: number | null; handOrder: number[]; liftedHand?: Set<number> },
+  opts: { hoveredHand: number | null; handOrder: number[]; liftedHand?: Set<number>; hoveredCommand?: number | null },
 ): Map<number, Placement> {
   const out = new Map<number, Placement>();
   const cards = state.cards;
@@ -355,13 +357,16 @@ export function computeLayout(
     pile(p.zones.Exile, seat.piles.exile, pileScale, true);
     if (seat.local) {
       p.zones.Command.forEach((id, i) => {
+        // hovered, it grows where it is (lifted toward you, nudged in from the screen's edge) instead of
+        // opening the zoom beside it
+        const hovered = opts.hoveredCommand === id;
         out.set(id, {
           space: 'rig',
-          pos: COMMAND_ANCHOR.clone().add(new THREE.Vector3(i * 1.4, i * 0.25, i * 0.05)),
-          rot: new THREE.Euler(0, 0.12, 0.04, 'YXZ'),
-          scale: 0.95,
+          pos: COMMAND_ANCHOR.clone().add(new THREE.Vector3(i * 1.4 + (hovered ? 0.7 : 0), i * 0.25 + (hovered ? 0.9 : 0), i * 0.05 + (hovered ? 0.8 : 0))),
+          rot: hovered ? new THREE.Euler(0, 0.05, 0, 'YXZ') : new THREE.Euler(0, 0.12, 0.04, 'YXZ'),
+          scale: hovered ? 1.4 : 0.95,
           faceUp: true,
-          order: i,
+          order: hovered ? 1000 : i,
         });
       });
     } else {

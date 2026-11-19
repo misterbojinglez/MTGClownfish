@@ -1118,7 +1118,13 @@ export class Hud {
       if (minRem === 0 && maxRem === 0) min = max = n;
     }
     const picked: number[] = [];
-    const cardOf = (o: ChoiceOption): CardState | undefined => (o.card != null ? state?.cards[o.card] ?? o.cardData : undefined);
+    // the table's copy of a card when it shows the card, else the face the bridge sent with the option (a card
+    // in a hidden hand is on the table face down, but a reveal shows it)
+    const cardOf = (o: ChoiceOption): CardState | undefined => {
+      if (o.card == null) return undefined;
+      const known = state?.cards[o.card];
+      return known?.visible ? known : o.cardData ?? known;
+    };
     const hasCards = options.some((o) => cardOf(o)?.visible);
     const list = h('div', hasCards ? 'choice-cards' : 'choice-list');
     if (hasCards && n > 8) list.classList.add('many');
@@ -1219,7 +1225,8 @@ export class Hud {
       rows.forEach((r, i) => (r.querySelector('.share')!.textContent = String(shares[i])));
     };
     options.forEach((o, i) => {
-      const card = o.card != null ? state?.cards[o.card] ?? o.cardData : undefined;
+      const known = o.card != null ? state?.cards[o.card] : undefined;
+      const card = known?.visible ? known : o.cardData ?? known;
       const player = o.player != null ? state?.players.find((p) => p.id === o.player) : undefined;
       const row = h('div', 'dist-row');
       const label = h('div', 'dist-label', player ? `${player.name} (${player.life} life)` : card?.name ?? o.label);

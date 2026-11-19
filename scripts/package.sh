@@ -4,6 +4,7 @@
 #   dist/MTGClownfish-mac-apple-silicon.zip   (M1 and newer Macs)    MTGClownfish.app
 #   dist/MTGClownfish-mac-intel.zip           (older Macs)           MTGClownfish.app
 #   dist/MTGClownfish-windows.zip             (64-bit Windows)       MTGClownfish.exe
+# Name platforms to build only those: scripts/package.sh mac-apple-silicon
 # The app (desktop/, Electron) starts the bridge out of sight and shows the game in its own window. Its game/
 # resources hold the bridge (Forge included), Forge's card data, the built client (which the bridge serves) and
 # a trimmed Java runtime (jlink'd from Eclipse Temurin).
@@ -31,6 +32,16 @@ TARGETS=(
   "mac-intel mac x64 darwin x64"
   "windows windows x64 win32 x64"
 )
+
+# only some platforms, if named (e.g. scripts/package.sh mac-apple-silicon); all three otherwise
+if [ $# -gt 0 ]; then
+  picked=()
+  for t in "${TARGETS[@]}"; do
+    for want in "$@"; do [ "${t%% *}" = "$want" ] && picked+=("$t"); done
+  done
+  [ ${#picked[@]} -gt 0 ] || { echo "no such platform: $* (mac-apple-silicon, mac-intel, windows)"; exit 1; }
+  TARGETS=("${picked[@]}")
+fi
 
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || { echo "package.sh runs on an Apple Silicon Mac (its jlink builds every runtime)"; exit 1; }
 [ -f "$JAR" ] || "$ROOT/scripts/build-engine.sh"
@@ -178,4 +189,6 @@ for t in "${TARGETS[@]}"; do
   du -sh "$out.zip"
 done
 rm -rf "$STAGE"
-echo "done: $(cd "$DIST" && ls MTGClownfish-*.zip | tr '\n' ' ')"
+built=""
+for t in "${TARGETS[@]}"; do built+="MTGClownfish-${t%% *}.zip "; done
+echo "done: $built"

@@ -634,12 +634,19 @@ public class SocketGuiGame extends AbstractGuiGame {
     // ---- questions for the player ------------------------------------------------------------
 
     private static <T> JsonObject option(final T item, final FSerializableFunction<T, String> display) {
+        return option(item, display, false);
+    }
+
+    /** One option for the client; `revealed`: it's being shown to the player (a reveal), face-down cards face up. */
+    private static <T> JsonObject option(final T item, final FSerializableFunction<T, String> display, final boolean revealed) {
         final JsonObject o = new JsonObject();
         String label = display != null ? display.apply(item) : null;
         if (item instanceof CardView c) {
             o.addProperty("card", c.getId());
             // full details, because choices often come from zones the client never sees (library, hands)
-            o.add("cardData", Serializer.card(c, true));
+            // (a face-down card shows its real face only when it's being revealed: anywhere else, such as
+            // choosing a target, that would give away what it is)
+            o.add("cardData", revealed ? Serializer.cardAsShown(c) : Serializer.card(c, true));
             if (label == null) { label = c.getName(); }
         } else if (item instanceof SpellAbilityView sa) {
             o.addProperty("ability", sa.getId());
@@ -696,9 +703,13 @@ public class SocketGuiGame extends AbstractGuiGame {
     }
 
     private static <T> JsonArray options(final List<T> items, final FSerializableFunction<T, String> display) {
+        return options(items, display, false);
+    }
+
+    private static <T> JsonArray options(final List<T> items, final FSerializableFunction<T, String> display, final boolean revealed) {
         final JsonArray arr = new JsonArray();
         for (final T item : items) {
-            arr.add(option(item, display));
+            arr.add(option(item, display, revealed));
         }
         return arr;
     }
@@ -740,7 +751,7 @@ public class SocketGuiGame extends AbstractGuiGame {
             // a reveal: nothing to choose, the client just shows it
             final JsonObject req = new JsonObject();
             req.addProperty("message", message);
-            req.add("options", options(choices, display));
+            req.add("options", options(choices, display, true));
             ask("reveal", req);
             return new ArrayList<>();
         }

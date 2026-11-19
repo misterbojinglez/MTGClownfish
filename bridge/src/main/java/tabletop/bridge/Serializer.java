@@ -196,24 +196,32 @@ public final class Serializer {
     }
 
     public static JsonObject card(final CardView c, final boolean visible) {
+        return card(c, visible, null);
+    }
+
+    /**
+     * A card as the player may see it; `face` (when not null) is shown instead of its current state: a
+     * face-down card's real face, for a reveal or a look Forge allows (see cardAsShown).
+     */
+    public static JsonObject card(final CardView c, final boolean visible, final CardStateView face) {
         final JsonObject o = new JsonObject();
         o.addProperty("id", c.getId());
         o.addProperty("owner", c.getOwner() == null ? null : c.getOwner().getId());
         o.addProperty("controller", c.getController() == null ? null : c.getController().getId());
         o.addProperty("zone", c.getZone() == null ? null : c.getZone().name());
         o.addProperty("tapped", c.isTapped());
-        o.addProperty("visible", visible && !c.isFaceDown());
+        o.addProperty("visible", visible && (face != null || !c.isFaceDown()));
         if (!visible) {
             return o;
         }
-        final CardStateView s = c.getCurrentState();
+        final CardStateView s = face != null ? face : c.getCurrentState();
         o.addProperty("name", s.getName());
         // tokens are printed in their set's token product (e.g. FIN → TFIN on Scryfall)
         final String[] tokenPrint = tokenPrinting(s.getImageKey());
         o.addProperty("set", tokenPrint != null ? tokenPrint[0] : s.getSetCode());
         o.addProperty("cn", tokenPrint != null ? tokenPrint[1] : collectorNumber(s.getName(), s.getSetCode()));
         o.addProperty("imageKey", s.getImageKey());
-        o.addProperty("faceDown", c.isFaceDown());
+        o.addProperty("faceDown", face == null && c.isFaceDown());
         o.addProperty("state", s.getState() == null ? null : s.getState().name());
         o.addProperty("token", c.isToken());
         o.addProperty("commander", c.isCommander());
@@ -223,7 +231,7 @@ public final class Serializer {
         o.addProperty("damage", c.getDamage());
         o.addProperty("manaCost", s.getManaCost() == null ? "" : s.getManaCost().toString());
         o.addProperty("typeLine", s.getType() == null ? "" : s.getType().toString());
-        o.addProperty("text", c.getText());
+        o.addProperty("text", face != null ? face.getOracleText() : c.getText());
         o.addProperty("creature", s.isCreature());
         o.addProperty("land", s.isLand());
         o.addProperty("planeswalker", s.isPlaneswalker());
@@ -272,6 +280,16 @@ public final class Serializer {
         o.addProperty("attachedTo", c.getAttachedTo() == null ? null : c.getAttachedTo().getId());
         o.addProperty("colors", s.getColors() == null ? "" : s.getColors().toString());
         return o;
+    }
+
+    /**
+     * A card offered to the player in a choice or a reveal: as it really is, even when it's face down
+     * (Forge only offers it because the player may see it: a reveal, looking at a face-down card), its real
+     * face being the face-down card's alternate state.
+     */
+    public static JsonObject cardAsShown(final CardView c) {
+        final CardStateView real = c.isFaceDown() ? c.getAlternateState() : null;
+        return card(c, true, real != null && real.getName() != null && !real.getName().isEmpty() ? real : null);
     }
 
     /**

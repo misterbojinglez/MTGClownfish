@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
-import { avatarAnchor, computeLayout, libraryAnchor, nearestHandSlot, seatAt, seatFrames, seatRotation, type Placement } from '../scene/layout';
+import { avatarAnchor, computeLayout, libraryAnchor, nearestHandSlot, seatAt, seatFrames, seatRotation, seatsFor, tableMats, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx, type LinkMark } from '../scene/fx';
 import { Magic } from '../scene/magic';
 import { SPOT_POS, SPOT_SCALE, Spotlight } from '../scene/spotlight';
+import { Collapse } from '../scene/collapse';
 import { settings } from '../settings';
 import { sfx } from '../audio';
 import type { Stage } from '../scene/stage';
@@ -59,6 +60,8 @@ export class Table {
   selection: Selection = { cards: [], min: 0, max: 0, targets: [], chosen: [], actionable: [] };
   localId = -1;
   hoveredHand: number | null = null;
+  /** your commander in its slot by the hand, while hovered (it grows in place) */
+  hoveredCommand: number | null = null;
   handOrder: number[] = [];
   /** >1 when the update queue is backed up and animations should hurry. */
   timeScale = 1;
@@ -73,6 +76,13 @@ export class Table {
   private readonly fx: Fx;
   private readonly magic: Magic;
   private readonly spotlight: Spotlight;
+  private readonly collapse: Collapse;
+  /** players whose mats have collapsed (they lost): nothing of theirs is drawn on the table any more */
+  private readonly sunk = new Set<number>();
+  /** cards sinking (or sunk) into a collapsed mat, each resolving when it has gone */
+  private readonly buried = new Map<number, Promise<void>>();
+  /** collapses still playing (the game-over screen waits for them) */
+  private readonly collapsing = new Set<Promise<void>>();
   private readonly arrows: Arrows;
   /** the arrow drawn while dragging an attacker or blocker toward its target */
   private readonly aimArrows: Arrows;
@@ -97,6 +107,7 @@ export class Table {
     this.fx = new Fx(stage);
     this.spotlight = new Spotlight(stage);
     this.magic = new Magic(stage);
+    this.collapse = new Collapse(stage, this.magic);
     this.arrows = new Arrows(stage);
     this.aimArrows = new Arrows(stage);
     stage.onTick((dt) => {
@@ -109,6 +120,9 @@ export class Table {
     this.cards.clear();
     this.tucked.clear();
     this.spotlit.clear();
+    this.collapse.clear();
+    this.sunk.clear();
+    this.buried.clear();
     for (const m of this.libraries.values()) m.removeFromParent();
     this.libraries.clear();
     this.state = null;
@@ -147,6 +161,15 @@ export class Table {
     this.prompt = msg.prompt;
     this.selection = msg.selection;
 
+    // a player who has just lost: their mat collapses into magma (a scar already, if it happened before we joined)
+    const losses: Promise<void>[] = [];
+    for (const p of state.players) {
+      if (!p.lost || this.sunk.has(p.id)) continue;
+      this.sunk.add(p.id);
+      if (prev) losses.push(this.playerLost(p.id, state));
+      else this.lostMat(p.id, state, false);
+    }
+
     const visibleIds = this.visibleCardIds(state);
     const fromLibrary = new Set<number>();
     for (const id of visibleIds) {
@@ -168,7 +191,7 @@ export class Table {
     this.updateLibraries(state);
     this.updateHandZones();
 
-    const tasks: Promise<void>[] = [];
+    const tasks: Promise<void>[] = [...losses];
     const deaths = new Set<number>();
     for (const e of msg.events) this.collectDeaths(e, snapshots, deaths);
     // with combat damage in this update, creatures die only after every blow has landed and been seen,
@@ -397,6 +420,7 @@ export class Table {
   /** Tween a card to its placement within its current space (reflow, tap, hover). */
   private settle(obj: CardObject, p: Placement, duration: number): void {
     if (this.tucked.has(obj.id) && obj.state.zone === 'Stack') return;
+    if (this.buried.has(obj.id)) return;
     obj.setSpace(p.space === 'table');
     const parent = this.parentFor(p.space);
     if (obj.root.parent !== parent) parent.attach(obj.root);
@@ -559,6 +583,64 @@ export class Table {
     this.fx.etb(at, colorFor(colors), scale * 1.5);
   }
 
+  /**
+   * A player lost: their mat collapses into magma and cools to a scar (Collapse, about four seconds), and
+   * everything of theirs on the table sinks and burns away into it.
+   */
+  private playerLost(pid: number, state: GameState): Promise<void> {
+    const done = this.lostMat(pid, state, true);
+    for (const obj of this.cards.values()) {
+      const s = obj.state;
+      // their cards on the table (not anyone's hand, which lives in screen space)
+      if ((s.owner !== pid && s.controller !== pid) || obj.root.parent !== this.stage.scene || this.buried.has(obj.id)) continue;
+      this.buried.set(obj.id, this.sink(obj, 0.55 + Math.random() * 0.5));
+    }
+    const lib = this.libraries.get(pid);
+    if (lib) {
+      gsap.to(lib.position, {
+        y: lib.position.y - 3, duration: 1.3, delay: 0.6, ease: 'power2.in',
+        onComplete: () => void (lib.visible = false),
+      });
+    }
+    this.collapsing.add(done);
+    void done.finally(() => this.collapsing.delete(done));
+    return done;
+  }
+
+  /** The collapse (or, with animate false, its scar) on a player's mat. */
+  private lostMat(pid: number, state: GameState, animate: boolean): Promise<void> {
+    const i = seatsFor(state, this.localId).findIndex((s) => s.player.id === pid);
+    const mat = tableMats(state, this.localId)[i];
+    if (!mat) return Promise.resolve();
+    if (!animate) {
+      this.collapse.scar(mat);
+      return Promise.resolve();
+    }
+    return this.collapse.play(mat);
+  }
+
+  /** A card on a collapsing mat drops with the ground, burning away as it goes. */
+  private sink(obj: CardObject, delay: number): Promise<void> {
+    gsap.killTweensOf(obj.root.position);
+    const st = { v: 0 };
+    return new Promise((resolve) => {
+      gsap.to(obj.root.position, { y: obj.root.position.y - 2.6, duration: 1.4, delay, ease: 'power2.in' });
+      gsap.to(st, {
+        v: 1, duration: 1.3, delay: delay + 0.25, ease: 'power1.in',
+        onUpdate: () => obj.setDissolve(st.v, '#ff7a2a'),
+        onComplete: () => {
+          obj.root.visible = false;
+          resolve();
+        },
+      });
+    });
+  }
+
+  /** Resolves when every collapse under way has finished (the game-over screen waits for them). */
+  settled(): Promise<void> {
+    return Promise.all([...this.collapsing]).then(() => undefined);
+  }
+
   /** A new card appears: drawn from its library, created as a token, or revealed from hiding. True if it starts on the library. */
   private spawn(obj: CardObject, c: CardState, prev: GameState | null): boolean {
     const p = computeLayout(this.state!, this.localId, this.layoutOpts()).get(c.id);
@@ -589,6 +671,13 @@ export class Table {
   private async vanish(obj: CardObject, prev: GameState | null, snap?: Snapshot): Promise<void> {
     this.cards.delete(obj.id);
     this.tucked.delete(obj.id);
+    // a lost player's cards leave the game into their collapsing mat, not back to their library
+    const buried = this.buried.get(obj.id);
+    if (buried) {
+      await buried;
+      obj.dispose();
+      return;
+    }
     const s = this.state!;
     const owner = obj.state.owner;
     const lib = owner != null ? libraryAnchor(s, this.localId, owner) : null;
@@ -1103,7 +1192,7 @@ export class Table {
       const local = p.id === this.localId;
       const scale = local ? 0.7 : 0.55;
       const height = Math.max(0.001, Math.min(1.4, p.zones.LibraryCount * 0.019));
-      mesh.visible = p.zones.LibraryCount > 0;
+      mesh.visible = p.zones.LibraryCount > 0 && !this.sunk.has(p.id);
       mesh.scale.set(scale, height, scale);
       mesh.position.set(anchor.x, height / 2, anchor.z);
       mesh.rotation.y = seatRotation(state, this.localId, p.id)?.rotY ?? 0;
@@ -1112,9 +1201,9 @@ export class Table {
 
   // ---- highlights & arrows ------------------------------------------------------------------------
 
-  private layoutOpts(): { hoveredHand: number | null; handOrder: number[]; liftedHand: Set<number> } {
+  private layoutOpts(): { hoveredHand: number | null; handOrder: number[]; liftedHand: Set<number>; hoveredCommand: number | null } {
     const picked = new Set(this.selection.chosen.map((r) => r?.card).filter((x): x is number => x != null));
-    return { hoveredHand: this.hoveredHand, handOrder: this.handOrder, liftedHand: picked };
+    return { hoveredHand: this.hoveredHand, handOrder: this.handOrder, liftedHand: picked, hoveredCommand: this.hoveredCommand };
   }
 
   refreshHighlights(): void {
@@ -1191,6 +1280,11 @@ export class Table {
     const out: THREE.Object3D[] = [];
     for (const c of this.cards.values()) if (!this.handZones.has(c.id)) out.push(...c.meshes);
     return out;
+  }
+
+  /** Whether a card is your commander in its command-zone slot by the hand. */
+  isLocalCommand(id: number): boolean {
+    return !!this.state?.players.find((p) => p.id === this.localId)?.zones.Command.includes(id);
   }
 
   isLocalHand(id: number): boolean {

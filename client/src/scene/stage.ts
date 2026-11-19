@@ -23,7 +23,7 @@ const LAVA_COLORS: Record<string, [number, number, number]> = {
   G: [0.14, 0.85, 0.12],
 };
 const COLORLESS_LAVA: [number, number, number] = [0.62, 0.64, 0.72];
-const FLOOR_RING_V = 0.589;
+export const FLOOR_RING_V = 0.589;
 /** width / height of the floor painting */
 const FLOOR_ASPECT = 2752 / 1536;
 
@@ -308,6 +308,22 @@ export class Stage {
     u.uMatColN.value = n;
   }
 
+  /** The floor isn't drawn inside these world boxes (minX, minZ, maxX, maxZ): pits drawn by Collapse. */
+  setFloorHoles(holes: THREE.Vector4[]): void {
+    const u = this.tableMaterial.uniforms;
+    holes.slice(0, 4).forEach((h, i) => (u.uHoles.value[i] as THREE.Vector4).copy(h));
+    u.uHoleCount.value = Math.min(4, holes.length);
+  }
+
+  /**
+   * The floor painting's uniforms (texture, where it lies, whether it has loaded), shared by reference so
+   * another material can draw the same floor and stay in step with it (the collapse of a lost player's mat).
+   */
+  floorUniforms(): { uFloor: THREE.IUniform; uFloorRect: THREE.IUniform; uHasFloor: THREE.IUniform } {
+    const u = this.tableMaterial.uniforms;
+    return { uFloor: u.uFloor, uFloorRect: u.uFloorRect, uHasFloor: u.uHasFloor };
+  }
+
   /**
    * Table dressing for the seat arrangement: battlefield mats (world boxes minX, minZ, maxX, maxZ), the
    * ritual circle at the centre, and shadow coverage wide enough for every seat.
@@ -473,6 +489,9 @@ export class Stage {
         uFloor: { value: null as THREE.Texture | null },
         uFloorRect: { value: new THREE.Vector4(0, -1.25, 9 / FLOOR_RING_RADIUS, 9 / FLOOR_RING_RADIUS / FLOOR_ASPECT) },
         uHasFloor: { value: 0 },
+        // pits where a lost player's mat collapsed (Collapse): the floor isn't drawn there, the pit is
+        uHoles: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
+        uHoleCount: { value: 0 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv; varying vec3 vWorld;
@@ -492,6 +511,8 @@ export class Stage {
         uniform sampler2D uFloor;
         uniform vec4 uFloorRect;
         uniform float uHasFloor;
+        uniform vec4 uHoles[4];
+        uniform int uHoleCount;
         varying vec2 vUv; varying vec3 vWorld;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float noise(vec2 p) {
@@ -517,6 +538,10 @@ export class Stage {
         float sdBox(vec2 p, vec4 b) { vec2 q = abs(p - (b.xy + b.zw) * 0.5) - (b.zw - b.xy) * 0.5; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
         void main() {
           vec2 p = vWorld.xz;
+          for (int i = 0; i < 4; i++) {
+            if (i >= uHoleCount) break;
+            if (p.x > uHoles[i].x && p.x < uHoles[i].z && p.y > uHoles[i].y && p.y < uHoles[i].w) discard;
+          }
 
           // the painted arena floor over the procedural stone, its ring on the table's circle; the painting
           // fades into darker stone past its edges so the arena never ends in a hard line. Worked out first:
