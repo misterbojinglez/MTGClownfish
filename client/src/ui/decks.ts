@@ -1,6 +1,7 @@
 import type { DeckInfo, GameplanInfo, LobbyDeckInfo, PreconInfo, SeatDeckSpec } from '../protocol';
 import type { Bridge } from '../net';
 import { cardArtUrl } from '../scene/textures';
+import { buildIn, buildOut, closeModal } from './buildin';
 
 /**
  * Game setup: a name and a deck for every seat: a random Forge precon, a precon you pick (by commander),
@@ -165,15 +166,18 @@ export class DeckSetup {
   open(format: Format, players: number, title: string): Promise<GameSetup | null> {
     return new Promise((resolve) => {
       const ov = h('div', 'overlay setup');
-      const close = (result: GameSetup | null) => {
-        ov.remove();
-        resolve(result);
-      };
+      // the screen lifts away (theme.css) before the game loads or the menu builds in again
+      const close = (result: GameSetup | null) =>
+        buildOut(ov, () => {
+          ov.remove();
+          resolve(result);
+        }, 240);
       let count = players;
       let choices: SeatChoice[] = this.loadSeats(format, count);
       const names = this.loadNames();
 
-      const render = () => {
+      // 'full': the screen builds in (on arrival); 'seats': only the seats rise (the table size changed)
+      const render = (anim: 'full' | 'seats' | 'none' = 'none') => {
         ov.replaceChildren();
         const head = h('div', 'setup-head');
         head.append(h('h2', '', title));
@@ -185,7 +189,7 @@ export class DeckSetup {
             b.onclick = () => {
               count = n;
               choices = this.loadSeats(format, count);
-              render();
+              render('seats');
             };
             seg.append(b);
           }
@@ -285,8 +289,22 @@ export class DeckSetup {
         };
         actions.append(back, start);
         ov.append(actions);
+
+        const rows = [...seats.children];
+        if (anim === 'full') {
+          // the title drops in, then the seats rise one after another (each badge popping as its row lands),
+          // then the key line and the buttons
+          buildIn([head.firstElementChild], 0);
+          buildIn([head.querySelector('.seg')], 0.18);
+          buildIn(rows, 0.24, 0.08);
+          buildIn(rows.map((r) => r.querySelector('.seat-badge')), 0.42, 0.08);
+          const after = 0.24 + rows.length * 0.08 + 0.06;
+          buildIn([keyLine, actions], after, 0.07);
+        } else if (anim === 'seats') {
+          buildIn(rows, 0, 0.05);
+        }
       };
-      render();
+      render('full');
       this.root.append(ov);
     });
   }
@@ -371,7 +389,7 @@ export class DeckSetup {
       const modal = h('div', 'modal deck-modal');
       const box = h('div', 'modal-panel gameplan-panel');
       const close = () => {
-        modal.remove();
+        closeModal(modal);
         resolve();
       };
       box.append(
@@ -410,6 +428,7 @@ export class DeckSetup {
         if (e.target === modal) close();
       };
       this.root.append(modal);
+      buildIn(box.children, 0.1, 0.05);
       input.focus();
     });
   }
@@ -423,7 +442,7 @@ export class DeckSetup {
       const modal = h('div', 'modal deck-modal');
       const box = h('div', 'modal-panel gameplan-panel');
       const close = () => {
-        modal.remove();
+        closeModal(modal);
         resolve();
       };
       box.append(
@@ -470,6 +489,7 @@ export class DeckSetup {
         if (e.target === modal && !go.disabled) close();
       };
       this.root.append(modal);
+      buildIn(box.children, 0.1, 0.05);
       area.focus();
 
       let translated = '';
@@ -614,13 +634,13 @@ export class DeckSetup {
       const modal = h('div', 'modal deck-modal');
       const box = h('div', 'modal-panel deck-picker');
       const done = (v: SeatChoice | undefined) => {
-        modal.remove();
+        closeModal(modal);
         resolve(v);
       };
       modal.onclick = (e) => {
         if (e.target === modal) done(undefined);
       };
-      const render = () => {
+      const render = (): (Element | null)[] => {
         box.replaceChildren();
         box.append(h('div', 'modal-title', 'Choose a deck'));
         const grid = h('div', 'deck-grid');
@@ -648,7 +668,7 @@ export class DeckSetup {
             if (!confirm(`Delete "${d.name}"?`)) return;
             deleteDeck(d.id);
             if (current === d.id) current = null;
-            render();
+            void render();
           };
           wrap.append(tile, edit, del);
           grid.append(wrap);
@@ -684,8 +704,10 @@ export class DeckSetup {
         cancel.onclick = () => done(undefined);
         actions.append(cancel);
         box.append(actions);
+        return [box.firstElementChild, ...grid.children, actions];
       };
-      render();
+      // the decks deal in one after another on arrival (not on the re-renders after an edit or delete)
+      buildIn(render(), 0.1, 0.04);
       modal.append(box);
       this.root.append(modal);
     });
@@ -697,7 +719,7 @@ export class DeckSetup {
       const modal = h('div', 'modal deck-modal');
       const box = h('div', 'modal-panel deck-picker precon-browser');
       const done = (v: PreconInfo | null) => {
-        modal.remove();
+        closeModal(modal);
         resolve(v);
       };
       modal.onclick = (e) => {
@@ -716,9 +738,12 @@ export class DeckSetup {
       box.append(search, grid, actions);
       modal.append(box);
       this.root.append(modal);
+      buildIn(box.children, 0.1, 0.05);
       setTimeout(() => search.focus(), 30);
 
       let all: PreconInfo[] = [];
+      // the first page of precons deals in when the list arrives; searching then filters without fanfare
+      let dealt = false;
       const show = () => {
         const q = search.value.trim().toLowerCase();
         const colorQuery = /^[wubrg]{1,5}$/i.test(q) ? q.toUpperCase().split('').sort().join('') : null;
@@ -746,6 +771,10 @@ export class DeckSetup {
         };
         if (hits.length === 0) grid.append(h('div', 'paste-note', 'No precon matches that.'));
         else page(0);
+        if (!dealt) {
+          dealt = true;
+          buildIn(grid.children, 0, 0.03, 16);
+        }
       };
       let timer = 0;
       search.oninput = () => {
@@ -769,7 +798,7 @@ export class DeckSetup {
       const modal = h('div', 'modal deck-modal');
       const box = h('div', 'modal-panel deck-paste');
       const done = (v: SavedDeck | null) => {
-        modal.remove();
+        closeModal(modal);
         resolve(v);
       };
       box.append(h('div', 'modal-title', existing ? 'Edit deck' : 'Paste a deck list'));
@@ -798,6 +827,7 @@ export class DeckSetup {
       box.append(hint, name, area, cmdPick, report, actions);
       modal.append(box);
       this.root.append(modal);
+      buildIn(box.children, 0.1, 0.05);
       area.focus();
 
       let info: DeckInfo | null = null;

@@ -64,6 +64,7 @@ export class Stage {
   private readonly bloom: UnrealBloomPass;
   private readonly hitPass: ShaderPass;
   private hitAmt = 0;
+  private spotAmt = 0;
   private readonly tickers = new Set<(dt: number, t: number) => void>();
   private readonly timer = new THREE.Timer();
   private tableMaterial!: THREE.ShaderMaterial;
@@ -113,10 +114,14 @@ export class Stage {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.45, 0.35, 1.02);
     this.composer.addPass(this.bloom);
     this.hitPass = new ShaderPass({
-      uniforms: { tDiffuse: { value: null }, uAmt: { value: 0 }, uCenter: { value: new THREE.Vector2(0.5, 0.5) } },
+      uniforms: {
+        tDiffuse: { value: null }, uAmt: { value: 0 }, uCenter: { value: new THREE.Vector2(0.5, 0.5) },
+        uSpot: { value: 0 }, uSpotTint: { value: new THREE.Color('#2a1a4a') }, uAspect: { value: 1 },
+      },
       vertexShader: /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       fragmentShader: /* glsl */ `
         uniform sampler2D tDiffuse; uniform float uAmt; uniform vec2 uCenter; varying vec2 vUv;
+        uniform float uSpot; uniform vec3 uSpotTint; uniform float uAspect;
         void main() {
           vec2 dir = vUv - uCenter;
           vec2 off = dir * uAmt * 0.03;
@@ -132,6 +137,13 @@ export class Stage {
           col = mix(col, vec3(lum) * vec3(1.15, 0.85, 0.82), clamp(uAmt * 0.3, 0.0, 0.35));
           float vig = smoothstep(0.55, 1.05, length((vUv - 0.5) * vec2(1.25, 1.0)) * 1.4);
           col = mix(col, col * vec3(0.9, 0.18, 0.14) + vec3(0.22, 0.0, 0.0), vig * clamp(uAmt, 0.0, 1.0) * 0.75);
+          // the spotlight (a commander being cast): the fringes sink into a tinted dark, a round pool of
+          // light left in the middle of the screen
+          if (uSpot > 0.0) {
+            float r = length((vUv - vec2(0.5, 0.52)) * vec2(uAspect, 1.0));
+            float fringe = smoothstep(0.32, 0.95, r);
+            col = mix(col, col * 0.22 + uSpotTint * 0.06, fringe * uSpot);
+          }
           gl_FragColor = vec4(col, 1.0);
         }`,
     });
@@ -220,6 +232,16 @@ export class Stage {
       if (at) this.hitPass.uniforms.uCenter.value.set(at.x, at.y);
       else this.hitPass.uniforms.uCenter.value.set(0.5, 0.5);
     }
+  }
+
+  /**
+   * The commander spotlight's vignette: 0 (off) to 1, the fringes darkened and tinted toward `tint`. The
+   * caller tweens it (gsap), which also keeps the frame rate up while it changes.
+   */
+  setSpotlight(amount: number, tint?: THREE.ColorRepresentation): void {
+    this.spotAmt = Math.max(0, Math.min(1, amount));
+    if (tint !== undefined) this.hitPass.uniforms.uSpotTint.value.set(tint);
+    this.wake();
   }
 
   /** Glide the camera to a view (seconds; 0 = cut). Yaw takes the short way round. */
@@ -335,6 +357,7 @@ export class Stage {
     this.bloom.setSize(w, h);
     const aspect = w / h;
     this.camera.aspect = aspect;
+    this.hitPass.uniforms.uAspect.value = aspect;
     // Arena frames for 16:9; on narrower windows widen the vertical FOV so the table's width still fits.
     if (aspect < DESIGN_ASPECT) {
       const halfH = Math.tan(THREE.MathUtils.degToRad(CAMERA_FOV / 2)) * (DESIGN_ASPECT / aspect);
@@ -368,13 +391,14 @@ export class Stage {
     for (const fn of this.tickers) fn(dt, t);
 
     if (this.hitAmt > 0.002) {
-      this.hitPass.enabled = true;
-      this.hitPass.uniforms.uAmt.value = this.hitAmt;
       this.hitAmt *= Math.pow(0.004, dt);
-    } else if (this.hitPass.enabled) {
+    } else {
       this.hitAmt = 0;
-      this.hitPass.enabled = false;
     }
+    // the pass runs only while a blow or the spotlight is showing
+    this.hitPass.uniforms.uAmt.value = this.hitAmt;
+    this.hitPass.uniforms.uSpot.value = this.spotAmt;
+    this.hitPass.enabled = this.hitAmt > 0 || this.spotAmt > 0.002;
     cameraPosition(this.view, this.basePos);
     // fog starts beyond whatever the camera is framing, however far back it has pulled
     const fog = this.scene.fog as THREE.Fog;

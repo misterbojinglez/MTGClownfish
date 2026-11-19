@@ -1,6 +1,6 @@
 import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, ResolvingSource, Selection } from '../protocol';
 import { DEFAULT_SETTINGS, onSettings, setSetting, type Settings } from '../settings';
-import { cardImageUrl, cardZoomUrl } from '../scene/textures';
+import { cardArtUrl, cardImageUrl, cardZoomUrl } from '../scene/textures';
 import { sfx } from '../audio';
 
 const PHASES: [string, string][] = [
@@ -85,6 +85,8 @@ export class Hud {
   /** where a battlefield creature's P/T comes from, when it differs from the printed card */
   private readonly zoomStats = h('div', 'zoom-stats');
   private readonly plates = new Map<number, HTMLDivElement>();
+  /** each player's commanders as last seen (they stay known while in a hidden zone), by player then card id */
+  private readonly commanders = new Map<number, Map<number, CardState>>();
   private readonly toasts = h('div', 'toasts');
   private readonly status = h('div', 'status');
   private zoomFor = -1;
@@ -556,6 +558,8 @@ export class Hud {
     this.stackPanel.replaceChildren();
     this.stackPanel.classList.toggle('show', !!state && items.length > 0);
     this.stackPanel.classList.toggle('min', this.stackMin);
+    // one item: its text wraps under the card instead of stretching the panel (theme.css)
+    this.stackPanel.classList.toggle('single', items.length === 1);
     if (!state || items.length === 0) return;
     if (this.stackMin) {
       const tab = h('button', `stack-tab${grew ? ' pulse' : ''}`);
@@ -766,6 +770,54 @@ export class Hud {
         mana.append(pip);
       }
     }
+    this.noteCommanders(state);
+    for (const p of state.players) {
+      const plate = this.plates.get(p.id);
+      if (plate) this.commanderArt(plate, p.id, p.id === localId);
+    }
+  }
+
+  /** Remember every commander in view, by its owner (a commander keeps its art while hidden in a hand). */
+  private noteCommanders(state: GameState): void {
+    for (const c of Object.values(state.cards)) {
+      if (!c.commander || !c.visible || c.owner == null || !c.name) continue;
+      let mine = this.commanders.get(c.owner);
+      if (!mine) this.commanders.set(c.owner, (mine = new Map()));
+      mine.set(c.id, c);
+    }
+  }
+
+  /**
+   * A player's commander art behind their badge: inside an opponent's medallion (partners split it in two),
+   * across the body of your own panel. Hovering it shows the card's zoom.
+   */
+  private commanderArt(plate: HTMLDivElement, pid: number, local: boolean): void {
+    const cards = [...(this.commanders.get(pid)?.values() ?? [])].sort((a, b) => a.id - b.id).slice(0, 2);
+    const key = cards.map((c) => c.id).join(',');
+    if ((plate.dataset.cmd ?? '') === key) return;
+    plate.dataset.cmd = key;
+    const host = plate.querySelector<HTMLElement>(local ? '.you-body' : '.medal');
+    if (!host) return;
+    host.querySelector('.cmd-art')?.remove();
+    plate.classList.toggle('has-cmd', cards.length > 0);
+    if (cards.length === 0) return;
+    const art = h('div', `cmd-art${cards.length > 1 ? ' two' : ''}`);
+    for (const c of cards) {
+      const face = h('div', 'cmd-art-face');
+      void cardArtUrl(c).then((url) => {
+        if (!url) return;
+        face.style.backgroundImage = `url("${url}")`;
+        face.classList.add('loaded');
+      });
+      // the zoom shows on the far side of the screen from the badge
+      face.onmouseenter = () => {
+        const latest = this.commanders.get(pid)?.get(c.id) ?? c;
+        this.showZoom(latest, plate.getBoundingClientRect().left < window.innerWidth / 2 ? 'right' : 'left');
+      };
+      face.onmouseleave = () => this.showZoom(null);
+      art.append(face);
+    }
+    host.prepend(art);
   }
 
   /**

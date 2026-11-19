@@ -5,6 +5,8 @@ import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
 import { avatarAnchor, computeLayout, libraryAnchor, nearestHandSlot, seatAt, seatFrames, seatRotation, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx, type LinkMark } from '../scene/fx';
 import { Magic } from '../scene/magic';
+import { SPOT_POS, SPOT_SCALE, Spotlight } from '../scene/spotlight';
+import { settings } from '../settings';
 import { sfx } from '../audio';
 import type { Stage } from '../scene/stage';
 import { cardBackTexture } from '../scene/textures';
@@ -70,6 +72,7 @@ export class Table {
 
   private readonly fx: Fx;
   private readonly magic: Magic;
+  private readonly spotlight: Spotlight;
   private readonly arrows: Arrows;
   /** the arrow drawn while dragging an attacker or blocker toward its target */
   private readonly aimArrows: Arrows;
@@ -78,6 +81,8 @@ export class Table {
   readonly group = new Set<number>();
   /** spells on the stack that have tucked away into the Stack panel (hidden until they leave the stack) */
   private readonly tucked = new Set<number>();
+  /** commanders on the stack that have had their spotlight (one per cast) */
+  private readonly spotlit = new Set<number>();
   private readonly libraries = new Map<number, THREE.Mesh>();
   private readonly flying = new Set<number>();
   /** cards in flight, resolving when each lands (effects on a card wait for it to arrive) */
@@ -90,6 +95,7 @@ export class Table {
 
   constructor(private readonly stage: Stage) {
     this.fx = new Fx(stage);
+    this.spotlight = new Spotlight(stage);
     this.magic = new Magic(stage);
     this.arrows = new Arrows(stage);
     this.aimArrows = new Arrows(stage);
@@ -102,6 +108,7 @@ export class Table {
     for (const c of this.cards.values()) c.dispose();
     this.cards.clear();
     this.tucked.clear();
+    this.spotlit.clear();
     for (const m of this.libraries.values()) m.removeFromParent();
     this.libraries.clear();
     this.state = null;
@@ -201,7 +208,9 @@ export class Table {
         obj.root.visible = true;
         obj.root.scale.setScalar(target.scale);
       }
-      if (zoneChanged && obj.state.zone === 'Stack') tasks.push(this.fly(obj, before.zone, obj.state.zone, target).then(() => this.tuckIntoStack(obj)));
+      if (obj.state.zone !== 'Stack') this.spotlit.delete(id);
+      if (this.spotlightFor(obj, state)) tasks.push(this.commanderCast(obj, zoneChanged ? before.zone : 'Stack', target));
+      else if (zoneChanged && obj.state.zone === 'Stack') tasks.push(this.fly(obj, before.zone, obj.state.zone, target).then(() => this.tuckIntoStack(obj)));
       else if (zoneChanged) tasks.push(this.fly(obj, before.zone, obj.state.zone, target));
       else if (fromLibrary.has(id)) tasks.push(this.fly(obj, 'Library' as ZoneName, obj.state.zone, target));
       else if (!this.flying.has(id)) this.settle(obj, target, before ? 0.28 : 0);
@@ -438,14 +447,15 @@ export class Table {
     const st = { t: 0 };
     const reveal = key === 'Library>Hand' && p.space === 'rig';
     const pan = this.panOf(startPos);
-    if (to === 'Stack') sfx.cast(obj.state.colors, pan);
+    if (to === 'Stack' && from !== 'Stack') sfx.cast(obj.state.colors, pan);
     else if (to === 'Hand') sfx.draw(pan, p.space !== 'rig');
 
     const landed = new Promise<void>((resolve) => {
       gsap.to(st, {
         t: 1,
         duration,
-        ease: EASE[key] ?? 'power2.inOut',
+        // a commander arriving from the stack drops onto the table instead of settling (see the thunk below)
+        ease: key === 'Stack>Battlefield' && obj.state.commander ? 'power3.in' : EASE[key] ?? 'power2.inOut',
         onUpdate: () => {
           // a card headed for the screen (hand, stack) chases its slot if the camera is moving
           if (p.space === 'rig') {
@@ -475,7 +485,8 @@ export class Table {
             this.fx.etb(end, colorFor(s.colors), p.scale * (s.creature ? 1 : 0.7));
             // anything cast arrives in its colours; bigger creatures make a bigger entrance
             if (!s.land && from === 'Stack') this.magic.burst(end, s.colors, s.creature ? 0.8 + Math.min(0.8, (s.power ?? 0) / 6) : 0.65);
-            if (s.creature && (s.power ?? 0) >= 5) this.stage.addShake(0.35);
+            if (s.commander && from === 'Stack') this.commanderLands(end, s.colors, p.scale);
+            else if (s.creature && (s.power ?? 0) >= 5) this.stage.addShake(0.35);
           }
           else if (to === 'Graveyard' || to === 'Exile' || to === 'Command') sfx.place(this.panOf(end));
           if (reveal) obj.body.position.set(0, 0, 0);
@@ -490,6 +501,62 @@ export class Table {
     });
     this.landings.set(obj.id, landed);
     return landed;
+  }
+
+  /**
+   * Whether a card gets the commander spotlight now: a commander whose cast just completed (it's on the stack
+   * as a spell, so paid for: Forge moves a card to the stack before its costs are paid, and the player may
+   * still cancel), once per cast, with effects on.
+   */
+  private spotlightFor(obj: CardObject, state: GameState): boolean {
+    const s = obj.state;
+    if (!s.commander || !s.visible || s.zone !== 'Stack' || this.spotlit.has(obj.id) || settings.particles === 'off') return false;
+    if (!state.stack.some((x) => x.source === obj.id && !x.ability)) return false;
+    this.spotlit.add(obj.id);
+    return true;
+  }
+
+  /**
+   * A commander is cast: it rises to the middle of the screen and holds there for a moment while a waterfall
+   * of light pours down behind it and the screen's fringes darken (Spotlight), then goes on to the stack.
+   */
+  private async commanderCast(obj: CardObject, from: ZoneName | null, target: Placement): Promise<void> {
+    const hold: Placement = { space: 'rig', pos: SPOT_POS.clone(), rot: new THREE.Euler(0, 0, 0, 'YXZ'), scale: SPOT_SCALE, faceUp: true, order: 2000 };
+    // paid for after it reached the stack: it rises back out of the Stack panel
+    if (this.tucked.delete(obj.id)) {
+      gsap.killTweensOf(obj.root.scale);
+      obj.root.visible = true;
+    }
+    sfx.commander(obj.state.colors);
+    await this.fly(obj, from, 'Stack', hold, 0.6);
+    // held: reflows leave it be until it moves on
+    this.flying.add(obj.id);
+    const colors = obj.state.colors;
+    const glint = new THREE.Vector3();
+    let acc = 0;
+    const stopGlints = this.stage.onTick((dt) => {
+      // glints drift down the light, a few a frame
+      acc += dt * 26;
+      for (; acc >= 1; acc--) this.magic.trail(this.spotlight.randomPointInLight(glint), colors, 0.5);
+    });
+    // it breathes a little while it's held
+    const breathe = gsap.to(obj.body.position, { z: 0.35, duration: 0.75, yoyo: true, repeat: 1, ease: 'sine.inOut' });
+    await this.spotlight.play(colors, 1.5 / this.timeScale);
+    stopGlints();
+    breathe.kill();
+    obj.body.position.set(0, 0, 0);
+    this.flying.delete(obj.id);
+    if (obj.state.zone !== 'Stack') return;
+    await this.fly(obj, 'Stack', 'Stack', this.layout.get(obj.id) ?? target, 0.45);
+    this.tuckIntoStack(obj);
+  }
+
+  /** A commander lands on the battlefield: a heavy thunk, a beat of slow motion, a small shake and a burst. */
+  private commanderLands(at: THREE.Vector3, colors: string | undefined, scale: number): void {
+    sfx.thunk(this.panOf(at));
+    this.hitStop(0.12);
+    this.stage.addShake(0.42);
+    this.fx.etb(at, colorFor(colors), scale * 1.5);
   }
 
   /** A new card appears: drawn from its library, created as a token, or revealed from hiding. True if it starts on the library. */
@@ -644,7 +711,8 @@ export class Table {
           if (item?.source != null && !item.ability && item.controller !== this.localId && this.onOpponentCast) {
             const card = s.cards[item.source];
             const who = s.players.find((p) => p.id === item.controller)?.name ?? 'Opponent';
-            if (card?.visible) jobs.push(this.onOpponentCast(card, who));
+            // a commander gets the spotlight instead (commanderCast)
+            if (card?.visible && !(card.commander && settings.particles !== 'off')) jobs.push(this.onOpponentCast(card, who));
           }
           break;
         }

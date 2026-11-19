@@ -353,6 +353,29 @@ class AudioEngine {
     chord.forEach((f, i) => this.tone(f, t + 0.05 + i * 0.045, 0.9, 0.035, { type: 'triangle', attack: 0.3, vibrato: 0.004, pan, wet: 0.6 }));
   }
 
+  /** A commander is cast: a long swell of light, the colour chord rising an octave as it holds. */
+  commander(colors?: string): void {
+    const t = this.begin('commander', 0.5);
+    if (t == null) return;
+    const chord = CHORDS[colorOf(colors)];
+    this.noise(t, 1.6, 0.07, { from: 400, to: 5200, q: 0.8, attack: 0.6, wet: 0.7 });
+    chord.forEach((f, i) => {
+      this.tone(f, t + 0.1 + i * 0.12, 2.0, 0.04, { type: 'triangle', attack: 0.5, vibrato: 0.005, wet: 0.8 });
+      this.tone(f * 2, t + 0.55 + i * 0.12, 1.6, 0.022, { attack: 0.4, vibrato: 0.006, wet: 0.9 });
+    });
+    this.tone(chord[0] / 2, t, 2.2, 0.06, { attack: 0.7, wet: 0.5 });
+  }
+
+  /** A commander lands: a deep, heavy thunk with a dull crack on top. */
+  thunk(pan = 0): void {
+    const t = this.begin('thunk', 0.2);
+    if (t == null) return;
+    this.tone(70, t, 0.55, 0.5, { glide: 30, pan, wet: 0.25 });
+    this.tone(140, t, 0.12, 0.18, { glide: 60, pan, wet: 0.1 });
+    this.noise(t, 0.35, 0.28, { filter: 'lowpass', from: 700, to: 90, pan, wet: 0.25 });
+    this.noise(t, 0.06, 0.12, { filter: 'bandpass', from: 1800, q: 1.5, pan, wet: 0.15 });
+  }
+
   /** A permanent lands: a thump scaled by size, then the colour chord rings out. */
   etb(colors?: string, power = 0, pan = 0): void {
     const t = this.begin('etb', 0.08);
