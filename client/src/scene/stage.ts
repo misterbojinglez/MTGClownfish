@@ -65,7 +65,7 @@ export class Stage {
   private readonly hitPass: ShaderPass;
   private hitAmt = 0;
   private readonly tickers = new Set<(dt: number, t: number) => void>();
-  private readonly clock = new THREE.Clock();
+  private readonly timer = new THREE.Timer();
   private tableMaterial!: THREE.ShaderMaterial;
   private matColorKey = '';
   private keyLight!: THREE.DirectionalLight;
@@ -88,7 +88,7 @@ export class Stage {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // shadows are drawn only on frames where something may have moved (see frame())
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
@@ -361,8 +361,9 @@ export class Stage {
       this.renderer.shadowMap.needsUpdate = true;
       this.idleShadowFrames = 0;
     }
-    const dt = Math.min(this.clock.getDelta(), 0.05);
-    const t = this.clock.elapsedTime;
+    this.timer.update(now);
+    const dt = Math.min(this.timer.getDelta(), 0.05);
+    const t = this.timer.getElapsed();
     this.tableMaterial.uniforms.uTime.value = t;
     for (const fn of this.tickers) fn(dt, t);
 
