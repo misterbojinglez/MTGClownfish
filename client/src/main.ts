@@ -216,10 +216,13 @@ function askLifeIfNoMana(): void {
   }, 300);
 }
 
-/** Selectable cards that aren't on the table (library search etc.) get the browser overlay. */
+/**
+ * Selectable cards that aren't on the table (library search etc.) get the browser overlay, and so do selectable
+ * graveyard cards: the graveyard is a pile showing only its top card (Baron Helmut Zemo's boast picks several).
+ */
 function refreshBrowser(): void {
   const s = table.state!;
-  const offTable = table.selection.cards.filter((id) => !table.cards.has(id) && s.cards[id]);
+  const offTable = table.selection.cards.filter((id) => s.cards[id] && (!table.cards.has(id) || s.cards[id].zone === 'Graveyard'));
   const chosen = new Set(table.selection.chosen.map((r) => r?.card).filter((x): x is number => x != null));
   hud.setBrowser(
     offTable.length ? offTable.map((id) => s.cards[id]) : null,

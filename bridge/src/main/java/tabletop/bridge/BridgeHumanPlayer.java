@@ -93,6 +93,12 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             PREPARED_READY.put(me, preparedReady);
             final java.util.Set<Integer> exileReady = java.util.Set.copyOf(exileNow());
             EXILE_READY.put(me, exileReady);
+            // a boast worth offering the moment it becomes usable (Baron Helmut Zemo after attacking): asked
+            // once a turn, and a yes plays it as if the card had been clicked
+            final SpellAbility boast = boastOffer();
+            if (boast != null) {
+                return new java.util.ArrayList<>(java.util.List.of(boast));
+            }
             // and the live facts every snapshot carries (cards playable from exile, mana available): the
             // snapshots sent while you decide are mostly built off the game thread, where they can't be worked out
             Serializer.refreshLive(getGame());
@@ -125,6 +131,58 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                     yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");
                 }
             }
+        }
+
+        /**
+         * Boasts the table offers by asking, rather than leaving them to a click on the card: Baron Helmut Zemo's
+         * (fifteen black mana symbols' worth of graveyard is easy to lose track of, and the moment passes with
+         * the turn).
+         */
+        private static final java.util.Set<String> OFFERED_BOASTS = java.util.Set.of("Baron Helmut Zemo");
+        private int boastAskedTurn = -1;
+        private final java.util.Set<Integer> boastAsked = new java.util.HashSet<>();
+
+        /**
+         * A creature of yours named in {@link #OFFERED_BOASTS} attacked this turn and its boast can be activated
+         * and paid for right now (with a cost like Zemo's, that checks the graveyard): asks once per creature
+         * per turn whether to use it, and returns it on a yes. A yield you set wins: nothing is asked.
+         */
+        private SpellAbility boastOffer() {
+            try {
+                final Game game = getGame();
+                final Player me = getPlayer();
+                if (getYieldController().isYieldActive()) {
+                    return null;
+                }
+                final int turn = game.getPhaseHandler().getTurn();
+                if (turn != boastAskedTurn) {
+                    boastAskedTurn = turn;
+                    boastAsked.clear();
+                }
+                for (final forge.game.card.Card c : me.getCardsIn(forge.game.zone.ZoneType.Battlefield)) {
+                    if (!OFFERED_BOASTS.contains(c.getName()) || boastAsked.contains(c.getId())
+                            || c.getDamageHistory().getCreatureAttacksThisTurn() == 0) {
+                        continue;
+                    }
+                    for (final SpellAbility sa : c.getSpellAbilities()) {
+                        if (!sa.isBoast()) {
+                            continue;
+                        }
+                        sa.setActivatingPlayer(me);
+                        if (!sa.canPlay() || !forge.game.cost.CostPayment.canPayAdditionalCosts(sa.getPayCosts(), sa, false)) {
+                            continue;
+                        }
+                        boastAsked.add(c.getId());
+                        final String text = sa.getDescription().replaceFirst("^Boast\\s*[—-]\\s*", "").replaceAll("\\s*\\(Activate only[^)]*\\)", "");
+                        if (getGui().showConfirmDialog(c.getName() + " attacked: use its Boast?\n\n" + text, "Boast", "Boast", "Not now", true)) {
+                            return sa;
+                        }
+                    }
+                }
+            } catch (final RuntimeException ignored) {
+                // mid-update: nothing offered this time
+            }
+            return null;
         }
 
         /** Sentinel in {@link #usableNow}'s answer: the scan ran out of time, so assume there is something. */
