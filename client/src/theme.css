@@ -690,11 +690,13 @@
 
 /* ---- The Stack: a violet-framed panel at the right, cards in a row, the next to resolve first and lit ---- */
 .stack-panel {
+  /* each card's width: 192px, less on smaller windows so the panel stays out of the middle of the board */
+  --stack-card: clamp(110px, min(12.7vw, 20vh), 192px);
   position: absolute;
   right: 18px;
   top: 30%;
   width: auto;
-  max-width: min(560px, 46vw);
+  max-width: min(1120px, 60vw);
   display: none;
   flex-direction: column;
   gap: 0;
@@ -740,7 +742,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 6px 12px 5px;
+  padding: 8px 10px 7px 16px;
   background: linear-gradient(180deg, rgba(40, 32, 70, 0.9), rgba(18, 16, 32, 0.9));
   border-bottom: 1px solid rgba(160, 100, 255, 0.5);
   border-radius: 6px 6px 0 0;
@@ -752,7 +754,7 @@
 
 .stack-title {
   font-family: var(--display);
-  font-size: 19px;
+  font-size: 26px;
   font-weight: 700;
   color: var(--arc-purple-hi);
   text-shadow: 0 0 10px rgba(160, 100, 255, 0.6);
@@ -762,39 +764,39 @@
   margin-left: auto;
   font-family: var(--display);
   font-variant-numeric: lining-nums;
-  font-size: 14px;
+  font-size: 19px;
   font-weight: 700;
   color: #a99fc4;
 }
 
 .stack-cards {
   display: flex;
-  gap: 10px;
-  padding: 12px 14px 8px;
+  gap: 16px;
+  padding: 18px 20px 12px;
   overflow-x: auto;
 }
 
 .stack-card {
   flex: none;
-  width: 96px;
+  width: var(--stack-card);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   cursor: default;
 }
 
 .stack-face {
-  width: 96px;
+  width: var(--stack-card);
   aspect-ratio: 488 / 680;
-  border-radius: 6px;
+  border-radius: 10px;
   background: #15131f center / cover no-repeat;
   border: 2px solid rgba(120, 110, 150, 0.6);
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.6);
   display: grid;
   place-items: center;
-  padding: 6px;
+  padding: 10px;
   font-family: var(--display);
-  font-size: 12px;
+  font-size: 17px;
   text-align: center;
   color: #d8d0ea;
 }
@@ -810,7 +812,7 @@
 }
 
 .stack-tag {
-  font-size: 10.5px;
+  font-size: 14px;
   font-weight: 600;
   color: #b4abcc;
   text-align: center;
@@ -825,23 +827,134 @@
 
 .stack-more {
   align-self: center;
-  padding: 0 6px;
+  padding: 0 8px;
   font-family: var(--display);
-  font-size: 18px;
+  font-size: 26px;
   font-weight: 700;
   color: #a99fc4;
 }
 
 .stack-text {
-  padding: 0 16px 12px;
-  max-width: 420px;
-  font-size: 13px;
-  line-height: 1.35;
+  padding: 0 22px 18px;
+  max-width: 760px;
+  font-size: 17px;
+  line-height: 1.4;
   color: #e4def0;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* the header's hide control: slides the panel aside to see the board */
+.stack-hide {
+  margin-left: 6px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0 0 3px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(160, 100, 255, 0.6);
+  background: rgba(20, 16, 34, 0.9);
+  color: var(--arc-purple-hi);
+  font-family: var(--display);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.stack-hide:hover {
+  border-color: var(--arc-purple-hi);
+  background: rgba(60, 40, 100, 0.9);
+  color: #fff;
+}
+
+.stack-hide:focus-visible,
+.stack-tab:focus-visible {
+  outline: 2px solid var(--arc-blue-hi);
+  outline-offset: 2px;
+}
+
+/* tucked aside: only a tab at the right edge, with the count; click it (or press S) to bring the panel back */
+.stack-panel.min {
+  right: 0;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  animation: stack-tuck 0.18s ease-out;
+}
+
+.stack-panel.min::before,
+.stack-panel.min::after {
+  display: none;
+}
+
+@keyframes stack-tuck {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+.stack-tab {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 16px 10px 12px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.stack-tab .stack-title {
+  font-size: 19px;
+}
+
+.stack-tab .stack-count {
+  margin-left: 2px;
+  min-width: 26px;
+  padding: 1px 8px;
+  border-radius: 12px;
+  background: rgba(160, 100, 255, 0.28);
+  color: var(--arc-purple-hi);
+  text-align: center;
+}
+
+.stack-tab-arrow {
+  font-family: var(--display);
+  font-size: 22px;
+  line-height: 1;
+  color: var(--arc-purple-hi);
+}
+
+.stack-tab:hover .stack-title {
+  color: #fff;
+}
+
+/* something new was added while it was tucked aside */
+.stack-tab.pulse {
+  animation: stack-pulse 0.9s ease-out 3;
+}
+
+@keyframes stack-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(168, 214, 255, 0.85);
+  }
+  100% {
+    box-shadow: 0 0 0 16px rgba(168, 214, 255, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stack-panel.min,
+  .stack-tab.pulse {
+    animation: none;
+  }
+  .stack-tab.pulse .stack-count {
+    background: var(--arc-blue);
+    color: #fff;
+  }
 }
 
 /* ---- the game HUD only exists during a game: menus and setup show over the bare arena ---- */

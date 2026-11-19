@@ -65,6 +65,9 @@ export class Hud {
   private readonly promptSource = h('div', 'prompt-source');
   private readonly stackPanel = h('div', 'stack-panel');
   private stackKey = '';
+  /** The Stack tucked aside to see the board; it opens again for the next stack */
+  private stackMin = false;
+  private stackLast: { state: GameState | null; localId: number; count: number } = { state: null, localId: -1, count: 0 };
   private promptSourceKey = '';
   private readonly okBtn = h('button', 'main-btn');
   /** the OK button currently means "choose nothing" (an optional target with none picked) */
@@ -183,6 +186,7 @@ export class Hud {
     }, true);
     this.root.append(menu, this.viewBarEl);
 
+    window.addEventListener('resize', () => this.placeStack());
     window.addEventListener('keydown', (e) => {
       // typing a deck name or list mustn't trigger shortcuts (an "m" used to mute everything)
       if ((e.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return;
@@ -199,6 +203,8 @@ export class Hud {
       } else if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         if (!this.okBtn.disabled && !this.skipping) this.handlers.ok();
+      } else if (e.key === 's' || e.key === 'S') {
+        this.toggleStack();
       } else if (e.key === 'Escape' || e.key === 'z') {
         if (!this.cancelBtn.disabled) this.handlers.cancel();
       }
@@ -419,6 +425,7 @@ export class Hud {
     else if (prompt.input === 'InputAttack') msg += '\n(Click your creatures, or drag one onto a planeswalker to attack it. Drag a box on the table to select several)';
     else if (prompt.input === 'InputBlock') msg += '\n(Drag a creature onto an attacker to block it. Drag a box on the table to select several, then drag one of them)';
     this.promptText.textContent = msg;
+    this.placeStack();
     const ok = prompt.ok;
     // your priority prompt: Forge's own "End Turn" secondary does what Pass Turn does (minus its guards against
     // stale presses and unseen opponent spells), so it isn't offered, and OK, which passes priority once, says so
@@ -525,14 +532,32 @@ export class Hud {
    */
   setStack(state: GameState | null, localId: number): void {
     const items = state?.stack ?? [];
-    const key = items.map((i) => `${i.id}:${i.source}:${i.text}`).join(',');
+    const key = `${this.stackMin ? 'min|' : ''}${items.map((i) => `${i.id}:${i.source}:${i.text}`).join(',')}`;
     if (key === this.stackKey) return;
     this.stackKey = key;
+    // something new joined while it was tucked aside: the tab pulses so it isn't missed
+    const grew = items.length > this.stackLast.count;
+    this.stackLast = { state, localId, count: items.length };
+    // an emptied stack ends it: the next one opens in full
+    if (items.length === 0) this.stackMin = false;
     this.stackPanel.replaceChildren();
     this.stackPanel.classList.toggle('show', !!state && items.length > 0);
+    this.stackPanel.classList.toggle('min', this.stackMin);
     if (!state || items.length === 0) return;
+    if (this.stackMin) {
+      const tab = h('button', `stack-tab${grew ? ' pulse' : ''}`);
+      tab.title = 'Show The Stack (S)';
+      tab.append(h('span', 'stack-tab-arrow', '‹'), h('span', 'stack-title', 'The Stack'), h('span', 'stack-count', String(items.length)));
+      tab.onclick = () => this.toggleStack();
+      this.stackPanel.append(tab);
+      return;
+    }
     const head = h('div', 'stack-head');
-    head.append(h('span', 'stack-title', 'The Stack'), h('span', 'stack-count', String(items.length)));
+    const hide = h('button', 'stack-hide', '›');
+    hide.title = 'Move The Stack aside to see the board (S)';
+    hide.setAttribute('aria-label', 'Move The Stack aside');
+    hide.onclick = () => this.toggleStack();
+    head.append(h('span', 'stack-title', 'The Stack'), h('span', 'stack-count', String(items.length)), hide);
     const row = h('div', 'stack-cards');
     const shown = items.slice(0, 8);
     shown.forEach((item, i) => {
@@ -548,7 +573,8 @@ export class Hud {
       else face.textContent = name;
       el.append(face, h('div', 'stack-tag', who ? `${kind} · ${who}` : kind));
       if (card) {
-        el.onmouseenter = () => this.showZoom(card, 'right');
+        // the panel fills the right side, where the zoom usually shows
+        el.onmouseenter = () => this.showZoom(card, 'left');
         el.onmouseleave = () => this.showZoom(null);
       }
       row.append(el);
@@ -560,6 +586,45 @@ export class Hud {
     const topText = effectText(tidyMessage(top.text), topCard?.name ?? '');
     this.stackPanel.append(head, row);
     if (topText) this.stackPanel.append(h('div', 'stack-text', topText));
+    this.placeStack();
+  }
+
+  /**
+   * The Stack sits at the right, 30% down, but never over the prompt's message under it (what you're being
+   * asked matters more): when the two would meet, the panel rides up, stopping below the phase tracker.
+   */
+  private placeStack(): void {
+    const panel = this.stackPanel;
+    panel.style.top = '';
+    panel.style.removeProperty('--stack-card');
+    if (!panel.classList.contains('show') || panel.classList.contains('min')) return;
+    const above = [this.promptSource, this.promptText]
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.height > 0)
+      .reduce((top, r) => Math.min(top, r.top), Infinity);
+    if (!Number.isFinite(above)) return;
+    const TOP = 84; // below the phase tracker
+    const limit = above - 14;
+    let r = panel.getBoundingClientRect();
+    if (r.bottom <= limit) return;
+    // on a short window even the highest spot isn't enough: smaller cards (never below the old 96px)
+    const room = limit - TOP;
+    const face = panel.querySelector('.stack-face');
+    if (r.height > room && face) {
+      const width = face.getBoundingClientRect().width;
+      const fit = Math.max(96, Math.floor(width - (r.height - room) * (488 / 680)));
+      panel.style.setProperty('--stack-card', `${fit}px`);
+      r = panel.getBoundingClientRect();
+    }
+    panel.style.top = `${Math.max(TOP, limit - r.height)}px`;
+  }
+
+  /** Tuck The Stack aside to see the board, or bring it back. */
+  toggleStack(): void {
+    if (!this.stackLast.state?.stack.length) return;
+    this.stackMin = !this.stackMin;
+    this.showZoom(null);
+    this.setStack(this.stackLast.state, this.stackLast.localId);
   }
 
   /** "Preordain · Spell" with its art and rules text: what is asking the current question. Hover for the card. */
