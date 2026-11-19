@@ -41,6 +41,46 @@ const EDGE_GEO = new THREE.ExtrudeGeometry(cardShape(CARD_W, CARD_H, RADIUS), { 
 EDGE_GEO.translate(0, 0, -0.005);
 const GLOW_GEO = new THREE.PlaneGeometry(CARD_W * 1.3, CARD_H * 1.21);
 
+/**
+ * The "Token" tag on a token's top edge (a token copy of a card is otherwise identical to the real one):
+ * a slate pill with a gilt rim, like the interface's chips. One texture for every token, drawn once the
+ * typeface has loaded.
+ */
+const TOKEN_TAG_W = CARD_W * 0.66;
+const TOKEN_TAG_H = TOKEN_TAG_W * (52 / 160);
+const TOKEN_TAG_GEO = new THREE.PlaneGeometry(TOKEN_TAG_W, TOKEN_TAG_H);
+let tokenTagTex: THREE.CanvasTexture | null = null;
+function tokenTagTexture(): THREE.CanvasTexture {
+  if (tokenTagTex) return tokenTagTex;
+  const c = document.createElement('canvas');
+  c.width = 160;
+  c.height = 52;
+  tokenTagTex = new THREE.CanvasTexture(c);
+  tokenTagTex.colorSpace = THREE.SRGBColorSpace;
+  const draw = () => {
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, 160, 52);
+    roundRect(g, 3, 3, 154, 46, 23);
+    const fill = g.createLinearGradient(0, 3, 0, 49);
+    fill.addColorStop(0, '#2b3341');
+    fill.addColorStop(1, '#10141c');
+    g.fillStyle = fill;
+    g.fill();
+    g.lineWidth = 3.5;
+    g.strokeStyle = '#d9b45f';
+    g.stroke();
+    g.fillStyle = '#f5dc9a';
+    g.font = `700 29px ${CANVAS_FONT}`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('Token', 80, 28);
+    tokenTagTex!.needsUpdate = true;
+  };
+  draw();
+  if (document.fonts) void document.fonts.load(`700 29px Alegreya`).then(draw, () => {});
+  return tokenTagTex;
+}
+
 let glowTex: THREE.Texture | null = null;
 function glowTexture(): THREE.Texture {
   if (glowTex) return glowTex;
@@ -126,6 +166,7 @@ export class CardObject {
   private readonly backMat: THREE.MeshStandardMaterial;
   private readonly glowMat: THREE.MeshBasicMaterial;
   private readonly badge: THREE.Mesh;
+  private readonly tokenTag: THREE.Mesh;
   private readonly badgeCanvas = document.createElement('canvas');
   private readonly badgeTex: THREE.CanvasTexture;
   private readonly dissolve = { uDissolve: { value: 0 }, uEdge: { value: new THREE.Color('#ff7a2a') } };
@@ -177,7 +218,12 @@ export class CardObject {
     this.badge.position.set(0, -CARD_H / 2 + 0.25, 0.02);
     this.badge.visible = false;
 
-    this.lift.add(this.glow, this.edge, this.front, this.back, this.badge);
+    // straddles the top edge, above the name bar rather than over it
+    this.tokenTag = new THREE.Mesh(TOKEN_TAG_GEO, new THREE.MeshBasicMaterial({ map: tokenTagTexture(), transparent: true, depthWrite: false }));
+    this.tokenTag.position.set(0, CARD_H / 2 + TOKEN_TAG_H * 0.18, 0.025);
+    this.tokenTag.visible = false;
+
+    this.lift.add(this.glow, this.edge, this.front, this.back, this.badge, this.tokenTag);
     this.body.add(this.lift);
     this.root.add(this.body);
     this.root.rotation.order = 'YXZ';
@@ -205,6 +251,7 @@ export class CardObject {
       }
     }
     this.drawBadge();
+    this.tokenTag.visible = !!state.token && state.zone === 'Battlefield' && state.visible;
   }
 
   /** P/T, loyalty, damage and counters, drawn along the bottom of battlefield cards. */
@@ -309,7 +356,7 @@ export class CardObject {
     this.onTable = onTable;
     for (const m of [this.front, this.back, this.edge]) m.castShadow = onTable;
     // screen-space cards draw in the overlay pass, after bloom/tone mapping, so their art keeps its true colour
-    for (const m of [this.front, this.back, this.edge, this.badge]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
+    for (const m of [this.front, this.back, this.edge, this.badge, this.tokenTag]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
     for (const mat of [this.frontMat, this.backMat]) {
       mat.color.setScalar(onTable ? 0.62 : 0);
       mat.emissiveIntensity = onTable ? 0.42 : 1;
@@ -390,6 +437,8 @@ export class CardObject {
     this.backMat.dispose();
     this.glowMat.dispose();
     this.badgeTex.dispose();
+    // the tag's texture and shape are shared by every token
+    (this.tokenTag.material as THREE.Material).dispose();
   }
 }
 

@@ -876,7 +876,9 @@ export class Hud {
       return;
     }
     this.zoom.classList.toggle('right', side === 'right');
-    this.zoomStats.replaceChildren(...notes.map((n) => h('span', 'zs-total', n)), ...ptBreakdown(card));
+    // a token copy's art is the real card's: say it's a token
+    const tags = card.token && card.zone === 'Battlefield' ? [h('span', 'zs-total zs-token', 'Token')] : [];
+    this.zoomStats.replaceChildren(...tags, ...notes.map((n) => h('span', 'zs-total', n)), ...ptBreakdown(card));
     if (this.zoomFor === card.id) {
       this.zoom.classList.add('show');
       return;
