@@ -30,7 +30,7 @@ mvn -q -B -N install -Dcheckstyle.skip
 mvn -q -B -pl forge-gui -am install -DskipTests -Dcheckstyle.skip
 
 # Forge publishes POMs with an unresolved ${revision}; pin it so other projects can depend on them.
-REV=${REV:-$(ls ~/.m2/repository/forge/forge-gui | grep SNAPSHOT | head -1)}
+REV=${REV:-$(ls ~/.m2/repository/forge/forge-gui | grep SNAPSHOT | sort -V | tail -1)}
 find ~/.m2/repository/forge -name "*.pom" -exec sed -i '' "s/\${revision}/$REV/g" {} +
 mkdir -p ~/.m2/repository/forge/forge/"$REV"
 cp pom.xml ~/.m2/repository/forge/forge/"$REV"/forge-"$REV".pom
