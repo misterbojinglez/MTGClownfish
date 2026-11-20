@@ -526,26 +526,9 @@
   position: relative;
 }
 
-.you-body > .cmd-art {
-  border-radius: 0;
-}
-
-.you-body > .cmd-art .cmd-art-face {
-  background-position: center 35%;
-}
-
-/* your panel: the art shows most at the right, behind the counts, and fades under the life shield */
-.you-body > .cmd-art::after {
-  background: linear-gradient(90deg, rgba(8, 9, 14, 0.92) 0%, rgba(8, 9, 14, 0.72) 45%, rgba(8, 9, 14, 0.5) 100%);
-}
-
 .you-body > :not(.cmd-art) {
   position: relative;
   z-index: 1;
-}
-
-.you-body > .plate-info {
-  pointer-events: none;
 }
 
 .medal .pname {
@@ -646,109 +629,152 @@
   animation: plate-flash 0.6s ease-out;
 }
 
-/* ---- You (Player): fixed at the bottom left, life on a red shield ---- */
+/* ---- You (Player): centred just above your hand (main sets its bottom from the hand's top edge), framed
+   like the opponents' badges: your life on a medallion in your seat's red, library and hand on a panel to its
+   left, graveyard and mana on one to its right, your name on a tab beneath. Translucent at rest; it comes
+   fully forward while hovered, while attackers come at you, while you can be picked, and for a few seconds
+   after a blow or a change of life (.lively, set by the HUD) ---- */
+.seat-0 { --seat: #ec4a32; --seat-hi: #ffd0c4; --seat-glow: rgba(236, 74, 50, 0.6); --seat-deep: #3a120c; }
+
 .plate.you-panel {
-  left: 14px !important;
+  left: 0 !important;
+  right: 0;
   top: auto !important;
-  bottom: 14px;
+  bottom: 22vh;
+  margin: 0 auto;
+  width: max-content;
   transform: none;
-  width: 236px;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 0;
   padding: 0;
   border: none;
   border-radius: 0;
   background: none;
   box-shadow: none;
+  opacity: 0.5;
 }
 
-.you-title {
-  text-align: center;
-  font-family: var(--display);
-  font-size: 19px;
-  font-weight: 700;
-  color: #f3ead6;
-  padding: 2px 8px 3px;
-  background: linear-gradient(180deg, #232a37, #0f1219);
-  border: 1.5px solid var(--gilt);
-  border-radius: 6px 6px 0 0;
-  text-shadow: 0 1px 0 #000;
+.plate.you-panel:hover,
+.plate.you-panel.lively,
+.plate.you-panel.attacked,
+.plate.you-panel.targetable,
+.plate.you-panel.aim,
+.plate.you-panel.struck {
+  opacity: 1;
+}
+
+/* while you look at a card in your hand, step aside: a raised card is never covered */
+.hand-focus .plate.you-panel {
+  opacity: 0.08;
+  pointer-events: none;
 }
 
 .you-body {
   display: flex;
-  align-items: flex-start;
-  min-height: 84px;
-  background: var(--panel-fill);
-  border: 1.5px solid rgba(217, 180, 95, 0.5);
-  border-top: none;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+  align-items: center;
+  gap: 0;
 }
 
-.you-panel .life {
-  position: relative;
-  z-index: 1;
-  width: 92px;
-  height: 100px;
-  margin: 0 4px -18px 8px;
-  display: grid;
-  place-items: center;
-  padding-bottom: 12px;
-  font-size: 46px;
-  font-weight: 800;
-  color: #fff4e2;
-  font-variant-numeric: lining-nums;
-  text-shadow: 0 2px 0 #4a0b06, 0 0 12px rgba(255, 140, 100, 0.5);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 40%),
-    linear-gradient(180deg, #d9452c, #8c1a12);
-  clip-path: polygon(0 0, 100% 0, 100% 76%, 50% 100%, 0 76%);
-  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.6));
+.you-panel .medal {
+  z-index: 2;
+  width: 74px;
+  height: 74px;
 }
 
-.you-panel .plate-info {
-  flex: 1;
-  padding: 10px 12px 8px 4px;
-  gap: 6px;
+.you-panel .medal .life {
+  font-size: 32px;
 }
 
+/* the side panels tuck under the medallion's rim, like an opponent's counts panel */
 .you-panel .counts {
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 24px 0 14px;
+  margin-right: -14px;
+  background: var(--panel-fill);
+  border: 1.5px solid var(--seat);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.you-panel .counts.counts-r {
+  padding: 0 14px 0 24px;
+  margin: 0 0 0 -14px;
+  border: 1.5px solid var(--seat);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
 }
 
 .you-panel .stat {
-  font-size: 19px;
+  font-size: 16px;
 }
 
 .you-panel .stat svg {
-  width: 19px;
-  height: 19px;
+  width: 15px;
+  height: 15px;
 }
 
-.you-panel.priority .you-title {
-  border-color: var(--arc-blue-hi);
-  box-shadow: 0 0 16px rgba(70, 160, 255, 0.7);
+.you-title {
+  position: relative;
+  z-index: 0;
+  margin-top: -4px;
+  padding: 3px 14px 2px;
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--seat-hi);
+  background: var(--panel-fill);
+  border: 1.5px solid var(--seat);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  text-shadow: 0 1px 0 #000;
 }
 
-.you-panel.targetable .you-body,
-.you-panel.targetable .you-title {
-  border-color: var(--gilt-hi);
-  box-shadow: 0 0 22px rgba(245, 220, 154, 0.7);
+/* commander damage, poison and floating mana sit above it */
+.you-panel .plate-info {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+  pointer-events: none;
 }
 
-.plate.you-panel.targetable {
+/* whose turn, who holds priority, who can be picked, who's being attacked: on the medallion, as for everyone */
+.you-panel.active .medal {
+  box-shadow: 0 0 0 2px #07080c, 0 0 0 4px var(--gilt-hi), 0 0 26px var(--seat-glow), inset 0 0 16px rgba(0, 0, 0, 0.75);
+}
+
+.you-panel.priority .medal {
+  box-shadow: 0 0 0 2px #07080c, 0 0 0 4px var(--arc-blue-hi), 0 0 26px rgba(70, 160, 255, 0.85), inset 0 0 16px rgba(0, 0, 0, 0.75);
+}
+
+.you-panel.targetable .medal {
+  animation: medal-call 1.2s ease-in-out infinite;
+}
+
+.you-panel.attacked .medal,
+.you-panel.aim .medal {
+  animation: none;
+  box-shadow: 0 0 0 2px #07080c, 0 0 0 4px var(--arc-red), 0 0 30px rgba(236, 74, 50, 0.9), inset 0 0 16px rgba(0, 0, 0, 0.75);
+}
+
+.plate.you-panel.targetable,
+.plate.you-panel.aim {
   animation: none;
   box-shadow: none;
+  transform: none;
 }
 
 .plate.you-panel.struck {
   animation: you-jolt 0.6s cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 
-.plate.you-panel.struck .life {
+.plate.you-panel.struck .medal {
   animation: plate-flash 0.6s ease-out;
 }
 

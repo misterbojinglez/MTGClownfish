@@ -50,18 +50,49 @@ function portTaken(port) {
   });
 }
 
+/** The logo for the splash, inlined (the splash is a data: page): the built client's, or the source in dev. */
+function splashLogo() {
+  const game = gameDir();
+  const tries = [
+    game && path.join(game, 'client', 'logo-360.webp'),
+    path.join(__dirname, '..', 'client', 'public', 'logo-360.webp'),
+  ];
+  for (const file of tries) {
+    try {
+      if (file) return 'data:image/webp;base64,' + fs.readFileSync(file).toString('base64');
+    } catch {}
+  }
+  return null;
+}
+
 function splash(text) {
+  const logo = splashLogo();
+  // The logo turns like a coin: two faces back to back, so its back half shows the right way round, and it
+  // rests face on for a beat between turns. Reduced motion: a slow glow instead.
+  const art = logo
+    ? `<div class="coin"><img src="${logo}" alt=""><img class="back" src="${logo}" alt=""></div>`
+    : '<div class="t">MTGClownfish</div>';
   const html = `<!doctype html><meta charset="utf-8"><title>MTGClownfish</title>
 <style>
   html, body { margin: 0; height: 100%; background: #0b0b10; color: #e9dcc0; font: 16px/1.5 Georgia, serif; }
-  body { display: grid; place-items: center; text-align: center; }
+  body { display: grid; place-items: center; text-align: center;
+    background: radial-gradient(ellipse at 50% 42%, #16202a 0%, #0b0b10 60%); }
+  .stage { perspective: 900px; display: grid; place-items: center; }
+  .coin { position: relative; width: 220px; height: 224px; transform-style: preserve-3d;
+    animation: spin 2.4s cubic-bezier(.55,.05,.35,1) infinite; }
+  .coin img { position: absolute; inset: 0; width: 100%; height: 100%; backface-visibility: hidden;
+    filter: drop-shadow(0 10px 24px rgba(0,0,0,.6)); }
+  .coin .back { transform: rotateY(180deg); }
+  @keyframes spin { 0%, 25% { transform: rotateY(0) } 100% { transform: rotateY(360deg) } }
   .t { font-size: 28px; letter-spacing: 0.04em; color: #f3c56b; }
-  .s { margin-top: 10px; opacity: 0.75; white-space: pre-line; }
+  .s { margin-top: 18px; opacity: 0.75; white-space: pre-line; }
   .dot { display: inline-block; animation: p 1.2s infinite; }
   .dot:nth-child(2) { animation-delay: .2s } .dot:nth-child(3) { animation-delay: .4s }
   @keyframes p { 0%, 100% { opacity: .2 } 50% { opacity: 1 } }
+  @keyframes glow { 0%, 100% { opacity: .8 } 50% { opacity: 1 } }
+  @media (prefers-reduced-motion: reduce) { .coin { animation: glow 2.4s ease-in-out infinite } }
 </style>
-<div><div class="t">MTGClownfish</div><div class="s">${text}<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></div></div>`;
+<div><div class="stage">${art}</div><div class="s">${text}<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></div></div>`;
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
 }
 

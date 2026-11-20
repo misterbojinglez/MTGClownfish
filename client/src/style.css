@@ -722,9 +722,15 @@ button {
   z-index: 10;
 }
 
-/* a dialog showing cards centres in the room left of the hover zoom */
+/* a dialog showing cards keeps the hover zoom's column at the right clear, but no more than it has to: the
+   side columns share the spare width equally (so it sits dead centre) unless that would leave the right one
+   narrower than the zoom's room, and then the dialog shifts left just enough */
 .modal:has(.thumb) {
-  padding-right: var(--zoom-room);
+  grid-template-columns: minmax(0, 1fr) auto minmax(var(--zoom-room), 1fr);
+}
+
+.modal:has(.thumb) > .modal-panel {
+  grid-column: 2;
 }
 
 .modal:has(.thumb) .modal-panel {

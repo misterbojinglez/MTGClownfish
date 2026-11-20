@@ -100,6 +100,7 @@ final class DeckImport {
                     }
                 }
             }
+            keepLegalCommanders(deck, r);
             for (final Map.Entry<PaperCard, Integer> e : deck.getMain()) {
                 final CardRules rules = e.getKey().getRules();
                 if (rules.canBeCommander()) {
@@ -233,6 +234,37 @@ final class DeckImport {
             }
         }
         return true;
+    }
+
+    /**
+     * The Commander section keeps only cards that can lead a deck: one commander, or two that can pair
+     * (partners, partner-with, a background, a Doctor's companion). Anything else goes back to the main deck.
+     * normalise() files a short last group of single copies as the commander, and a plain list whose last
+     * lines are the commander plus a stray card (or a saved deck picked that way) put both in the command
+     * zone, e.g. a sorcery seated beside the real commander.
+     */
+    private static void keepLegalCommanders(final Deck deck, final Result r) {
+        final CardPool cmd = deck.get(DeckSection.Commander);
+        if (cmd == null || cmd.isEmpty()) {
+            return;
+        }
+        final List<PaperCard> kept = new ArrayList<>();
+        for (final PaperCard pc : cmd.toFlatList()) {
+            final CardRules rules = pc.getRules();
+            final boolean ok = rules.canBeCommander() && (kept.isEmpty()
+                    || kept.size() == 1 && kept.get(0).getRules().canBePartnerCommanders(rules));
+            if (ok) {
+                kept.add(pc);
+            } else {
+                deck.getMain().add(pc, 1);
+                r.warnings.add(pc.getName() + " can't be " + (rules.canBeCommander() ? "a second commander alongside "
+                        + kept.get(0).getName() : "a commander") + ", so it's in the main deck");
+            }
+        }
+        if (kept.size() != cmd.countAll()) {
+            cmd.clear();
+            kept.forEach(pc -> cmd.add(pc, 1));
+        }
     }
 
     private static PaperCard findIn(final CardPool pool, final String name) {

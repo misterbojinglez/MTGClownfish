@@ -4,6 +4,7 @@ import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
 import { avatarAnchor, computeLayout, libraryAnchor, nearestHandSlot, seatAt, seatFrames, seatRotation, seatsFor, tableMats, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx, type LinkMark } from '../scene/fx';
+import { CommandAura } from '../scene/commandAura';
 import { Magic } from '../scene/magic';
 import { SPOT_POS, SPOT_SCALE, Spotlight } from '../scene/spotlight';
 import { Collapse } from '../scene/collapse';
@@ -86,6 +87,8 @@ export class Table {
   private readonly arrows: Arrows;
   /** the arrow drawn while dragging an attacker or blocker toward its target */
   private readonly aimArrows: Arrows;
+  /** the frame and rising aura around your commander in its slot by the hand */
+  private readonly commandAura: CommandAura;
   private aimCard: number | null = null;
   /** your creatures picked with a selection box while declaring attackers or blockers, to be sent together */
   readonly group = new Set<number>();
@@ -110,8 +113,11 @@ export class Table {
     this.collapse = new Collapse(stage, this.magic);
     this.arrows = new Arrows(stage);
     this.aimArrows = new Arrows(stage);
+    this.commandAura = new CommandAura(stage);
     stage.onTick((dt) => {
       for (const c of this.cards.values()) c.tick(dt);
+      this.followBadges();
+      this.syncCommandAura();
     });
   }
 
@@ -121,12 +127,14 @@ export class Table {
     this.tucked.clear();
     this.spotlit.clear();
     this.collapse.clear();
+    this.commandAura.clear();
     this.sunk.clear();
     this.buried.clear();
     for (const m of this.libraries.values()) m.removeFromParent();
     this.libraries.clear();
     this.state = null;
     this.handOrder = [];
+    this.arrowSpecs = [];
     this.arrows.set([]);
   }
 
@@ -269,7 +277,7 @@ export class Table {
           if (from && to) void this.magic.bolt(from, to, colors, 0.45 / this.timeScale, item.ability ? 0.6 : 1);
           aimed = true;
         } else if (t?.player != null && !damaged.has(`p${t.player}`)) {
-          const to = this.playerWorld(t.player);
+          const to = this.playerArrowEnd(t.player);
           if (from && to) void this.magic.bolt(from, to, colors, 0.45 / this.timeScale, item.ability ? 0.6 : 1);
           aimed = true;
         } else if (t) {
@@ -754,7 +762,7 @@ export class Table {
           const diff = (e.newLives as number) - (e.oldLives as number);
           if (pid != null && diff > 0) {
             this.floatAtPlayer(pid, `+${diff}`, 'heal');
-            const at = this.playerWorld(pid);
+            const at = this.playerArrowEnd(pid);
             sfx.lifeGain(at ? this.panOf(at) : 0);
           }
           // life lost without damage (drain, paying life): damage shows its own number
@@ -762,7 +770,7 @@ export class Table {
           if (pid != null && diff < 0 && !damaged) {
             this.floatAtPlayer(pid, `−${-diff}`, 'damage');
             this.onPlayerHit?.(pid, -diff);
-            const at = this.playerWorld(pid);
+            const at = this.playerArrowEnd(pid);
             if (at) {
               this.magic.burst(at, 'B', 0.3);
               sfx.hit(-diff, true, this.panOf(at));
@@ -845,7 +853,7 @@ export class Table {
       const amount = e.amount as number;
       const targetPlayer = (e.target as Ref)?.player;
       const targetCard = (e.card as Ref)?.card;
-      const at = targetPlayer != null ? this.playerWorld(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
+      const at = targetPlayer != null ? this.playerArrowEnd(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
       if (!at) continue;
       biggest = Math.max(biggest, amount);
       centre.add(at);
@@ -893,7 +901,7 @@ export class Table {
       const targetCard = (e.card as Ref)?.card;
       const targetPlayer = (e.target as Ref)?.player;
       const src = srcId != null ? this.cards.get(srcId) : undefined;
-      const targetPos = targetCard != null ? this.cardWorld(targetCard) : targetPlayer != null ? this.playerWorld(targetPlayer) : null;
+      const targetPos = targetCard != null ? this.cardWorld(targetCard) : targetPlayer != null ? this.playerArrowEnd(targetPlayer) : null;
       if (!targetPos) continue;
       // one slot per engagement: attacker↔blocker pairs share a slot, each unblocked attacker gets its own
       const key = targetCard != null && srcId != null ? [srcId, targetCard].sort().join('-') : `p${srcId}`;
@@ -1085,7 +1093,7 @@ export class Table {
     const targetPlayer = (e.target as Ref)?.player;
     const targetCard = (e.card as Ref)?.card;
     const from = srcId != null ? this.cardWorld(srcId) : null;
-    const to = targetPlayer != null ? this.playerWorld(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
+    const to = targetPlayer != null ? this.playerArrowEnd(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
     const amount = e.amount as number;
     if (from && to) sfx.zap(this.cards.get(srcId!)?.state.colors, this.panOf(from));
     const colors = srcId != null ? (this.cards.get(srcId)?.state.colors ?? this.state?.cards[srcId]?.colors) : undefined;
@@ -1145,15 +1153,43 @@ export class Table {
     return avatarAnchor(this.state, this.localId, id);
   }
 
+  /** Where a player's badge is on screen (set by the HUD's owner); arrows at a player end there. */
+  badgeAt: ((id: number) => { x: number; y: number } | null) | null = null;
+
+  /**
+   * Where an arrow aimed at a player ends: on the table under their badge, which the HUD may have slid
+   * away from their seat's anchor (pinned to a screen edge, nudged clear of another badge or the prompt).
+   * Arrows lift their ends 0.3 above the point given, so the point is taken where the badge's ray meets
+   * the plane 0.3 above the anchor and lowered by that, putting the tip exactly on the badge.
+   */
+  playerArrowEnd(id: number): THREE.Vector3 | null {
+    const anchor = this.playerWorld(id);
+    const at = this.badgeAt?.(id);
+    if (!anchor || !at) return anchor;
+    const cam = this.stage.camera;
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((at.x / window.innerWidth) * 2 - 1, -(at.y / window.innerHeight) * 2 + 1), cam);
+    const lift = 0.3;
+    const hit = new THREE.Vector3();
+    const camPos = cam.getWorldPosition(new THREE.Vector3());
+    const reach = camPos.distanceTo(anchor);
+    // a badge near the horizon would meet the table far off (or never): stop at the anchor's distance instead
+    if (ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(anchor.y + lift)), hit) && camPos.distanceTo(hit) < reach * 1.6) {
+      return hit.setY(hit.y - lift);
+    }
+    return ray.ray.at(reach, hit).setY(hit.y - lift);
+  }
+
   toScreen(world: THREE.Vector3): { x: number; y: number } {
     const v = world.clone().project(this.stage.camera);
     return { x: (v.x * 0.5 + 0.5) * window.innerWidth, y: (-v.y * 0.5 + 0.5) * window.innerHeight };
   }
 
   private floatAtPlayer(pid: number, text: string, kind: 'damage' | 'heal', big = false): void {
+    // from the badge, wherever the HUD has put it (else from the seat)
     const w = this.playerWorld(pid);
-    if (!w) return;
-    const s = this.toScreen(w);
+    const s = this.badgeAt?.(pid) ?? (w ? this.toScreen(w) : null);
+    if (!s) return;
     floatText(s.x, s.y - 40, text, kind, big);
   }
 
@@ -1240,16 +1276,48 @@ export class Table {
     }
   }
 
+  /** Your commanders sitting in their slot (not flying to or from it) wear the aura; any others lose it. */
+  private syncCommandAura(): void {
+    const me = this.state?.players.find((p) => p.id === this.localId);
+    const out: { id: number; root: THREE.Object3D; colors: string }[] = [];
+    for (const id of me?.zones.Command ?? []) {
+      const obj = this.cards.get(id);
+      if (obj && !this.flying.has(id) && obj.state.zone === 'Command') out.push({ id, root: obj.root, colors: obj.state.colors ?? '' });
+    }
+    this.commandAura.sync(out);
+  }
+
+  /** The arrows on the table; one aimed at a player names them, so its end can follow their badge. */
+  private arrowSpecs: { from: THREE.Vector3; to: THREE.Vector3; color: string; mark?: LinkMark; player?: number }[] = [];
+
+  /**
+   * Badges are fixed on screen while the arrows live on the table, so when the camera moves (the Auto view
+   * framing combat) or a badge slides, an arrow's end would drift off it onto the board until the next
+   * update. Re-aim those ends every frame, rebuilding only when one has actually moved.
+   */
+  private followBadges(): void {
+    let moved = false;
+    for (const a of this.arrowSpecs) {
+      if (a.player == null) continue;
+      const to = this.playerArrowEnd(a.player);
+      if (to && to.distanceToSquared(a.to) > 0.0025) {
+        a.to = to;
+        moved = true;
+      }
+    }
+    if (moved) this.arrows.set(this.arrowSpecs);
+  }
+
   private refreshArrows(): void {
     const s = this.state;
     if (!s) return;
-    const arrows: { from: THREE.Vector3; to: THREE.Vector3; color: string; mark?: LinkMark }[] = [];
+    const arrows: typeof this.arrowSpecs = [];
     for (const a of s.combat ?? []) {
       const from = this.layoutWorld(a.attacker);
       if (!from) continue;
       const pid = a.defender?.player;
-      const to = pid != null ? this.playerWorld(pid) : a.defender?.card != null ? this.layoutWorld(a.defender.card) : null;
-      if (to && a.blockers.length === 0) arrows.push({ from, to, color: '#ff5a2a', mark: 'fire' });
+      const to = pid != null ? this.playerArrowEnd(pid) : a.defender?.card != null ? this.layoutWorld(a.defender.card) : null;
+      if (to && a.blockers.length === 0) arrows.push({ from, to, color: '#ff5a2a', mark: 'fire', player: pid ?? undefined });
       for (const b of a.blockers) {
         const bw = this.layoutWorld(b);
         if (bw) arrows.push({ from: bw, to: from, color: '#7fc4ff' });
@@ -1259,12 +1327,13 @@ export class Table {
     if (top?.source != null) {
       const from = this.layoutWorld(top.source);
       for (const t of top.targets) {
-        const to = t?.card != null ? this.layoutWorld(t.card) : t?.player != null ? this.playerWorld(t.player) : null;
+        const to = t?.card != null ? this.layoutWorld(t.card) : t?.player != null ? this.playerArrowEnd(t.player) : null;
         // the design's target links: blue for a spell, violet for an ability or trigger
         const ability = !!top.ability || !!top.trigger;
-        if (from && to) arrows.push({ from, to, color: ability ? '#b07aff' : '#4ea8ff', mark: ability ? 'sigil-violet' : 'sigil-blue' });
+        if (from && to) arrows.push({ from, to, color: ability ? '#b07aff' : '#4ea8ff', mark: ability ? 'sigil-violet' : 'sigil-blue', player: t?.card == null ? t?.player ?? undefined : undefined });
       }
     }
+    this.arrowSpecs = arrows;
     this.arrows.set(arrows);
   }
 

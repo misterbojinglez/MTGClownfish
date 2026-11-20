@@ -4,19 +4,23 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import { Bridge } from './net';
 import type { CardState, GameState, RequestMsg, ServerMsg, UpdateMsg } from './protocol';
-import { exileStripAnchor, stackKey } from './scene/layout';
+import { exileStripAnchor, HAND, stackKey } from './scene/layout';
+import { CARD_H } from './scene/cardMesh';
 import { Stage } from './scene/stage';
 import { Table } from './game/table';
 import { Input, type AimTarget } from './game/input';
 import { CameraDirector } from './game/camera';
 import { Hud } from './ui/hud';
 import { sfx } from './audio';
+import { settings } from './settings';
 import { claudeKey, DeckSetup, type GameSetup } from './ui/decks';
 import { askName, joinScreen, LobbyView, onlineChooser } from './ui/lobby';
 
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement);
 const table = new Table(stage);
 const hud = new Hud();
+// arrows aimed at a player end on their badge, wherever the HUD has put it
+table.badgeAt = (id) => hud.badgeCenter(id);
 const director = new CameraDirector(stage);
 table.onOpponentCast = (card, who) => hud.revealCast(card, `${who} casts ${card.name}`, 2200);
 table.onPlayerHit = (pid, amount) => hud.hitPlate(pid, amount);
@@ -49,6 +53,35 @@ const CATCHUP_AT = 24;
 const KEEP_ANIMATED = 6;
 /** seconds the outcome of combat damage holds on screen */
 const COMBAT_RESULT_HOLD = 1.0;
+
+/** when each stack item first showed (performance.now()), for the Stack pace setting */
+const stackShownAt = new Map<number, number>();
+
+/**
+ * Stack pace: an update that resolves something off the stack waits until that item has been on screen for the
+ * chosen time. The engine has already moved on; only the table's showing of it waits (as it does for any
+ * animation), and time the player spent holding priority over the item counts toward it. It isn't shortened
+ * when the table hurries to catch up: the player asked for the time.
+ */
+async function holdStack(msg: UpdateMsg): Promise<void> {
+  const hold = Number(settings.stackHold);
+  if (!(hold > 0) || !table.state) return;
+  const still = new Set(msg.state.stack.map((x) => x.id));
+  const now = performance.now();
+  let wait = 0;
+  for (const item of table.state.stack) {
+    const at = stackShownAt.get(item.id);
+    if (!still.has(item.id) && at != null) wait = Math.max(wait, at + hold * 1000 - now);
+  }
+  if (wait > 10) await new Promise((r) => setTimeout(r, wait));
+}
+
+/** Notes the stack items an update shows (from when they appeared on screen), forgetting resolved ones. */
+function noteStack(msg: UpdateMsg, shown: number): void {
+  const ids = new Set(msg.state.stack.map((x) => x.id));
+  for (const id of ids) if (!stackShownAt.has(id)) stackShownAt.set(id, shown);
+  for (const id of stackShownAt.keys()) if (!ids.has(id)) stackShownAt.delete(id);
+}
 
 /** events the player should see happen: updates carrying them are never folded into a catch-up */
 const SHOWN_EVENTS = new Set(['PlayerDamaged', 'CardDamaged', 'PlayerLivesChanged', 'SpellAbilityCast', 'TurnBegan']);
@@ -109,6 +142,7 @@ async function drain(): Promise<void> {
     // at full length: it's what the player most needs to take in
     const combatHit = msg.type === 'update' && msg.events.some((e) => table.isCombatDamage(e));
     table.timeScale = combatHit ? 1 : Math.min(1.75, 1 + Math.max(0, backlog - 8) / 30);
+    if (msg.type === 'update') await holdStack(msg);
     const phaseBefore = table.state ? `${table.state.turn}|${table.state.phase}` : '';
     const started = performance.now();
     try {
@@ -116,6 +150,8 @@ async function drain(): Promise<void> {
     } catch (err) {
       console.error('failed handling', msg, err);
     }
+    // (The Stack panel shows an update's items once its animations are done: the time starts there)
+    if (msg.type === 'update') noteStack(msg, performance.now());
     // every step of the turn gets a beat on screen, even when nothing happens in it (end of combat, end
     // step, the next player's untap and upkeep), so the turn visibly passes instead of jumping
     // the result of combat damage stays up for a moment (life totals, deaths) before the game moves on
@@ -784,7 +820,7 @@ const input = new Input(stage, table, {
       hud.aimPlate(null);
       return;
     }
-    const to = target && 'player' in target ? table.playerWorld(target.player) : target && 'card' in target ? table.cardWorld(target.card) : point;
+    const to = target && 'player' in target ? table.playerArrowEnd(target.player) : target && 'card' in target ? table.cardWorld(target.card) : point;
     // dragging one of a box-selected group drags them all
     table.showAim(table.group.has(from) ? [...table.group] : from, to, kind, target && 'card' in target ? target.card : null);
     hud.aimPlate(target && 'player' in target ? target.player : null);
@@ -799,6 +835,7 @@ const input = new Input(stage, table, {
     const inHand = id != null && table.isLocalHand(id);
     if (inHand && id !== table.hoveredHand) sfx.hover();
     table.hoveredHand = inHand ? id : null;
+    hud.handFocus(inHand);
     // your commander by the hand grows in place, so it needs no zoom either
     const inCommand = id != null && table.isLocalCommand(id);
     table.hoveredCommand = inCommand ? id : null;
@@ -807,6 +844,17 @@ const input = new Input(stage, table, {
     hud.showZoom(inHand || inCommand ? null : card, 'left', card ? stackNotes(card) : []);
   },
 });
+
+/**
+ * How far up from the bottom of the window the top of your hand reaches, in pixels, plus a small gap: your
+ * badge sits there. The hand lives in camera space (HAND), so this follows the camera's field of view,
+ * which widens on narrow windows.
+ */
+function handTopFromBottom(): number {
+  const top = HAND.baseY + (CARD_H * HAND.scale) / 2;
+  const halfH = Math.tan(THREE.MathUtils.degToRad(stage.camera.fov / 2)) * HAND.distance;
+  return (0.5 + top / halfH / 2) * window.innerHeight + 6;
+}
 
 // player plates track their table anchors every frame
 stage.onTick(() => {
@@ -818,6 +866,7 @@ stage.onTick(() => {
     if (w) screen.set(p.id, table.toScreen(new THREE.Vector3(w.x, w.y, w.z)));
   }
   hud.updatePlayers(table.shownState() ?? s, table.localId, screen, table.targetablePlayers(), table.currentDefender());
+  hud.placeYou(table.localId, handTopFromBottom());
   // the "Playable from exile" label rides on the band's left end
   const strip = inGame ? exileStripAnchor(table.shownState() ?? s, table.localId) : null;
   if (strip) {

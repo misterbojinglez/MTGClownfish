@@ -88,8 +88,11 @@ const HOVER_LIFT = -HAND.screenHalfH + (CARD_H * HAND.hoverScale) / 2 + 0.3 - HA
 
 const OPP_HAND = { distance: 30, baseY: 9.9, radius: 40, fitAngle: 22, maxDelta: 3.0, scale: 0.6 };
 const STACK_ANCHOR = new THREE.Vector3(10.2, 2.4, -24);
-/** Your commander gets its own screen slot left of the hand, like Arena's Brawl command zone. */
-const COMMAND_ANCHOR = new THREE.Vector3(-12.6, -3.5, -26);
+/**
+ * Your commander gets its own screen slot left of the hand, like Arena's Brawl command zone: low in the
+ * bottom-left corner (your badge used to sit under it), leaving room above for its rising aura.
+ */
+const COMMAND_ANCHOR = new THREE.Vector3(-12.6, -5.55, -26);
 
 export interface Seat {
   player: PlayerState;

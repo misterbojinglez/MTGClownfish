@@ -319,6 +319,12 @@ export class Hud {
       ['high', 'High'],
       ['standard', 'Standard'],
     ]);
+    row('stackHold', 'Stack pace', 'The least time each spell or ability stays on The Stack before it resolves, so you can follow what happens when nobody stops to respond.', [
+      ['0', 'Quick'],
+      ['1', '1 s'],
+      ['2', '2 s'],
+      ['3', '3 s'],
+    ]);
     panel.append(rows);
     const unsubscribe = onSettings((st) => syncs.forEach((f) => f(st)));
     const buttons = h('div', 'modal-buttons');
@@ -730,6 +736,8 @@ export class Hud {
       plate.classList.toggle('lost', p.lost);
       plate.classList.toggle('targetable', targetable.has(p.id) && defender !== p.id);
       plate.classList.toggle('defending', defender === p.id);
+      // your badge comes forward while attackers are coming at you
+      if (p.id === localId) plate.classList.toggle('attacked', (state.combat ?? []).some((a) => a.defender?.player === p.id));
       const lifeEl = plate.querySelector<HTMLDivElement>('.life')!;
       if (lifeEl.textContent !== String(p.life)) {
         const prev = Number(lifeEl.textContent);
@@ -738,6 +746,7 @@ export class Hud {
           lifeEl.classList.remove('hurt', 'heal');
           void lifeEl.offsetWidth;
           lifeEl.classList.add(p.life < prev ? 'hurt' : 'heal');
+          if (p.id === localId) this.liven(plate);
         }
         lifeEl.dataset.init = '1';
       }
@@ -746,13 +755,18 @@ export class Hud {
       const key = `${p.zones.Hand.length}|${p.zones.LibraryCount}|${p.zones.Graveyard.length}|${avail}`;
       if (counts.dataset.v !== key) {
         counts.dataset.v = key;
-        counts.replaceChildren(
-          stat('hand', p.zones.Hand.length, `${p.zones.Hand.length} in hand`),
-          stat('grave', p.zones.Graveyard.length, `${p.zones.Graveyard.length} in graveyard`),
-          stat('library', p.zones.LibraryCount, `${p.zones.LibraryCount} in library`),
-          // what they could spend right now: untapped mana sources plus anything floating
-          ...(avail != null ? [stat('mana', avail, `${avail} mana available`)] : []),
-        );
+        const hand = stat('hand', p.zones.Hand.length, `${p.zones.Hand.length} in hand`);
+        const grave = stat('grave', p.zones.Graveyard.length, `${p.zones.Graveyard.length} in graveyard`);
+        const library = stat('library', p.zones.LibraryCount, `${p.zones.LibraryCount} in library`);
+        // what they could spend right now: untapped mana sources plus anything floating
+        const mana = avail != null ? [stat('mana', avail, `${avail} mana available`)] : [];
+        const right = plate.querySelector<HTMLDivElement>('.counts-r');
+        if (right) {
+          counts.replaceChildren(library, hand);
+          right.replaceChildren(grave, ...mana);
+        } else {
+          counts.replaceChildren(hand, grave, library, ...mana);
+        }
       }
       const extras: string[] = [];
       if (p.poison > 0) extras.push(`☠ ${p.poison}`);
@@ -773,7 +787,7 @@ export class Hud {
     this.noteCommanders(state);
     for (const p of state.players) {
       const plate = this.plates.get(p.id);
-      if (plate) this.commanderArt(plate, p.id, p.id === localId);
+      if (plate) this.commanderArt(plate, p.id);
     }
   }
 
@@ -788,15 +802,15 @@ export class Hud {
   }
 
   /**
-   * A player's commander art behind their badge: inside an opponent's medallion (partners split it in two),
-   * across the body of your own panel. Hovering it shows the card's zoom.
+   * A player's commander art behind their badge, inside their medallion (partners split it in two).
+   * Hovering it shows the card's zoom.
    */
-  private commanderArt(plate: HTMLDivElement, pid: number, local: boolean): void {
+  private commanderArt(plate: HTMLDivElement, pid: number): void {
     const cards = [...(this.commanders.get(pid)?.values() ?? [])].sort((a, b) => a.id - b.id).slice(0, 2);
     const key = cards.map((c) => c.id).join(',');
     if ((plate.dataset.cmd ?? '') === key) return;
     plate.dataset.cmd = key;
-    const host = plate.querySelector<HTMLElement>(local ? '.you-body' : '.medal');
+    const host = plate.querySelector<HTMLElement>('.medal');
     if (!host) return;
     host.querySelector('.cmd-art')?.remove();
     plate.classList.toggle('has-cmd', cards.length > 0);
@@ -883,10 +897,18 @@ export class Hud {
     return out;
   }
 
+  /** Your badge, translucent at rest, comes fully forward for a few seconds (a blow, a change of life). */
+  private liven(plate: HTMLDivElement): void {
+    plate.classList.add('lively');
+    window.clearTimeout(Number(plate.dataset.lively ?? 0));
+    plate.dataset.lively = String(window.setTimeout(() => plate.classList.remove('lively'), 2800));
+  }
+
   /** A player's plate recoils from a blow: the harder the hit, the bigger the jolt. */
   hitPlate(pid: number, amount: number): void {
     const plate = this.plates.get(pid);
     if (!plate) return;
+    if (plate.classList.contains('you-panel')) this.liven(plate);
     plate.style.setProperty('--jolt', `${Math.min(18, 5 + amount * 1.6)}px`);
     plate.classList.remove('struck');
     void plate.offsetWidth;
@@ -900,14 +922,20 @@ export class Hud {
    * life on a red shield. Both keep .life / .counts / .extras / .mana, which updatePlayers fills in.
    */
   private buildPlate(p: PlayerState, local: boolean, seat: number): HTMLDivElement {
-    const plate = h('div', local ? 'plate you-panel' : `plate badge seat-${seat}`);
+    const plate = h('div', local ? 'plate you-panel seat-0' : `plate badge seat-${seat}`);
     plate.dataset.pid = String(p.id);
     const info = h('div', 'plate-info');
     info.append(h('div', 'counts'), h('div', 'extras'), h('div', 'mana'));
     if (local) {
+      // centred above your hand: library and hand to the left of your life, graveyard and mana to its
+      // right, your name on a tab beneath; commander damage, poison and floating mana ride above
+      info.querySelector('.counts')!.remove();
+      // your life on a medallion like everyone else's (your commander's art inside it), in your seat's red
       const body = h('div', 'you-body');
-      body.append(h('div', 'life'), info);
-      plate.append(h('div', 'pname you-title', `${p.name === 'You' ? 'You' : p.name} (Player)`), body);
+      const medal = h('div', 'medal');
+      medal.append(h('div', 'life'));
+      body.append(h('div', 'counts'), medal, h('div', 'counts counts-r'));
+      plate.append(info, body, h('div', 'pname you-title', `${p.name === 'You' ? 'You' : p.name} (Player)`));
     } else {
       const medal = h('div', 'medal');
       medal.append(h('div', 'pname', p.name), h('div', 'life'));
@@ -917,9 +945,36 @@ export class Hud {
     return plate;
   }
 
+  /**
+   * Seat your badge just above your hand: the hand's top edge on screen, in pixels from the bottom
+   * (main works it out from the hand's layout and the camera, which widens its view on narrow windows).
+   */
+  placeYou(localId: number, bottomPx: number): void {
+    const plate = this.plates.get(localId);
+    if (!plate) return;
+    const v = `${Math.round(bottomPx)}px`;
+    if (plate.style.bottom !== v) plate.style.bottom = v;
+  }
+
+  /** Your badge steps aside (fades, lets the pointer through) while you're looking at a card in your hand. */
+  handFocus(on: boolean): void {
+    this.root.classList.toggle('hand-focus', on);
+  }
+
   /** Light up the plate an attacker is being dragged onto (null clears it). */
   aimPlate(playerId: number | null): void {
     for (const [pid, plate] of this.plates) plate.classList.toggle('aim', pid === playerId);
+  }
+
+  /**
+   * Where a player's badge is on screen, for arrows aimed at them: the middle of an opponent's medallion,
+   * of the life shield on your own panel. Null before the plate is placed.
+   */
+  badgeCenter(playerId: number): { x: number; y: number } | null {
+    const plate = this.plates.get(playerId);
+    if (!plate || !plate.style.left && !plate.classList.contains('you-panel')) return null;
+    const r = (plate.querySelector<HTMLElement>('.medal') ?? plate.querySelector<HTMLElement>('.life') ?? plate).getBoundingClientRect();
+    return r.width > 0 ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
   }
 
   plateRect(playerId: number): DOMRect | null {

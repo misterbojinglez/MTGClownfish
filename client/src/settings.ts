@@ -9,15 +9,18 @@ export type ParticleLevel = 'full' | 'reduced' | 'off';
 export type FloorDetail = 'high' | 'low';
 /** high: up to 2 pixels per point on high-density (Retina) screens; standard: 1 */
 export type Resolution = 'high' | 'standard';
+/** the least time (seconds) a spell or ability stays on the Stack before the table shows it resolving */
+export type StackHold = '0' | '1' | '2' | '3';
 
 export interface Settings {
   frameRate: FrameRate;
   particles: ParticleLevel;
   floorDetail: FloorDetail;
   resolution: Resolution;
+  stackHold: StackHold;
 }
 
-export const DEFAULT_SETTINGS: Settings = { frameRate: 'auto', particles: 'full', floorDetail: 'high', resolution: 'high' };
+export const DEFAULT_SETTINGS: Settings = { frameRate: 'auto', particles: 'full', floorDetail: 'high', resolution: 'high', stackHold: '0' };
 
 const STORE_KEY = 'mtgclownfish.settings';
 const CHOICES: { [K in keyof Settings]: readonly Settings[K][] } = {
@@ -25,6 +28,7 @@ const CHOICES: { [K in keyof Settings]: readonly Settings[K][] } = {
   particles: ['full', 'reduced', 'off'],
   floorDetail: ['high', 'low'],
   resolution: ['high', 'standard'],
+  stackHold: ['0', '1', '2', '3'],
 };
 
 function load(): Settings {

@@ -11,7 +11,7 @@
     <properties>
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <forge.version>2.0.16-SNAPSHOT</forge.version>
+        <forge.version>2.0.17-SNAPSHOT</forge.version>
     </properties>
 
     <dependencies>
