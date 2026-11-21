@@ -251,6 +251,7 @@ export class Table {
     if (prev) this.resolutions(prev, state, msg.events, snapshots);
     this.refreshHighlights();
     this.refreshArrows();
+    this.refreshSpeedMarks(state);
     await Promise.all(tasks);
   }
 
@@ -1166,6 +1167,24 @@ export class Table {
     const anchor = this.playerWorld(id);
     const at = this.badgeAt?.(id);
     if (!anchor || !at) return anchor;
+    return this.screenToTable(at, anchor);
+  }
+
+  /** Where a Stack item is on screen (set by the HUD's owner): its card in the Stack panel, or the panel's tab. */
+  stackAt: ((itemId: number) => { x: number; y: number } | null) | null = null;
+
+  /** Where a tether from (or to) a Stack item starts: on the table under its card in the panel. */
+  private stackArrowEnd(itemId: number): THREE.Vector3 | null {
+    const at = this.stackAt?.(itemId);
+    return at ? this.screenToTable(at, new THREE.Vector3(0, 0, 0)) : null;
+  }
+
+  /**
+   * The point on the table (at the reference point's height) under a point on screen, raised arrows-wise:
+   * arrows lift their ends 0.3, so the point is where the ray meets the plane 0.3 up, lowered by that,
+   * putting the drawn end exactly under the screen point.
+   */
+  private screenToTable(at: { x: number; y: number }, anchor: THREE.Vector3): THREE.Vector3 {
     const cam = this.stage.camera;
     const ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2((at.x / window.innerWidth) * 2 - 1, -(at.y / window.innerHeight) * 2 + 1), cam);
@@ -1276,19 +1295,42 @@ export class Table {
     }
   }
 
-  /** Your commanders sitting in their slot (not flying to or from it) wear the aura; any others lose it. */
+  /** Each player's Speed card rings their current speed on its printed track. */
+  private refreshSpeedMarks(state: GameState): void {
+    for (const p of state.players) {
+      for (const id of p.zones.Command) {
+        const c = state.cards[id];
+        // Forge's speed effect: its image key names the speed card ("t:speed|DFT|14", "t:max_speed|…")
+        if (c?.effect && /^t:(max_)?speed\|/.test(c.imageKey ?? '')) this.cards.get(id)?.setSpeedMark(p.speed ?? null);
+      }
+    }
+  }
+
+  /**
+   * Your commanders sitting in their slot (not flying to or from it) wear the aura; any others lose it. Only
+   * commanders: other things in your command zone (speed's "Start Your Engines!", emblems) sit beside them plain.
+   */
   private syncCommandAura(): void {
     const me = this.state?.players.find((p) => p.id === this.localId);
     const out: { id: number; root: THREE.Object3D; colors: string }[] = [];
     for (const id of me?.zones.Command ?? []) {
       const obj = this.cards.get(id);
-      if (obj && !this.flying.has(id) && obj.state.zone === 'Command') out.push({ id, root: obj.root, colors: obj.state.colors ?? '' });
+      if (obj && obj.state.commander && !this.flying.has(id) && obj.state.zone === 'Command') out.push({ id, root: obj.root, colors: obj.state.colors ?? '' });
     }
     this.commandAura.sync(out);
   }
 
   /** The arrows on the table; one aimed at a player names them, so its end can follow their badge. */
-  private arrowSpecs: { from: THREE.Vector3; to: THREE.Vector3; color: string; mark?: LinkMark; player?: number }[] = [];
+  private arrowSpecs: { from: THREE.Vector3; to: THREE.Vector3; color: string; mark?: LinkMark; player?: number; fromItem?: number; toItem?: number }[] = [];
+  /** the Stack item whose targets are shown: the one hovered in the panel, else the next to resolve */
+  private stackFocus: number | null = null;
+
+  /** Show the targets of this Stack item (hovered in the panel), or of the next to resolve again (null). */
+  focusStack(itemId: number | null): void {
+    if (this.stackFocus === itemId) return;
+    this.stackFocus = itemId;
+    this.refreshArrows();
+  }
 
   /**
    * Badges are fixed on screen while the arrows live on the table, so when the camera moves (the Auto view
@@ -1298,10 +1340,15 @@ export class Table {
   private followBadges(): void {
     let moved = false;
     for (const a of this.arrowSpecs) {
-      if (a.player == null) continue;
-      const to = this.playerArrowEnd(a.player);
+      // ends pinned to the screen: a player's badge, a Stack item's card in the panel
+      const to = a.player != null ? this.playerArrowEnd(a.player) : a.toItem != null ? this.stackArrowEnd(a.toItem) : null;
       if (to && to.distanceToSquared(a.to) > 0.0025) {
         a.to = to;
+        moved = true;
+      }
+      const from = a.fromItem != null ? this.stackArrowEnd(a.fromItem) : null;
+      if (from && from.distanceToSquared(a.from) > 0.0025) {
+        a.from = from;
         moved = true;
       }
     }
@@ -1323,14 +1370,31 @@ export class Table {
         if (bw) arrows.push({ from: bw, to: from, color: '#7fc4ff' });
       }
     }
-    const top = s.stack[0];
-    if (top?.source != null) {
-      const from = this.layoutWorld(top.source);
-      for (const t of top.targets) {
-        const to = t?.card != null ? this.layoutWorld(t.card) : t?.player != null ? this.playerArrowEnd(t.player) : null;
-        // the design's target links: blue for a spell, violet for an ability or trigger
-        const ability = !!top.ability || !!top.trigger;
-        if (from && to) arrows.push({ from, to, color: ability ? '#b07aff' : '#4ea8ff', mark: ability ? 'sigil-violet' : 'sigil-blue', player: t?.card == null ? t?.player ?? undefined : undefined });
+    // what a spell or ability on the Stack targets: the one hovered in the panel, else the next to resolve.
+    // The tether starts at its card in the Stack panel (what you're looking at; a spell's own card has
+    // tucked away into it), or at its source when the panel isn't showing
+    const item = s.stack.find((x) => x.id === this.stackFocus) ?? s.stack[0];
+    if (item) {
+      const fromPanel = this.stackArrowEnd(item.id);
+      const from = fromPanel ?? (item.source != null ? this.layoutWorld(item.source) : null);
+      // the design's target links: blue for a spell, violet for an ability or trigger
+      const ability = !!item.ability || !!item.trigger;
+      for (const t of item.targets) {
+        // a spell on the Stack (a counterspell's target) is pointed at in the panel
+        const onStack = t?.card != null ? s.stack.find((x) => x.source === t.card && x.id !== item.id && !x.ability && !x.trigger) : undefined;
+        const toItem = onStack ? onStack.id : undefined;
+        const to = toItem != null ? this.stackArrowEnd(toItem) : t?.card != null ? this.layoutWorld(t.card) : t?.player != null ? this.playerArrowEnd(t.player) : null;
+        if (from && to) {
+          arrows.push({
+            from, to,
+            color: ability ? '#b07aff' : '#4ea8ff',
+            mark: ability ? 'sigil-violet' : 'sigil-blue',
+            player: t?.card == null ? t?.player ?? undefined : undefined,
+            // pinned to the item even before the panel shows it: the tether moves onto its card once it does
+            fromItem: item.id,
+            toItem,
+          });
+        }
       }
     }
     this.arrowSpecs = arrows;

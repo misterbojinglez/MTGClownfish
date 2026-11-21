@@ -662,6 +662,37 @@ public class SocketGuiGame extends AbstractGuiGame {
         return o;
     }
 
+    /**
+     * Two piles to choose between (Make an Example, Fact or Fiction): each pile's cards, or just how many
+     * when it's face down. Forge's own version is one flat list with two dummy "-- Pile N --" cards in it,
+     * which let the player pick single cards that did nothing. Returns true for pile 1.
+     */
+    boolean choosePile(final String message, final java.util.List<CardView> pile1, final java.util.List<CardView> pile2,
+                       final boolean show1, final boolean show2) {
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", message);
+        final JsonArray piles = new JsonArray();
+        final java.util.List<java.util.List<CardView>> both = java.util.List.of(pile1, pile2);
+        final boolean[] shown = { show1, show2 };
+        for (int i = 0; i < 2; i++) {
+            final JsonObject pile = new JsonObject();
+            pile.addProperty("label", "Pile " + (i + 1));
+            pile.addProperty("count", both.get(i).size());
+            pile.addProperty("hidden", !shown[i]);
+            final JsonArray opts = new JsonArray();
+            if (shown[i]) {
+                for (final CardView c : both.get(i)) {
+                    opts.add(option(c, null, true));
+                }
+            }
+            pile.add("options", opts);
+            piles.add(pile);
+        }
+        req.add("piles", piles);
+        final JsonElement answer = ask("piles", req);
+        return !(answer != null && answer.isJsonPrimitive() && answer.getAsInt() == 1);
+    }
+
     /** the running game, for looking up what a view stands for */
     static volatile forge.game.Game liveGame;
 
@@ -808,21 +839,99 @@ public class SocketGuiGame extends AbstractGuiGame {
         return chosen.isEmpty() ? null : chosen.get(0);
     }
 
+    /**
+     * Combat damage from a creature blocked by several (or a trampler): the player divides it, starting from
+     * the automatic split, with how much kills each blocker shown. Damage reaches the defender only once every
+     * blocker has lethal (unless the creature may assign as though unblocked). When there's nothing to decide,
+     * or no valid answer comes back, the automatic split stands.
+     */
     @Override
     public Map<CardView, Integer> assignCombatDamage(final CardView attacker, final List<CardView> blockers, final int damage, final GameEntityView defender, final boolean overrideOrder, final boolean maySkip) {
-        // Lethal to each blocker in order, the rest tramples over (or piles on the last blocker).
+        final boolean deathtouch = attacker.getCurrentState().hasDeathtouch();
+        final boolean trample = attacker.getCurrentState().hasTrample();
+        // (overrideOrder only says damage may be divided freely among the blockers, the current rule: it
+        // doesn't open a way to the defender, which takes trample or "divided as you choose" text)
+        final boolean free = dividesAsChoose(attacker);
+        final boolean toDefender = defender != null && (trample || free || blockers.isEmpty());
+        final Map<CardView, Integer> auto = autoAssign(attacker, blockers, damage, defender, toDefender, deathtouch);
+        // nothing to decide: all of it to the one blocker, or all of it past an empty block
+        if (blockers.isEmpty() || damage <= 0 || (blockers.size() == 1 && !toDefender)
+                || (blockers.size() == 1 && !free && damage <= lethal(blockers.get(0), deathtouch))) {
+            return auto;
+        }
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", "Assign " + attacker.getName() + "'s " + damage + " combat damage");
+        req.addProperty("amount", damage);
+        req.addProperty("atLeastOne", false);
+        req.addProperty("card", attacker.getId());
+        req.addProperty("combat", true);
+        req.addProperty("freeDefender", free);
+        final JsonArray opts = new JsonArray();
+        for (final CardView b : blockers) {
+            final JsonObject o = option(b, null);
+            o.addProperty("lethal", lethal(b, deathtouch));
+            o.addProperty("initial", auto.getOrDefault(b, 0));
+            opts.add(o);
+        }
+        if (toDefender) {
+            final JsonObject o = option(defender, null);
+            o.addProperty("defender", true);
+            o.addProperty("initial", auto.getOrDefault(null, 0));
+            opts.add(o);
+        }
+        req.add("options", opts);
+        final JsonElement answer = ask("distribute", req);
+        if (answer == null || !answer.isJsonArray() || answer.getAsJsonArray().size() != opts.size()) {
+            return auto;
+        }
+        final Map<CardView, Integer> out = new LinkedHashMap<>();
+        int sum = 0;
+        boolean allLethal = true;
+        for (int i = 0; i < blockers.size(); i++) {
+            final int v = Math.max(0, answer.getAsJsonArray().get(i).getAsInt());
+            if (v < lethal(blockers.get(i), deathtouch)) allLethal = false;
+            if (v > 0) out.put(blockers.get(i), v);
+            sum += v;
+        }
+        final int past = toDefender ? Math.max(0, answer.getAsJsonArray().get(blockers.size()).getAsInt()) : 0;
+        sum += past;
+        if (sum != damage || (past > 0 && !allLethal && !free)) {
+            return auto; // not a legal split; the client shouldn't send one
+        }
+        if (past > 0) out.put(null, past);
+        return out;
+    }
+
+    /** Thorn Elemental and friends: combat damage divided as you choose among the defending player and their creatures. */
+    private static boolean dividesAsChoose(final CardView attacker) {
+        try {
+            final Card c = liveGame == null ? null : liveGame.findById(attacker.getId());
+            return c != null && c.hasKeyword("You may assign CARDNAME's combat damage divided as you choose among "
+                    + "defending player and/or any number of creatures they control.");
+        } catch (final RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** Damage that kills this blocker: any at all with deathtouch. */
+    private static int lethal(final CardView blocker, final boolean deathtouch) {
+        final int l = Math.max(1, blocker.getLethalDamage());
+        return deathtouch ? 1 : l;
+    }
+
+    /** Lethal to each blocker in order, the rest tramples over (or piles on the last blocker). */
+    private static Map<CardView, Integer> autoAssign(final CardView attacker, final List<CardView> blockers, final int damage,
+                                                     final GameEntityView defender, final boolean toDefender, final boolean deathtouch) {
         final Map<CardView, Integer> out = new LinkedHashMap<>();
         int remaining = damage;
         for (int i = 0; i < blockers.size() && remaining > 0; i++) {
             final CardView b = blockers.get(i);
-            final int lethal = Math.max(1, b.getLethalDamage());
-            final int dealt = Math.min(lethal, remaining);
+            final int dealt = Math.min(lethal(b, deathtouch), remaining);
             out.put(b, dealt);
             remaining -= dealt;
         }
         if (remaining > 0) {
-            final boolean trample = attacker.getCurrentState().hasTrample();
-            if (defender != null && (trample || blockers.isEmpty())) {
+            if (toDefender) {
                 out.put(null, remaining);
             } else if (!blockers.isEmpty()) {
                 out.merge(blockers.get(blockers.size() - 1), remaining, Integer::sum);

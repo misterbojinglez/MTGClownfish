@@ -47,8 +47,62 @@ const GLOW_GEO = new THREE.PlaneGeometry(CARD_W * 1.3, CARD_H * 1.21);
  * typeface has loaded.
  */
 const TOKEN_TAG_W = CARD_W * 0.66;
+/** the P/T (or loyalty) box at the bottom right of the badge canvas (256×96): a third larger than its first 92×66 */
+const PT_BOX = { x: 129, y: 4, w: 123, h: 88, cx: 190.5, baseline: 68, font: 53 };
 const TOKEN_TAG_H = TOKEN_TAG_W * (52 / 160);
 const TOKEN_TAG_GEO = new THREE.PlaneGeometry(TOKEN_TAG_W, TOKEN_TAG_H);
+/**
+ * The Speed card (Aetherdrift's "Start Your Engines!", TDFT 14) prints a track of 1, 2, 3 down its middle:
+ * each circle's centre in card units (from the card's centre, y up) and its radius, measured off the printing.
+ */
+const SPEED_TRACK = { x: 0, y: [1.297, 0.762, 0.242], r: 0.225 };
+
+let speedMarkTex: THREE.CanvasTexture | null = null;
+/** A white-hot ring with a red-orange glow, clear in the middle so the number shows through. */
+function speedMarkTexture(): THREE.CanvasTexture {
+  if (speedMarkTex) return speedMarkTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d')!;
+  const mid = 128;
+  // the glow, brightest at the ring (radius 92) and fading both ways
+  const glow = g.createRadialGradient(mid, mid, 60, mid, mid, 127);
+  glow.addColorStop(0, 'rgba(255, 90, 30, 0)');
+  glow.addColorStop(0.48, 'rgba(255, 110, 30, 0.95)');
+  glow.addColorStop(0.62, 'rgba(255, 80, 20, 0.6)');
+  glow.addColorStop(1, 'rgba(255, 60, 10, 0)');
+  g.fillStyle = glow;
+  g.fillRect(0, 0, 256, 256);
+  for (const [w, col] of [[22, '#ffb347'], [9, '#ffffff']] as const) {
+    g.lineWidth = w;
+    g.strokeStyle = col;
+    g.beginPath();
+    g.arc(mid, mid, 92, 0, Math.PI * 2);
+    g.stroke();
+  }
+  speedMarkTex = new THREE.CanvasTexture(c);
+  speedMarkTex.colorSpace = THREE.SRGBColorSpace;
+  return speedMarkTex;
+}
+
+let speedDimTex: THREE.CanvasTexture | null = null;
+/** A soft dark disc that veils a number on the track that isn't the current speed. */
+function speedDimTexture(): THREE.CanvasTexture {
+  if (speedDimTex) return speedDimTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  const veil = g.createRadialGradient(64, 64, 40, 64, 64, 63);
+  veil.addColorStop(0, 'rgba(6, 6, 12, 0.62)');
+  veil.addColorStop(0.75, 'rgba(6, 6, 12, 0.5)');
+  veil.addColorStop(1, 'rgba(6, 6, 12, 0)');
+  g.fillStyle = veil;
+  g.fillRect(0, 0, 128, 128);
+  speedDimTex = new THREE.CanvasTexture(c);
+  speedDimTex.colorSpace = THREE.SRGBColorSpace;
+  return speedDimTex;
+}
+
 let tokenTagTex: THREE.CanvasTexture | null = null;
 function tokenTagTexture(): THREE.CanvasTexture {
   if (tokenTagTex) return tokenTagTex;
@@ -167,6 +221,10 @@ export class CardObject {
   private readonly glowMat: THREE.MeshBasicMaterial;
   private readonly badge: THREE.Mesh;
   private readonly tokenTag: THREE.Mesh;
+  /** on the Speed card: the ring around the current number on its track */
+  private readonly speedMark: THREE.Mesh;
+  /** and veils over the other numbers, so the current one stands out */
+  private readonly speedDims: THREE.Mesh[];
   private readonly badgeCanvas = document.createElement('canvas');
   private readonly badgeTex: THREE.CanvasTexture;
   private readonly dissolve = { uDissolve: { value: 0 }, uEdge: { value: new THREE.Color('#ff7a2a') } };
@@ -223,7 +281,22 @@ export class CardObject {
     this.tokenTag.position.set(0, CARD_H / 2 + TOKEN_TAG_H * 0.18, 0.025);
     this.tokenTag.visible = false;
 
-    this.lift.add(this.glow, this.edge, this.front, this.back, this.badge, this.tokenTag);
+    // the ring sits clear outside the printed circle's own gilt rim (92/128 of its half width is the ring)
+    const ring = (SPEED_TRACK.r * 1.28 * 128) / 92;
+    this.speedMark = new THREE.Mesh(
+      new THREE.PlaneGeometry(ring * 2, ring * 2),
+      new THREE.MeshBasicMaterial({ map: speedMarkTexture(), transparent: true, depthWrite: false, toneMapped: false }),
+    );
+    this.speedMark.visible = false;
+    const dimGeo = new THREE.PlaneGeometry(SPEED_TRACK.r * 2.3, SPEED_TRACK.r * 2.3);
+    this.speedDims = SPEED_TRACK.y.map((y) => {
+      const m = new THREE.Mesh(dimGeo, new THREE.MeshBasicMaterial({ map: speedDimTexture(), transparent: true, depthWrite: false, toneMapped: false }));
+      m.position.set(SPEED_TRACK.x, y, 0.05);
+      m.visible = false;
+      return m;
+    });
+
+    this.lift.add(this.glow, this.edge, this.front, this.back, this.badge, this.tokenTag, this.speedMark, ...this.speedDims);
     this.body.add(this.lift);
     this.root.add(this.body);
     this.root.rotation.order = 'YXZ';
@@ -275,7 +348,7 @@ export class CardObject {
     const g = this.badgeCanvas.getContext('2d')!;
     g.clearRect(0, 0, 256, 96);
     // keyword icons sit just left of the P/T box, newest-relevant first
-    let left = 156;
+    let left = 125;
     for (const icon of icons.slice(0, 4)) {
       left -= 38;
       g.beginPath();
@@ -310,20 +383,20 @@ export class CardObject {
       const up = dp > 0 || dt > 0;
       const down = dp < 0 || dt < 0 || damaged;
       g.fillStyle = up && !down ? 'rgba(228,248,232,0.97)' : down && !up ? 'rgba(252,232,228,0.97)' : 'rgba(245,238,220,0.96)';
-      roundRect(g, 160, 18, 92, 66, 16);
+      roundRect(g, PT_BOX.x, PT_BOX.y, PT_BOX.w, PT_BOX.h, 20);
       g.fill();
       g.strokeStyle = up && !down ? '#1f9a48' : down && !up ? '#c0281c' : '#2a2117';
       g.lineWidth = up !== down ? 6 : 4;
       g.stroke();
       // power and toughness coloured separately: a +2/-1 shows green over red
       const [pw, tg] = pt.split('/');
-      g.font = `800 40px ${CANVAS_FONT}`;
+      g.font = `800 ${PT_BOX.font}px ${CANVAS_FONT}`;
       const sw = g.measureText('/').width;
       const pwW = g.measureText(pw).width;
       const total = pwW + sw + g.measureText(tg).width;
-      const scale = Math.min(1, 80 / total);
+      const scale = Math.min(1, (PT_BOX.w - 16) / total);
       g.save();
-      g.translate(206 - (total * scale) / 2, 66);
+      g.translate(PT_BOX.cx - (total * scale) / 2, PT_BOX.baseline);
       g.scale(scale, 1);
       g.fillStyle = shade(dp);
       g.fillText(pw, 0, 0);
@@ -334,15 +407,15 @@ export class CardObject {
       g.restore();
     } else if (loyalty) {
       g.fillStyle = 'rgba(30,24,16,0.92)';
-      roundRect(g, 160, 18, 92, 66, 16);
+      roundRect(g, PT_BOX.x, PT_BOX.y, PT_BOX.w, PT_BOX.h, 20);
       g.fill();
       g.strokeStyle = '#d6b25e';
       g.lineWidth = 4;
       g.stroke();
       g.fillStyle = '#f2e3b8';
-      g.font = `800 40px ${CANVAS_FONT}`;
+      g.font = `800 ${PT_BOX.font}px ${CANVAS_FONT}`;
       g.textAlign = 'center';
-      g.fillText(loyalty, 206, 66, 84);
+      g.fillText(loyalty, PT_BOX.cx, PT_BOX.baseline, PT_BOX.w - 12);
       g.textAlign = 'left';
     }
     this.badgeTex.needsUpdate = true;
@@ -356,7 +429,7 @@ export class CardObject {
     this.onTable = onTable;
     for (const m of [this.front, this.back, this.edge]) m.castShadow = onTable;
     // screen-space cards draw in the overlay pass, after bloom/tone mapping, so their art keeps its true colour
-    for (const m of [this.front, this.back, this.edge, this.badge, this.tokenTag]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
+    for (const m of [this.front, this.back, this.edge, this.badge, this.tokenTag, this.speedMark, ...this.speedDims]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
     for (const mat of [this.frontMat, this.backMat]) {
       mat.color.setScalar(onTable ? 0.62 : 0);
       mat.emissiveIntensity = onTable ? 0.42 : 1;
@@ -389,8 +462,26 @@ export class CardObject {
     this.hurtT = 1;
   }
 
+  /**
+   * On the Speed card: ring the current speed on its track (1 to 3; at 4 the card has turned to Max Speed,
+   * which needs no mark). Null or anything else hides it.
+   */
+  setSpeedMark(speed: number | null): void {
+    const show = speed != null && speed >= 1 && speed <= 3 && this.state.state !== 'Backside';
+    this.speedMark.visible = show;
+    // well off the face: a hair's gap loses the depth test to the face itself at this distance
+    if (show) this.speedMark.position.set(SPEED_TRACK.x, SPEED_TRACK.y[speed - 1], 0.06);
+    this.speedDims.forEach((m, i) => (m.visible = show && i !== speed! - 1));
+  }
+
   tick(dt: number): void {
     this.time += dt;
+    // the speed ring breathes, so it reads as live rather than printed
+    if (this.speedMark.visible) {
+      const k = 0.5 + 0.5 * Math.sin(this.time * 2.6);
+      (this.speedMark.material as THREE.MeshBasicMaterial).opacity = 0.7 + 0.3 * k;
+      this.speedMark.scale.setScalar(0.97 + 0.06 * k);
+    }
     const shadeTarget = this.dim ? 0.28 : 1;
     if (this.hurtT > 0 || this.shade !== shadeTarget) {
       this.hurtT = Math.max(0, this.hurtT - dt * 1.6);

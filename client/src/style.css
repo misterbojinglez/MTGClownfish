@@ -1839,3 +1839,285 @@ button {
     gap: 10px;
   }
 }
+
+/* ---- radial action menu (hold Command / Ctrl) ---------------------------------------------------------- */
+.radial {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.radial.open {
+  pointer-events: auto;
+  visibility: visible;
+  cursor: default;
+}
+
+.radial-ring {
+  --d: 252px;
+  position: absolute;
+  width: var(--d);
+  height: var(--d);
+  margin: calc(var(--d) / -2) 0 0 calc(var(--d) / -2);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle closest-side, transparent 0 30%, rgba(214, 178, 94, 0.22) 30.5%, transparent 31.5%),
+    radial-gradient(circle closest-side, rgba(13, 11, 18, 0.74) 0 82%, rgba(13, 11, 18, 0.4) 92%, transparent 100%);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.12s ease-out, transform 0.18s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+.radial.open .radial-ring {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* the wedge toward the action being pointed at */
+.radial-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from calc(var(--a, 0deg) - 30deg), rgba(240, 207, 124, 0.34), rgba(240, 207, 124, 0.08) 30deg, rgba(240, 207, 124, 0.34) 60deg, transparent 60deg);
+  -webkit-mask: radial-gradient(circle closest-side, transparent 0 31%, #000 33% 86%, transparent 96%);
+  mask: radial-gradient(circle closest-side, transparent 0 31%, #000 33% 86%, transparent 96%);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.radial-sweep.show {
+  opacity: 1;
+}
+
+.radial-sweep.dim {
+  opacity: 0.35;
+}
+
+.radial-hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--gold-dim);
+  background: radial-gradient(circle at 50% 35%, #2a2340, #120f1b);
+  color: var(--gold);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 0 0 4px rgba(13, 11, 18, 0.55);
+}
+
+.radial-item {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 50px;
+  height: 50px;
+  margin: -25px 0 0 -25px;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--gold-dim);
+  background: linear-gradient(180deg, rgba(42, 35, 64, 0.97), rgba(21, 17, 31, 0.97));
+  color: var(--text);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+  transform: translate(0, 0) scale(0.4);
+  opacity: 0;
+  transition:
+    transform 0.2s cubic-bezier(0.2, 1.5, 0.4, 1) calc(var(--i) * 18ms),
+    opacity 0.12s ease-out calc(var(--i) * 18ms),
+    border-color 0.1s, background 0.1s, color 0.1s, box-shadow 0.1s;
+  pointer-events: none;
+}
+
+.radial.open .radial-item {
+  transform: translate(var(--x), var(--y)) scale(1);
+  opacity: 1;
+}
+
+.radial-item.primary {
+  border-color: #f0cf7c;
+  background: linear-gradient(180deg, #f0cf7c, #c49a3f);
+  color: #1b1405;
+  box-shadow: 0 0 18px rgba(240, 207, 124, 0.45), 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.radial-item:disabled {
+  opacity: 0.32;
+}
+
+.radial.open .radial-item:disabled {
+  opacity: 0.32;
+}
+
+.radial.open .radial-item.hover:not(:disabled) {
+  transform: translate(var(--x), var(--y)) scale(1.16);
+  border-color: var(--gold);
+  color: #fff6dc;
+  box-shadow: 0 0 22px rgba(240, 207, 124, 0.55), 0 8px 18px rgba(0, 0, 0, 0.5);
+}
+
+.radial.open .radial-item.primary.hover {
+  color: #1b1405;
+}
+
+.radial-tip {
+  position: absolute;
+  padding: 5px 11px;
+  border-radius: 13px;
+  border: 1px solid var(--gold-dim);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.1s;
+  pointer-events: none;
+}
+
+.radial-tip.show {
+  opacity: 1;
+}
+
+.radial-tip.dim {
+  color: rgba(239, 232, 218, 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radial-ring,
+  .radial-item {
+    transition: opacity 0.1s;
+  }
+  .radial-ring,
+  .radial.open .radial-ring {
+    transform: none;
+  }
+}
+
+/* ---- choosing between two piles (Make an Example, Fact or Fiction) ------------------------------------- */
+.piles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+  padding: 8px 4px 4px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.pile-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(214, 178, 94, 0.28);
+  background: rgba(8, 6, 14, 0.45);
+  transition: border-color 0.12s, box-shadow 0.12s, background 0.12s;
+}
+
+.pile-option.hot {
+  border-color: var(--gold);
+  background: rgba(214, 178, 94, 0.07);
+  box-shadow: 0 0 0 1px rgba(214, 178, 94, 0.35), 0 0 28px rgba(214, 178, 94, 0.18);
+}
+
+.pile-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.pile-name {
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+.pile-count {
+  font-size: 13px;
+  color: rgba(239, 232, 218, 0.65);
+}
+
+.pile-cards {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  align-content: flex-start;
+  min-height: 150px;
+}
+
+.pile-cards .thumb {
+  width: 132px;
+  cursor: zoom-in;
+}
+
+.pile-cards.many .thumb,
+.pile-cards.many .pile-back {
+  width: 96px;
+}
+
+.pile-back {
+  width: 132px;
+  aspect-ratio: 63 / 88;
+  border-radius: 8px;
+  border: 2px solid rgba(214, 178, 94, 0.4);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(214, 178, 94, 0.25) 0 18%, transparent 19%),
+    linear-gradient(160deg, #2a2340, #120f1b);
+}
+
+.pile-empty {
+  align-self: center;
+  margin: auto;
+  padding: 22px 30px;
+  border: 1px dashed rgba(214, 178, 94, 0.35);
+  border-radius: 10px;
+  color: rgba(239, 232, 218, 0.55);
+  font-style: italic;
+}
+
+.pile-pick {
+  min-width: 200px;
+}
+
+/* combat damage assignment: how much kills each blocker, and which ones it now kills */
+.dist-note {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(239, 232, 218, 0.6);
+}
+
+.dist-row.lethal {
+  border-color: rgba(220, 70, 50, 0.75);
+  background: linear-gradient(90deg, rgba(120, 24, 16, 0.45), rgba(14, 12, 20, 0.85) 70%);
+}
+
+.dist-row.lethal .dist-note::after {
+  content: ' · dies';
+  color: #ff8a70;
+}
+
+.dist-row.locked {
+  opacity: 0.55;
+}
+
+.modal-sub.warn {
+  color: #ff9a70;
+}

@@ -17,6 +17,8 @@ export interface CardState {
   state?: string;
   token?: boolean;
   commander?: boolean;
+  /** an effect Forge makes for the game (speed's "Start Your Engines!"), not a printed card */
+  effect?: boolean;
   sick?: boolean;
   attacking?: boolean;
   blocking?: boolean;
@@ -61,6 +63,8 @@ export interface PlayerState {
   lost: boolean;
   priority: boolean;
   poison: number;
+  /** speed (Start your engines!), 1 to 4, once they have any */
+  speed?: number;
   counters: Record<string, number>;
   mana: Record<string, number>;
   zones: {
@@ -192,6 +196,12 @@ export interface ChoiceOption {
   max?: number;
   /** distribute: a mana colour (W/U/B/R/G/C) rather than a game object */
   color?: string;
+  /** distribute (combat): damage that kills this blocker */
+  lethal?: number;
+  /** distribute (combat): the share it starts with (the automatic split) */
+  initial?: number;
+  /** distribute (combat): the defending player or planeswalker, reached by trample */
+  defender?: boolean;
   ability?: number;
   player?: number;
   entity?: number;
@@ -200,10 +210,16 @@ export interface ChoiceOption {
 export interface RequestMsg {
   type: 'request';
   id: number;
-  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input' | 'distribute';
+  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input' | 'distribute' | 'piles';
+  /** piles: the two piles to choose between (a face-down pile sends only its count); answered 0 or 1 */
+  piles?: { label: string; count: number; hidden: boolean; options: ChoiceOption[] }[];
   /** distribute: total to divide, and whether every option needs at least one */
   amount?: number;
   atLeastOne?: boolean;
+  /** distribute: dividing a creature's combat damage among its blockers (and, trampling, the defender) */
+  combat?: boolean;
+  /** combat: the defender may take damage before every blocker has lethal (assigns as though unblocked) */
+  freeDefender?: boolean;
   message?: string;
   caption?: string;
   card?: number | null;

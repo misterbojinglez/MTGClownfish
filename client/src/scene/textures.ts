@@ -33,10 +33,15 @@ function keyOf(c: CardState): string {
   return `${c.name}|${c.set ?? ''}|${c.cn ?? ''}|${c.state ?? ''}`;
 }
 
+/** A name for comparing faces: Forge and Scryfall can differ in punctuation ("Max Speed!" / "Max Speed"). */
+function plainName(name: string | undefined): string {
+  return (name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 /** Forge names transformed / split faces by the face shown; pick that face's art from a Scryfall card. */
 function pickImages(card: any, faceName: string | undefined): Resolved | null {
   const faces: any[] = card.card_faces ?? [];
-  const face = faces.find((f) => f.name === faceName && f.image_uris) ?? null;
+  const face = faces.find((f) => f.name === faceName && f.image_uris) ?? faces.find((f) => plainName(f.name) === plainName(faceName) && f.image_uris) ?? null;
   const uris = face?.image_uris ?? card.image_uris ?? faces[0]?.image_uris;
   return uris ? { normal: uris.normal, large: uris.large ?? uris.normal, art: uris.art_crop ?? uris.normal } : null;
 }
@@ -90,8 +95,13 @@ async function flush(): Promise<void> {
       waiters.forEach((w) => w(null));
       continue;
     }
+    // the printing the bridge named, asked for on its own (the batch may have failed as a whole: an error or
+    // a rate limit), before any search by name, which for a card that isn't a real one ("Start Your
+    // Engines!", speed's effect) finds an unrelated card of the same name
+    let r = card.set && card.cn ? await byPrinting(card.set, card.cn, card.name) : null;
+    // an effect is never looked up by name: without its printing it gets a drawn face
     // a token is either a copy of a real card (Offspring, clones: same name) or a token printing
-    const r = card.token ? ((await byName(card.name)) ?? (await byTokenName(card.name))) : await byName(card.name);
+    if (!r && !card.effect) r = card.token ? ((await byName(card.name)) ?? (await byTokenName(card.name))) : await byName(card.name);
     resolved.set(k, r);
     waiters.forEach((w) => w(r));
   }
@@ -100,6 +110,20 @@ async function flush(): Promise<void> {
 
 function frontName(name: string): string {
   return name.split(' // ')[0];
+}
+
+/** One printing, by set and collector number (a batch that failed as a whole gets its cards this way). */
+async function byPrinting(set: string, cn: string, faceName: string | undefined): Promise<Resolved | null> {
+  const wait = Math.max(0, lastApiCall + 120 - performance.now());
+  if (wait) await new Promise((r) => setTimeout(r, wait));
+  lastApiCall = performance.now();
+  try {
+    const res = await fetch(`https://api.scryfall.com/cards/${encodeURIComponent(set.toLowerCase())}/${encodeURIComponent(cn)}`);
+    if (!res.ok) return null;
+    return pickImages(await res.json(), faceName);
+  } catch {
+    return null;
+  }
 }
 
 async function byName(name: string): Promise<Resolved | null> {

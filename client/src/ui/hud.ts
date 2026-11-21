@@ -2,6 +2,7 @@ import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMs
 import { DEFAULT_SETTINGS, onSettings, setSetting, type Settings } from '../settings';
 import { cardArtUrl, cardImageUrl, cardZoomUrl } from '../scene/textures';
 import { sfx } from '../audio';
+import type { RadialAction } from './radial';
 
 const PHASES: [string, string][] = [
   ['UNTAP', 'Untap'],
@@ -74,6 +75,7 @@ export class Hud {
   private skipping = false;
   private readonly cancelBtn = h('button', 'sub-btn');
   private readonly undoBtn = h('button', 'sub-btn undo-btn', 'Undo');
+  private readonly passBtn = h('button', 'main-btn pass-btn', 'Pass Turn');
   private readonly lifeBtn = h('button', 'sub-btn life-btn');
   private readonly resolveAllBtn = h('button', 'sub-btn resolve-all-btn');
   private readonly floatingBtn = h('button', 'sub-btn floating-btn');
@@ -95,7 +97,7 @@ export class Hud {
 
   constructor() {
     // the button column at the bottom right, top to bottom: Pass Turn, Undo, Pay 2 life (when a cost allows it), the prompt's secondary, OK
-    const pass = h('button', 'main-btn pass-btn', 'Pass Turn');
+    const pass = this.passBtn;
     pass.title = 'Pass priority until end of turn (Shift+Enter)';
     pass.onclick = () => this.handlers.passTurn();
     const undo = this.undoBtn;
@@ -211,6 +213,31 @@ export class Hud {
         if (!this.cancelBtn.disabled) this.handlers.cancel();
       }
     });
+  }
+
+  /**
+   * The prompt's buttons as the radial menu offers them, read from the buttons themselves so the two never
+   * disagree: each is visible and enabled exactly when its button is, and pressing one presses the button.
+   */
+  radialActions(): RadialAction[] {
+    const shown = (b: HTMLElement) => b.style.display !== 'none' && b.style.visibility !== 'hidden';
+    const of = (slot: RadialAction['slot'], b: HTMLButtonElement, always = false): RadialAction => ({
+      slot,
+      label: b.textContent ?? '',
+      visible: always || shown(b),
+      enabled: shown(b) && !b.disabled,
+      primary: b.classList.contains('glow'),
+      run: () => b.click(),
+    });
+    return [
+      of('ok', this.okBtn, true),
+      of('pass', this.passBtn, true),
+      of('cancel', this.cancelBtn, true),
+      of('undo', this.undoBtn, true),
+      of('all', this.resolveAllBtn),
+      of('life', this.lifeBtn),
+      of('floating', this.floatingBtn),
+    ];
   }
 
   bind(handlers: HudHandlers): void {
@@ -590,16 +617,21 @@ export class Hud {
       const who = item.controller === localId ? 'You' : state.players.find((p) => p.id === item.controller)?.name ?? '';
       const text = effectText(tidyMessage(item.text), name);
       const el = h('div', `stack-card ${item.trigger || item.ability ? 'ability' : 'spell'}${i === 0 ? ' top' : ''}`);
+      el.dataset.item = String(item.id);
       el.title = `${name} · ${kind}${who ? ` · ${who}` : ''}${text && text !== name ? `\n${text}` : ''}`;
       const face = h('div', 'stack-face');
       if (card?.visible) void cardImageUrl(card).then((url) => { if (url) face.style.backgroundImage = `url("${url}")`; });
       else face.textContent = name;
       el.append(face, h('div', 'stack-tag', who ? `${kind} · ${who}` : kind));
-      if (card) {
-        // the panel fills the right side, where the zoom usually shows
-        el.onmouseenter = () => this.showZoom(card, 'left');
-        el.onmouseleave = () => this.showZoom(null);
-      }
+      // hovering an item shows what it targets (the table draws its tethers), and its card's full view
+      el.onmouseenter = () => {
+        if (card) this.showZoom(card, 'left');
+        this.onStackHover?.(item.id);
+      };
+      el.onmouseleave = () => {
+        if (card) this.showZoom(null);
+        this.onStackHover?.(null);
+      };
       row.append(el);
     });
     if (items.length > shown.length) row.append(h('div', 'stack-more', `+${items.length - shown.length}`));
@@ -610,6 +642,21 @@ export class Hud {
     this.stackPanel.append(head, row);
     if (topText) this.stackPanel.append(h('div', 'stack-text', topText));
     this.placeStack();
+  }
+
+  /** Told which Stack item the pointer is over (null when it leaves), so the table can show its targets. */
+  onStackHover: ((itemId: number | null) => void) | null = null;
+
+  /**
+   * Where a Stack item is on screen, for the tethers to what it targets: the left edge of its card in the
+   * panel, or the tab's when the panel is tucked aside. Null when it isn't shown.
+   */
+  stackAnchor(itemId: number): { x: number; y: number } | null {
+    if (!this.stackPanel.classList.contains('show')) return null;
+    const el = this.stackPanel.querySelector<HTMLElement>(`.stack-card[data-item="${itemId}"]`) ?? this.stackPanel.querySelector<HTMLElement>('.stack-tab');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 ? { x: r.left + 4, y: r.top + r.height / 2 } : null;
   }
 
   /**
@@ -1138,6 +1185,8 @@ export class Hud {
         panel.append(row);
       } else if (req.kind === 'distribute') {
         this.buildDistribute(req, state, panel, done);
+      } else if (req.kind === 'piles') {
+        this.buildPiles(req, state, panel, done);
       } else if (req.kind === 'input') {
         const input = h('input', 'modal-input');
         input.type = req.numeric ? 'number' : 'text';
@@ -1255,13 +1304,49 @@ export class Hud {
     refresh();
   }
 
+  /**
+   * Two piles side by side, each with its own Select button: the cards are there to look at (hover to zoom),
+   * not to pick, since the choice is between whole piles. A face-down pile shows backs; an empty one says so.
+   */
+  private buildPiles(req: RequestMsg, state: GameState | null, panel: HTMLElement, done: (v: unknown) => void): void {
+    const row = h('div', 'piles');
+    (req.piles ?? []).forEach((pile, i) => {
+      const col = h('div', 'pile-option');
+      const head = h('div', 'pile-head');
+      head.append(h('span', 'pile-name', pile.label), h('span', 'pile-count', pile.count === 1 ? '1 card' : `${pile.count} cards`));
+      const cards = h('div', 'pile-cards');
+      if (pile.count === 0) cards.append(h('div', 'pile-empty', 'Empty pile'));
+      else if (pile.hidden) {
+        for (let k = 0; k < Math.min(pile.count, 12); k++) cards.append(h('div', 'pile-back'));
+      } else {
+        for (const o of pile.options) {
+          const known = o.card != null ? state?.cards[o.card] : undefined;
+          const card = known?.visible ? known : o.cardData ?? known;
+          const el = card ? this.cardThumb(card) : h('div', 'pile-back');
+          el.tabIndex = -1;
+          cards.append(el);
+        }
+      }
+      if (pile.count > 8) cards.classList.add('many');
+      const pick = h('button', 'main-btn wide pile-pick', `Select ${pile.label}`);
+      pick.onclick = () => done(i);
+      // pointing at a pile's button lights up the pile it picks
+      pick.onmouseenter = () => col.classList.add('hot');
+      pick.onmouseleave = () => col.classList.remove('hot');
+      col.append(head, cards, pick);
+      row.append(col);
+    });
+    panel.append(row);
+  }
+
   /** Split an amount among targets: +/− per row, confirm once the whole amount is placed. */
   private buildDistribute(req: RequestMsg, state: GameState | null, panel: HTMLElement, done: (v: unknown) => void): void {
     const options = req.options ?? [];
     const total = req.amount ?? 0;
     const min: number = req.atLeastOne ? 1 : 0;
-    const shares: number[] = options.map(() => min);
-    // start with an even split so the common case is one click
+    const combat = !!req.combat;
+    // combat starts from the automatic split (lethal to each blocker in turn); anything else from an even one
+    const shares: number[] = options.map((o) => (combat ? o.initial ?? 0 : min));
     let left = total - shares.reduce((a, b) => a + b, 0);
     for (let i = 0; left > 0 && options.length; i = (i + 1) % options.length) {
       if (shares[i] < (options[i].max ?? total)) {
@@ -1273,11 +1358,23 @@ export class Hud {
     const remaining = h('div', 'modal-sub');
     const confirm = h('button', 'main-btn wide', 'Confirm');
     const rows: HTMLElement[] = [];
+    // trample: nothing reaches the defender until every blocker has been assigned lethal damage
+    const blockersLethal = () => options.every((o, i) => o.defender || shares[i] >= (o.lethal ?? 0));
+    const defenderLocked = (i: number) => combat && !!options[i].defender && !req.freeDefender && !blockersLethal();
     const refresh = () => {
       const used = shares.reduce((a, b) => a + b, 0);
-      remaining.textContent = used === total ? 'All assigned' : `${total - used} left to assign`;
-      confirm.disabled = used !== total;
-      rows.forEach((r, i) => (r.querySelector('.share')!.textContent = String(shares[i])));
+      const early = options.some((_, i) => defenderLocked(i) && shares[i] > 0);
+      remaining.textContent = early
+        ? 'Every blocker needs lethal damage before any can trample over'
+        : used === total ? 'All assigned' : `${total - used} left to assign`;
+      remaining.classList.toggle('warn', early);
+      confirm.disabled = used !== total || early;
+      rows.forEach((r, i) => {
+        r.querySelector('.share')!.textContent = String(shares[i]);
+        const o = options[i];
+        if (combat && !o.defender) r.classList.toggle('lethal', shares[i] >= (o.lethal ?? Infinity));
+        if (combat && o.defender) r.classList.toggle('locked', defenderLocked(i));
+      });
     };
     options.forEach((o, i) => {
       const known = o.card != null ? state?.cards[o.card] : undefined;
@@ -1286,6 +1383,11 @@ export class Hud {
       const row = h('div', 'dist-row');
       const label = h('div', 'dist-label', player ? `${player.name} (${player.life} life)` : card?.name ?? o.label);
       if (o.color) label.classList.add(`pip-${o.color}`, 'dist-color');
+      if (combat && o.defender) label.append(h('span', 'dist-note', 'tramples over'));
+      else if (combat && o.lethal != null) {
+        const pt = card?.power !== undefined ? `${card.power}/${card.toughness} · ` : '';
+        label.append(h('span', 'dist-note', `${pt}${o.lethal} kills it`));
+      }
       const minus = h('button', 'sub-btn icon', '−');
       const plus = h('button', 'sub-btn icon', '+');
       minus.onclick = () => {
@@ -1293,7 +1395,16 @@ export class Hud {
         refresh();
       };
       plus.onclick = () => {
+        if (defenderLocked(i)) return;
         if (shares.reduce((a, b) => a + b, 0) < total && shares[i] < (o.max ?? total)) shares[i]++;
+        // in combat the total is always fully placed: a point added here comes off the last row that can spare one
+        else if (combat && shares[i] < total) {
+          const from = [...options.keys()].reverse().find((j) => j !== i && shares[j] > 0);
+          if (from != null) {
+            shares[from]--;
+            shares[i]++;
+          }
+        }
         refresh();
       };
       if (card) {

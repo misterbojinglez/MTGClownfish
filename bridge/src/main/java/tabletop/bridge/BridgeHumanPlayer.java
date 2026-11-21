@@ -314,7 +314,98 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 }
                 return false;
             }
+            final String nothing = nothingToChoose(chosenSa);
+            if (nothing != null && getGui() instanceof SocketGuiGame gui) {
+                final forge.game.card.Card host = chosenSa.getHostCard();
+                final String name = host == null ? "That" : host.getName();
+                final boolean go = gui.confirm(host == null ? null : host.getView(),
+                        name + ": there's no " + nothing + " to choose yet, so it would do nothing right now.",
+                        false, List.of("Activate anyway", "Cancel"));
+                if (!go) {
+                    return false;
+                }
+            }
             return super.playChosenSpellAbility(chosenSa);
+        }
+
+        /**
+         * An ability that opens by choosing a card from a filter (Forcefield: "an unblocked creature of your
+         * choice") does nothing when nothing fits, yet Forge takes the payment and resolves it silently.
+         * Activated during declare attackers, before any creature is unblocked, Forcefield was a wasted {1}.
+         * Returns what it would choose ("unblocked creature") when nothing fits right now, else null.
+         */
+        private String nothingToChoose(final SpellAbility sa) {
+            try {
+                if (sa == null || sa.getApi() != forge.game.ability.ApiType.ChooseCard || !sa.hasParam("Choices")
+                        || sa.hasParam("DefinedCards") || sa.hasParam("AllCards") || sa.hasParam("IncludeSpellsOnStack")
+                        || sa.hasParam("Defined") || sa.usesTargeting()) {
+                    return null;
+                }
+                final Player me = getPlayer();
+                final forge.game.card.Card host = sa.getHostCard();
+                sa.setActivatingPlayer(me);
+                final List<forge.game.zone.ZoneType> zones = sa.hasParam("ChoiceZone")
+                        ? forge.game.zone.ZoneType.listValueOf(sa.getParam("ChoiceZone"))
+                        : List.of(forge.game.zone.ZoneType.Battlefield);
+                forge.game.card.CardCollectionView choices = forge.game.card.CardLists.getValidCards(
+                        me.getGame().getCardsIn(zones), sa.getParam("Choices"), me, host, sa);
+                if ("Chooser".equals(sa.getParam("ControlledByPlayer"))) {
+                    choices = forge.game.card.CardLists.filterControlledBy(choices, me);
+                } else if (sa.hasParam("ControlledByPlayer")) {
+                    return null; // depends on another player; don't guess
+                }
+                return choices.isEmpty() ? describeChoices(sa) : null;
+            } catch (final RuntimeException ignored) {
+                return null; // can't tell; let Forge decide
+            }
+        }
+
+        /** "Creature.unblocked" → "unblocked creature"; ChoiceDesc when the script has one. */
+        private static String describeChoices(final SpellAbility sa) {
+            if (sa.hasParam("ChoiceDesc")) {
+                return sa.getParam("ChoiceDesc");
+            }
+            final String choices = sa.getParam("Choices");
+            if (choices.matches("[A-Za-z]+(\\.[A-Za-z]+(\\+[A-Za-z]+)*)?")) {
+                final String[] parts = choices.split("\\.", 2);
+                final String type = parts[0].equals("Card") ? "card" : parts[0].toLowerCase();
+                if (parts.length == 1) {
+                    return type;
+                }
+                final List<String> props = new ArrayList<>();
+                String after = "";
+                for (final String p : parts[1].split("\\+")) {
+                    switch (p) {
+                        case "YouCtrl" -> after = " you control";
+                        case "OppCtrl" -> after = " an opponent controls";
+                        case "YouOwn" -> after = " you own";
+                        default -> props.add(p.replaceAll("([a-z])([A-Z])", "$1 $2").toLowerCase());
+                    }
+                }
+                return (props.isEmpty() ? "" : String.join(" ", props) + " ") + type + after;
+            }
+            return "eligible card";
+        }
+
+        /** Two piles shown as two piles, each chosen with its own button (see SocketGuiGame.choosePile). */
+        @Override
+        public boolean chooseCardsPile(final SpellAbility sa, final forge.game.card.CardCollectionView pile1,
+                                       final forge.game.card.CardCollectionView pile2, final String faceDown) {
+            if (!(getGui() instanceof SocketGuiGame gui)) {
+                return super.chooseCardsPile(sa, pile1, pile2, faceDown);
+            }
+            // as Forge's: FaceDown "One" hides pile 1, "True" hides both
+            final boolean show1 = "False".equals(faceDown);
+            final boolean show2 = !"True".equals(faceDown);
+            if (show1) tempShowCards(pile1);
+            if (show2) tempShowCards(pile2);
+            try {
+                return gui.choosePile("Choose a pile",
+                        new ArrayList<>(forge.game.card.CardView.getCollection(pile1)),
+                        new ArrayList<>(forge.game.card.CardView.getCollection(pile2)), show1, show2);
+            } finally {
+                endTempShowCards();
+            }
         }
 
         /** The first non-mana cost of this ability that can't be paid now, or null. */

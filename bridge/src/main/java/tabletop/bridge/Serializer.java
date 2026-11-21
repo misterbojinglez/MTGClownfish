@@ -225,6 +225,11 @@ public final class Serializer {
         o.addProperty("state", s.getState() == null ? null : s.getState().name());
         o.addProperty("token", c.isToken());
         o.addProperty("commander", c.isCommander());
+        // an effect Forge makes for the game (speed's "Start Your Engines!", a delayed trigger's holder): not a
+        // printed card, so the client never looks one up by name (it would find an unrelated card of that name)
+        if (c.getGamePieceType() == forge.card.GamePieceType.EFFECT) {
+            o.addProperty("effect", true);
+        }
         o.addProperty("sick", c.isSick());
         o.addProperty("attacking", c.isAttacking());
         o.addProperty("blocking", c.isBlocking());
@@ -379,6 +384,8 @@ public final class Serializer {
                 f.addProperty("identity", wubrg.toString());
             }
             f.add("exilePlayable", exilePlayable(real));
+            // speed (Start your engines!), 1 to 4, once they have any: the table marks it on the Speed card's track
+            if (real.getSpeed() > 0) f.addProperty("speed", real.getSpeed());
         } catch (RuntimeException ignored) {
             // mid-update; the next refresh carries it
         }

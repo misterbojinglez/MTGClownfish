@@ -11,6 +11,7 @@ import { Table } from './game/table';
 import { Input, type AimTarget } from './game/input';
 import { CameraDirector } from './game/camera';
 import { Hud } from './ui/hud';
+import { RadialMenu } from './ui/radial';
 import { sfx } from './audio';
 import { settings } from './settings';
 import { claudeKey, DeckSetup, type GameSetup } from './ui/decks';
@@ -19,8 +20,13 @@ import { askName, joinScreen, LobbyView, onlineChooser } from './ui/lobby';
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement);
 const table = new Table(stage);
 const hud = new Hud();
+// hold Command (Ctrl on Windows) for the prompt's actions around the pointer
+new RadialMenu(() => hud.radialActions(), () => document.body.classList.contains('in-game') && !document.querySelector('.modal'));
 // arrows aimed at a player end on their badge, wherever the HUD has put it
 table.badgeAt = (id) => hud.badgeCenter(id);
+// tethers from a spell or ability on the Stack start at its card in the panel; hovering one shows its targets
+table.stackAt = (itemId) => hud.stackAnchor(itemId);
+hud.onStackHover = (itemId) => table.focusStack(itemId);
 const director = new CameraDirector(stage);
 table.onOpponentCast = (card, who) => hud.revealCast(card, `${who} casts ${card.name}`, 2200);
 table.onPlayerHit = (pid, amount) => hud.hitPlate(pid, amount);

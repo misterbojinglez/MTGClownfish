@@ -28,24 +28,29 @@ interface Rect {
 
 interface RegionSpec {
   rect: Rect;
-  scales: number[];
+  /** the largest a card here is drawn (before BOARD_SCALE); a crowded row shrinks below it to fit */
+  max: number;
+  /** space between columns at full size; it shrinks with the cards */
   gutter: number;
 }
 
 // Local-seat regions, table units. "z" grows toward the local player.
 const LOCAL_REGIONS = {
-  creatures: { rect: { x: -21, z: 0, w: 42, h: 5 }, scales: [1.2, 1.1, 1.0, 0.9, 0.8, 0.7], gutter: 0.5 },
-  lands: { rect: { x: 1.5, z: 5.5, w: 19.5, h: 4.5 }, scales: [0.9, 0.85, 0.7, 0.6, 0.5], gutter: 0.45 },
-  other: { rect: { x: -21, z: 5.5, w: 19.5, h: 4.5 }, scales: [0.9, 0.85, 0.7, 0.6, 0.5], gutter: 0.45 },
+  creatures: { rect: { x: -21, z: 0, w: 42, h: 5 }, max: 1.2, gutter: 0.5 },
+  lands: { rect: { x: 1.5, z: 5.5, w: 19.5, h: 4.5 }, max: 0.9, gutter: 0.45 },
+  other: { rect: { x: -21, z: 5.5, w: 19.5, h: 4.5 }, max: 0.9, gutter: 0.45 },
 } satisfies Record<string, RegionSpec>;
 
 const OPP_REGIONS = {
-  creatures: { rect: { x: -21, z: -7.5, w: 42, h: 5 }, scales: [1.2, 1.1, 1.0, 0.9, 0.8, 0.7], gutter: 0.5 },
-  lands: { rect: { x: 1.5, z: -12, w: 19.5, h: 4.5 }, scales: [0.9, 0.85, 0.7, 0.6, 0.5], gutter: 0.45 },
-  other: { rect: { x: -21, z: -12, w: 19.5, h: 4.5 }, scales: [0.9, 0.85, 0.7, 0.6, 0.5], gutter: 0.45 },
+  creatures: { rect: { x: -21, z: -7.5, w: 42, h: 5 }, max: 1.2, gutter: 0.5 },
+  lands: { rect: { x: 1.5, z: -12, w: 19.5, h: 4.5 }, max: 0.9, gutter: 0.45 },
+  other: { rect: { x: -21, z: -12, w: 19.5, h: 4.5 }, max: 0.9, gutter: 0.45 },
 } satisfies Record<string, RegionSpec>;
 
 type Regions = typeof LOCAL_REGIONS;
+
+/** permanents on the battlefield drawn 32% larger than the region sizes above (10%, then 20% more) */
+const BOARD_SCALE = 1.32;
 
 /**
  * A second, smaller hand just below your mat (between it and your hand): cards you may play from exile, wherever
@@ -302,26 +307,21 @@ export function computeLayout(
       const cols = groups[cat];
       if (cols.length === 0) continue;
       const stackExtra = (col: Column) => Math.min(col.ids.length - 1, 3) * 0.32;
-      let scale = region.scales[region.scales.length - 1];
-      for (const s of region.scales) {
-        const need = cols.reduce((acc, col) => acc + (col.width + stackExtra(col)) * s, 0) + region.gutter * (cols.length - 1);
-        if (need <= region.rect.w) {
-          scale = s;
-          break;
-        }
-      }
-      const natural = cols.reduce((acc, col) => acc + (col.width + stackExtra(col)) * scale, 0) + region.gutter * (cols.length - 1);
-      const squeeze = natural > region.rect.w ? region.rect.w / natural : 1;
-      let x = region.rect.x + (region.rect.w - natural * squeeze) / 2;
+      // full size, or as large as lets the whole row fit the region's width (gutters shrink with the cards)
+      const max = region.max * BOARD_SCALE;
+      const units = cols.reduce((acc, col) => acc + col.width + stackExtra(col), 0) + (region.gutter / max) * (cols.length - 1);
+      const scale = Math.min(max, region.rect.w / units);
+      const gutter = (region.gutter / max) * scale;
+      let x = region.rect.x + (region.rect.w - units * scale) / 2;
       const zMid = region.rect.z + region.rect.h / 2;
       for (const col of cols) {
-        const colW = (col.width + stackExtra(col)) * scale * squeeze;
+        const colW = (col.width + stackExtra(col)) * scale;
         col.ids.forEach((id, i) => {
           const c = cards[id];
-          const off = Math.min(i, 3) * 0.32 * scale * squeeze;
+          const off = Math.min(i, 3) * 0.32 * scale;
           // attackers step toward the opponent; blockers step out to meet them
           const attackPush = c.attacking || c.blocking ? (seat.local ? -1.4 : 1.4) : 0;
-          const local = new THREE.Vector3(x + (col.width * scale * squeeze) / 2 + off, 0.02 + i * 0.012, zMid + attackPush - off * 0.35);
+          const local = new THREE.Vector3(x + (col.width * scale) / 2 + off, 0.02 + i * 0.012, zMid + attackPush - off * 0.35);
           const world = seatToWorld(seat, local);
           const rot = flat.clone();
           rot.y = seat.rotY + (c.tapped ? -Math.PI / 2 : 0);
@@ -335,7 +335,7 @@ export function computeLayout(
             out.set(aid, { space: 'table', pos: seatToWorld(seat, a), rot: aRot, scale, faceUp: true, order: -1 - ai });
           });
         });
-        x += colW + region.gutter * squeeze;
+        x += colW + gutter;
       }
     }
 
@@ -359,7 +359,9 @@ export function computeLayout(
     pile(p.zones.Graveyard, seat.piles.graveyard, pileScale, true);
     pile(p.zones.Exile, seat.piles.exile, pileScale, true);
     if (seat.local) {
-      p.zones.Command.forEach((id, i) => {
+      // your commanders take the front of the slot; anything else there (speed, emblems) fans out behind them
+      const command = [...p.zones.Command].sort((a, b) => Number(!!state.cards[b]?.commander) - Number(!!state.cards[a]?.commander));
+      command.forEach((id, i) => {
         // hovered, it grows where it is (lifted toward you, nudged in from the screen's edge) instead of
         // opening the zoom beside it
         const hovered = opts.hoveredCommand === id;
