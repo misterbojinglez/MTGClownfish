@@ -1,7 +1,8 @@
+import { askYes } from './buildin';
 import type { Bridge } from '../net';
 import { playerName, setPlayerName } from '../net';
 import type { LobbySeat, LobbyState } from '../protocol';
-import { claudeKey, type DeckSetup } from './decks';
+import { claudeKey, type DeckSetup, tabletalkRow } from './decks';
 
 /**
  * The online lobby: the join code (and link) to share, everyone's seat and deck, and for the host the table's
@@ -125,7 +126,15 @@ export class LobbyView {
         table.append(counts);
       }
       ov.append(table);
+      ov.append(tabletalkRow(s.talk, async (on) => {
+        // the host's key speaks for the AIs
+        if (on && !claudeKey()) await this.decks.keyEditor();
+        this.bridge.lobbyConfig({ talk: on && !!claudeKey() });
+        if (on && !claudeKey()) this.update(s, true);
+      }));
     }
+
+    if (!s.host && s.talk) ov.append(h('div', 'paste-note', 'Tabletalk is on: the AI opponents chat, and you can talk to them. What you say goes to Claude through the host’s API key.'));
 
     const seats = h('div', 'seats lobby-seats');
     s.seats.forEach((seat, i) => seats.append(this.seatRow(s, seat, i)));
@@ -135,8 +144,8 @@ export class LobbyView {
     // footer: ready / start / leave
     const actions = h('div', 'setup-actions');
     const leave = h('button', 'sub-btn', s.host ? 'Close lobby' : 'Leave');
-    leave.onclick = () => {
-      if (s.host && s.seats.some((x) => x.kind === 'human') && !confirm('Close the lobby? Everyone in it will be sent away.')) return;
+    leave.onclick = async () => {
+      if (s.host && s.seats.some((x) => x.kind === 'human') && !(await askYes(this.root, 'Close the lobby?', 'Everyone in it will be sent away.', 'Close lobby'))) return;
       this.bridge.leaveLobby();
       this.clear();
       this.onLeave?.();
@@ -150,7 +159,7 @@ export class LobbyView {
       if (waiting.length) start.title = `Waiting for ${waiting.map((x) => x.name).join(', ')} to be ready`;
       start.onclick = () => {
         // gameplans for the AI seats may still need translating at the start: the key goes along
-        const planned = s.seats.some((x) => x.gameplan);
+        const planned = s.talk || s.seats.some((x) => x.gameplan);
         this.bridge.lobbyStart(planned ? claudeKey() || undefined : undefined);
       };
       actions.append(start);
@@ -220,8 +229,8 @@ export class LobbyView {
       const ctl = h('div', 'lobby-seat-ctl');
       if (seat.kind === 'human') {
         const remove = h('button', 'link-btn', 'Give seat to AI');
-        remove.onclick = () => {
-          if (confirm(`Remove ${seat.name} from the table?`)) this.bridge.lobbyConfig({ seat: i, kind: 'ai' });
+        remove.onclick = async () => {
+          if (await askYes(this.root, `Remove ${seat.name} from the table?`, 'An AI takes their seat.', 'Remove')) this.bridge.lobbyConfig({ seat: i, kind: 'ai' });
         };
         ctl.append(remove);
       } else {

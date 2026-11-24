@@ -141,6 +141,9 @@ export interface ResolvingSource {
 export interface Prompt {
   /** Pass Turn is in effect */
   passing?: boolean;
+  /** targets: at most one from each player's cards; or all from one player's */
+  onePer?: 'player';
+  samePlayer?: boolean;
   /** what's being aimed is bad for the player it's aimed at */
   harmful?: boolean;
   message: string;
@@ -226,6 +229,8 @@ export interface RequestMsg {
   remaining?: number;
   /** choose: options shown but not to be picked; distinct: no two with the same name */
   disabled?: number[];
+  /** choose: at most one from each player's cards */
+  onePer?: 'player';
   distinct?: boolean;
   /** order: the answer may be remembered, as { order, remember } */
   canRemember?: boolean;
@@ -332,7 +337,36 @@ export type ServerMsg =
   | { type: 'precons'; format: string; decks: PreconInfo[] }
   | VoteMsg
   /** a one-time stop was used: key as in PlayOptions.stops */
-  | { type: 'stopUsed'; key: string };
+  | { type: 'stopUsed'; key: string }
+  /** Tabletalk: it's on (with what's been said so far), somebody spoke, the deals in force changed */
+  | { type: 'talkState'; on: boolean; lines: TalkLine[]; deals: TalkDeal[] }
+  | TalkLine
+  | { type: 'deals'; deals: TalkDeal[] }
+  | { type: 'offer'; id: number; state: OfferState };
+
+/** Something said at the table (or, system, a word from the table itself: a deal struck or broken). */
+export interface TalkLine {
+  type: 'talk';
+  id: number;
+  player?: number | null;
+  name?: string;
+  text: string;
+  human?: boolean;
+  system?: boolean;
+  /** an answer to somebody (or their own words): shown at once, not after the table's animations */
+  reply?: boolean;
+  /** a deal offered to a player, and how it was answered */
+  offer?: { to: number; state: OfferState };
+}
+
+export type OfferState = 'open' | 'accepted' | 'declined' | 'lapsed';
+
+/** A deal in force, and how many more turns it has. */
+export interface TalkDeal {
+  id: number;
+  summary: string;
+  left: number;
+}
 
 /** A vote among the people at the table (restarting the match): sent as it opens, as people answer, and with its result. */
 export interface VoteMsg {
@@ -398,6 +432,8 @@ export interface LobbyState {
   host: boolean;
   /** your seat index */
   you: number;
+  /** the AIs talk during the game */
+  talk: boolean;
   /** the relay couldn't be reached, etc. */
   problem: string | null;
   seats: LobbySeat[];

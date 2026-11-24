@@ -86,6 +86,7 @@ public final class Client {
     void resync() {
         final SocketGuiGame g = gui;
         if (g != null) g.resend();
+        TableTalk.resend(this);
         pendingPayloads.values().forEach(outbox::add);
     }
 

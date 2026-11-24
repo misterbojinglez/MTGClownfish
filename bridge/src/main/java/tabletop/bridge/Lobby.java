@@ -19,7 +19,7 @@ import java.util.List;
  * <pre>
  *   hostLobby   {format, players, name}                     host only: open a lobby
  *   lobbySeat   {deck, info, ready}                         your own seat's deck (a seat spec) and readiness
- *   lobbyConfig {format?, players?, seat?, kind?, deck?, info?, gameplan?}   host only: the table and its seats
+ *   lobbyConfig {format?, players?, talk?, seat?, kind?, deck?, info?, gameplan?}   host only: the table and its seats
  *   lobbyStart  {apiKey?}                                   host only: start the game
  *   leaveLobby  {}                                          a friend gives up their seat; the host closes the lobby
  * </pre>
@@ -59,6 +59,8 @@ final class Lobby {
     private static RelayLink link;
     private static String problem;
     private static boolean playing;
+    /** the AIs talk during the game (host's choice) */
+    private static boolean talk;
 
     static synchronized boolean open() {
         return host != null;
@@ -187,6 +189,7 @@ final class Lobby {
     /** The host changes the table: format, number of seats, a seat open or AI (or a friend removed), an AI's deck. */
     private static void configure(final JsonObject msg) {
         if (playing) return;
+        if (msg.has("talk") && msg.get("talk").isJsonPrimitive()) talk = msg.get("talk").getAsBoolean();
         if (msg.has("format")) {
             format = str(msg, "format", format).equalsIgnoreCase("constructed") ? "constructed" : "commander";
             // decks are format-specific: start over
@@ -252,7 +255,7 @@ final class Lobby {
         final String key = msg.has("apiKey") && msg.get("apiKey").isJsonPrimitive() ? msg.get("apiKey").getAsString() : null;
         System.out.println("[lobby] starting a " + format + " game for " + seats.size());
         // (launch first ends any previous game, which reports back here as over: playing is set after it)
-        BridgeMain.launch(setup, "commander".equals(format), key, host);
+        BridgeMain.launch(setup, "commander".equals(format), key, host, talk);
         playing = true;
         broadcast();
     }
@@ -336,6 +339,7 @@ final class Lobby {
         o.addProperty("link", link == null ? null : link.joinLink());
         o.addProperty("format", format);
         o.addProperty("playing", playing);
+        o.addProperty("talk", talk);
         o.addProperty("host", viewer == host);
         o.addProperty("problem", problem);
         final JsonArray list = new JsonArray();

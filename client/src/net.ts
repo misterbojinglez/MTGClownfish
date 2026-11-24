@@ -184,8 +184,18 @@ export class Bridge {
   }
 
   /** apiKey: the player's Claude API key, for opponents' gameplans not yet turned into AI settings */
-  start(format: 'constructed' | 'commander', players: number, deck?: string, decks?: (SeatDeckSpec | null)[], names?: string[], apiKey?: string): void {
-    this.send({ type: 'start', format, players, ...(deck ? { deck } : {}), ...(decks ? { decks } : {}), ...(names ? { names } : {}), ...(apiKey ? { apiKey } : {}) });
+  start(format: 'constructed' | 'commander', players: number, deck?: string, decks?: (SeatDeckSpec | null)[], names?: string[], apiKey?: string, talk = false): void {
+    this.send({ type: 'start', format, players, ...(deck ? { deck } : {}), ...(decks ? { decks } : {}), ...(names ? { names } : {}), ...(apiKey ? { apiKey } : {}), ...(talk ? { talk } : {}) });
+  }
+
+  /** Say something to the table (Tabletalk). */
+  talk(text: string): void {
+    this.send({ type: 'talk', text });
+  }
+
+  /** Answer a deal offered to you. */
+  answerOffer(id: number, accept: boolean): void {
+    this.send({ type: 'offer', id, accept });
   }
 
   /**

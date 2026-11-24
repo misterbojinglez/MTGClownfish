@@ -88,6 +88,7 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
         public List<SpellAbility> chooseSpellAbilityToPlay() {
             flushHeldReveal();
             digs.clear();
+            eachPlayer = null;
             nextDig = List.of();
             multi = null;
             final SocketGuiGame myGui = getGui() instanceof SocketGuiGame g ? g : null;
@@ -555,6 +556,95 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 endTempShowCards();
             }
             return out;
+        }
+
+        /** "for each player, choose a card in that player's graveyard", chosen together and handed over player by player */
+        private record EachPlayer(SpellAbility sa, int item, java.util.Map<Integer, forge.game.card.Card> byPlayer) { }
+
+        private EachPlayer eachPlayer;
+
+        /**
+         * Breach the Multiverse and friends: Forge asks once per player, about "this player's graveyard" without
+         * saying whose. Here every graveyard is in one dialog, a section each, and one card is taken from each.
+         */
+        @Override
+        public forge.game.card.CardCollectionView chooseCardsForEffect(final forge.game.card.CardCollectionView sourceList, final SpellAbility sa, final String title,
+                final int min, final int max, final boolean isOptional, final java.util.Map<String, Object> params) {
+            final CardCollection one = onePerPlayer(sourceList, sa, min, max);
+            return one != null ? one : super.chooseCardsForEffect(sourceList, sa, title, min, max, isOptional, params);
+        }
+
+        private CardCollection onePerPlayer(final forge.game.card.CardCollectionView sourceList, final SpellAbility sa, final int min, final int max) {
+            final SocketGuiGame gui = socketGui();
+            try {
+                final forge.game.zone.MagicStack stack = getGame().getStack();
+                if (gui == null || sa == null || sa.getApi() != ApiType.ChooseCard || max != 1 || !stack.isResolving() || stack.peek() == null
+                        || !"Graveyard".equals(sa.getParam("ChoiceZone")) || !sa.getParamOrDefault("Choices", "").contains("RememberedPlayerCtrl")) {
+                    return null;
+                }
+                final forge.game.card.Card host = sa.getHostCard();
+                final int item = stack.peek().getId();
+                final Player now = remembered(host);
+                if (now == null) {
+                    return null;
+                }
+                if (eachPlayer == null || eachPlayer.sa() != sa || eachPlayer.item() != item) {
+                    // the loop this choice is in: the players it goes over
+                    SpellAbility loop = stack.peekAbility();
+                    while (loop != null && !(loop.getApi() == ApiType.RepeatEach && loop.hasParam("RepeatPlayers"))) {
+                        loop = loop.getSubAbility();
+                    }
+                    if (loop == null || loop.hasParam("RepeatOptionalForEachPlayer") || loop.hasParam("NextTurnForEachPlayer")) {
+                        return null;
+                    }
+                    final CardCollection all = new CardCollection();
+                    final List<Player> players = new ArrayList<>(forge.game.ability.AbilityUtils.getDefinedPlayers(host, loop.getParam("RepeatPlayers"), loop));
+                    if (players.isEmpty() || players.get(0) != now) {
+                        return null; // partway through already
+                    }
+                    int groups = 0;
+                    for (final Player p : players) {
+                        host.removeRemembered(now);
+                        host.addRemembered(p);
+                        final forge.game.card.CardCollectionView theirs;
+                        try {
+                            theirs = forge.game.card.CardLists.getValidCards(getGame().getCardsIn(forge.game.zone.ZoneType.Graveyard), sa.getParam("Choices"), getPlayer(), host, sa);
+                        } finally {
+                            host.removeRemembered(p);
+                            host.addRemembered(now);
+                        }
+                        if (!theirs.isEmpty()) {
+                            groups++;
+                        }
+                        all.addAll(theirs);
+                    }
+                    if (groups < 2) {
+                        return null;
+                    }
+                    final java.util.Map<forge.game.card.CardView, forge.game.card.Card> byView = new java.util.LinkedHashMap<>();
+                    all.forEach(c -> byView.put(c.getView(), c));
+                    final java.util.Map<Integer, forge.game.card.Card> picks = new java.util.HashMap<>();
+                    gui.pickOnePerPlayer("Choose a card in each graveyard", new ArrayList<>(byView.keySet()), min == 0 ? 0 : groups, groups)
+                            .forEach(v -> picks.put(byView.get(v).getOwner().getId(), byView.get(v)));
+                    eachPlayer = new EachPlayer(sa, item, picks);
+                }
+                final forge.game.card.Card mine = eachPlayer.byPlayer().get(now.getId());
+                if (mine != null && sourceList.contains(mine)) {
+                    return new CardCollection(mine);
+                }
+                return min == 0 ? new CardCollection() : null;
+            } catch (final RuntimeException e) {
+                return null; // put together some other way: Forge's own prompts
+            }
+        }
+
+        private static Player remembered(final forge.game.card.Card host) {
+            for (final Object o : host.getRemembered()) {
+                if (o instanceof Player p) {
+                    return p;
+                }
+            }
+            return null;
         }
 
         /** the cards of a "search for cards with different names", chosen in one dialog and handed over one at a time */

@@ -282,6 +282,12 @@ function frameColors(colors: string | undefined): [string, string] {
   return COLOR_FRAMES[cs] ?? COLOR_FRAMES.C;
 }
 
+/** Rules text as printed: without the engine's ids ("(93)") and its notes about what an effect remembers. */
+function cleanText(text: string): string {
+  return text.split(/\r?\n/).map((l) => l.replace(/\s*\(\d+\)/g, '').trim())
+    .filter((l, i, all) => l && !/^(Remembered|Imprinted|Chosen [a-z]+|Exiled):?/i.test(l) && !/^(Remembered|Imprinted):?$/i.test(all[i - 1] ?? '')).join(' ');
+}
+
 /** Tokens and cards Scryfall can't find get a clean, readable stand-in face. */
 function drawnFace(card: CardState): THREE.Texture {
   const c = document.createElement('canvas');
@@ -304,6 +310,24 @@ function drawnFace(card: CardState): THREE.Texture {
   art.addColorStop(1, 'rgba(0,0,0,0.35)');
   g.fillStyle = art;
   g.fillRect(34, 84, W - 68, 300);
+  // an effect has no picture: a gilt ring in its place, so the window doesn't look missing
+  if (card.effect) {
+    g.strokeStyle = 'rgba(245,220,154,0.75)';
+    for (const [r, w] of [[104, 6], [86, 2], [38, 4]]) {
+      g.lineWidth = w;
+      g.beginPath();
+      g.arc(W / 2, 234, r, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.lineWidth = 3;
+    for (let k = 0; k < 8; k++) {
+      const a = (k * Math.PI) / 4;
+      g.beginPath();
+      g.moveTo(W / 2 + Math.cos(a) * 38, 234 + Math.sin(a) * 38);
+      g.lineTo(W / 2 + Math.cos(a) * 86, 234 + Math.sin(a) * 86);
+      g.stroke();
+    }
+  }
   // name bar
   g.fillStyle = 'rgba(245,240,225,0.92)';
   roundRect(g, 26, 28, W - 52, 46, 10);
@@ -323,7 +347,7 @@ function drawnFace(card: CardState): THREE.Texture {
   g.fillRect(34, 444, W - 68, 190);
   g.fillStyle = '#222';
   g.font = `500 18px ${CANVAS_FONT}`;
-  wrap(g, (card.text ?? '').replace(/\r?\n/g, ' ⏎ '), 46, 470, W - 92, 22, 7);
+  wrap(g, cleanText(card.text ?? ''), 46, 470, W - 92, 22, 7);
   if (card.power !== undefined && card.toughness !== undefined) {
     g.fillStyle = 'rgba(245,240,225,0.95)';
     roundRect(g, W - 128, H - 74, 100, 48, 12);

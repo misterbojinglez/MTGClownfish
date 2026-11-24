@@ -29,3 +29,45 @@ export function buildOut(el: HTMLElement, done: () => void, ms = 220): void {
 export function closeModal(modal: HTMLElement): void {
   buildOut(modal, () => modal.remove(), 170);
 }
+
+/** A yes/no question in the app's own dress (never the system's pop-up). */
+export function askYes(root: HTMLElement, title: string, text: string, yes: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const el = (tag: 'div' | 'button', cls: string, t = ''): HTMLElement => {
+      const x = document.createElement(tag);
+      x.className = cls;
+      x.textContent = t;
+      return x;
+    };
+    const modal = el('div', 'modal deck-modal ask');
+    const panel = el('div', 'modal-panel');
+    panel.setAttribute('role', 'alertdialog');
+    panel.setAttribute('aria-label', title);
+    const done = (v: boolean) => {
+      window.removeEventListener('keydown', onKey, true);
+      modal.remove();
+      resolve(v);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      done(false);
+    };
+    const row = el('div', 'modal-buttons');
+    const no = el('button', 'sub-btn wide', 'Cancel');
+    no.onclick = () => done(false);
+    const ok = el('button', 'main-btn wide', yes);
+    ok.onclick = () => done(true);
+    row.append(no, ok);
+    panel.append(el('div', 'modal-title', title));
+    if (text) panel.append(el('div', 'modal-sub', text));
+    panel.append(row);
+    modal.append(panel);
+    modal.onclick = (e) => {
+      if (e.target === modal) done(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    root.append(modal);
+    no.focus();
+  });
+}

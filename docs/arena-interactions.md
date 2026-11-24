@@ -204,6 +204,20 @@ as settings (off by default). The comparison tables above describe the game **be
 - A reveal that the next dialog shows anyway is held back, and shown at the next priority if no dialog came.
 - Not done from the "Consider" rows. Two-pile splitting, colour wheel, per-ability yields and the rest are as before.
 
+## Choosing across several graveyards (2026-11-24)
+
+Arena: cards off the table open a browser; when they come from several zones it has a button per zone and shows one
+zone at a time, starting from a computed one (S: "Click a zone name on the left to view that zone"; N:
+`SelectCardsBrowser_MultiZone`, `_cardViewsByZoneId`, `StartingZoneIdCalculator`). Several target groups are stepped
+through with "(n of count)" (S). Afterlife from the Loam isn't in Arena's card data; the nearest there are Breach the
+Multiverse (one per player), Boneyard Parley, Liliana the Necromancer, Ancient Brass Dragon and Fire Lord Sozin (any
+graveyards), and Jetsam (each opponent's). The method bodies weren't read, so how Arena words each is unknown.
+
+Ours: every graveyard at once, a section per player in turn order, since four zones behind buttons hide what's being
+compared. "One per player" swaps within a section (`Prompt.onePer`, from Forge's ForEachPlayer / different
+controllers); "all from one player" dims the rest. Breach the Multiverse asked three times about "this player's
+graveyard"; it's now one dialog (`BridgeHumanPlayer.onePerPlayer`). Any pick over several zones gets the sections.
+
 ## Recommended order
 
 Effort is a rough guess: S under an hour or two, M about half a day, L more.

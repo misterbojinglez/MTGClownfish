@@ -12,6 +12,7 @@ import { Table } from './game/table';
 import { Input, type AimTarget } from './game/input';
 import { CameraDirector } from './game/camera';
 import { Hud } from './ui/hud';
+import { TableTalk } from './ui/talk';
 import { RadialMenu } from './ui/radial';
 import { sfx } from './audio';
 import { closeTour, maybeFirstGameTour } from './ui/tour';
@@ -268,16 +269,27 @@ function refreshBrowser(): void {
   const s = table.state!;
   const offTable = table.selection.cards.filter((id) => s.cards[id] && (!table.cards.has(id) || s.cards[id].zone === 'Graveyard'));
   const chosen = new Set(table.selection.chosen.map((r) => r?.card).filter((x): x is number => x != null));
-  hud.setBrowser(
-    offTable.length ? offTable.map((id) => s.cards[id]) : null,
-    chosen,
-    table.prompt.message ?? '',
-    (id) => bridge.act({ action: 'card', id }),
-  );
+  const p = table.prompt;
+  const cards = offTable.map((id) => s.cards[id]);
+  // (the prompt's card, or the spell being cast, which is on its way to the stack)
+  const name = /^(.+?)(?: \(\d+\))?(?: - |\n)/.exec(p.message ?? '')?.[1];
+  const source = (p.card != null ? s.cards[p.card] : undefined) ?? Object.values(s.cards).find((c) => c.visible && c.name === name && c.zone !== 'Library') ?? null;
+  hud.setBrowser(cards.length ? { cards, chosen, max: table.selection.max, prompt: p, state: s, localId: table.localId, source } : null, (id) => {
+    const c = s.cards[id];
+    // one from each player: picking another of theirs takes the first one back
+    if (p.onePer === 'player' && !chosen.has(id)) {
+      const had = cards.find((x) => chosen.has(x.id) && x.owner === c.owner);
+      if (had) bridge.act({ action: 'card', id: had.id });
+    }
+    bridge.act({ action: 'card', id });
+  });
 }
 
 async function handle(msg: ServerMsg): Promise<void> {
   switch (msg.type) {
+    case 'talk':
+      talk.add(msg);
+      break;
     case 'starting':
       hud.loading(`Shuffling up…\n${msg.decks.join('  vs  ')}`);
       break;
@@ -469,7 +481,7 @@ async function applyUpdate(msg: UpdateMsg): Promise<void> {
 
 async function answer(req: RequestMsg): Promise<void> {
   if (req.kind !== 'reveal' || req.options?.length) sfx.chime();
-  const value = await hud.request(req, table.state);
+  const value = await hud.request(req, table.state, table.localId);
   bridge.respond(req.id, value);
 }
 
@@ -491,7 +503,7 @@ function startGame(setup: GameSetup): void {
   hud.loading('Starting game…');
   // the API key goes along only when an opponent has a gameplan (one the setup screen didn't get to translate)
   const planned = setup.decks.some((d, i) => i > 0 && d?.gameplan);
-  bridge.start(setup.format, setup.players, undefined, setup.decks, setup.names, planned ? claudeKey() || undefined : undefined);
+  bridge.start(setup.format, setup.players, undefined, setup.decks, setup.names, planned || setup.talk ? claudeKey() || undefined : undefined, !!setup.talk);
 }
 
 const deckSetup = new DeckSetup(document.getElementById('hud')!, bridge);
@@ -510,6 +522,7 @@ function exitToMenu(): void {
 
 /** Clear the table and the game HUD (the game is over, abandoned, or left). */
 function leaveTable(): void {
+  talk.clear();
   inGame = false;
   document.body.classList.remove('in-game');
   sfx.stopMusic();
@@ -574,6 +587,13 @@ bridge.onClosed((reason) => {
 
 bridge.onMessage((msg) => {
   if (msg.type === 'pong') return;
+  // conversation doesn't wait behind the table's animations (a remark on the game does, so it can't give away
+  // what hasn't been shown yet)
+  if (msg.type === 'starting') talk.clear();
+  if (msg.type === 'talkState') return talk.start(msg.lines, msg.deals);
+  if (msg.type === 'deals') return talk.deals(msg.deals);
+  if (msg.type === 'offer') return talk.settle(msg.id, msg.state);
+  if (msg.type === 'talk' && (msg.human || msg.reply)) return talk.add(msg);
   queue.push(msg);
   void drain();
 });
@@ -955,6 +975,11 @@ function handTopFromBottom(): number {
   const halfH = Math.tan(THREE.MathUtils.degToRad(stage.camera.fov / 2)) * HAND.distance;
   return (0.5 + top / halfH / 2) * window.innerHeight + 6;
 }
+
+/** Tabletalk: bubbles at the badges and the chat at the lower left, in a game that has it on. */
+const talk = new TableTalk(document.getElementById('hud')!, (id) => hud.badgeCenter(id), (id) => id === table.localId, (text) => bridge.talk(text), (id, accept) => bridge.answerOffer(id, accept),
+  () => ({ id: table.localId, name: table.state?.players.find((p) => p.id === table.localId)?.name ?? 'You' }));
+stage.onTick(() => talk.follow());
 
 // player plates track their table anchors every frame
 stage.onTick(() => {

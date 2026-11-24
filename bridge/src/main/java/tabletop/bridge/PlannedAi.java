@@ -61,6 +61,11 @@ public final class PlannedAi extends LobbyPlayerAi {
         return ai;
     }
 
+    /** An AI without a gameplan that can be held to deals made at the table (Tabletalk): Forge's own play otherwise. */
+    static PlannedAi forTable(final String name, final int seat) {
+        return create(name, seat, new Gameplan.Plan("", "balanced", false, List.of()));
+    }
+
     @Override
     public Player createIngamePlayer(final Game game, final int id) {
         final Player ai = new Player(getName(), game, id);
@@ -82,6 +87,27 @@ public final class PlannedAi extends LobbyPlayerAi {
             super(game, p, lp);
             this.plan = plan;
             for (final Gameplan.CardHint h : plan.cards()) hints.put(key(h.name()), h);
+            holdToDeals(game, p);
+        }
+
+        /**
+         * Deals made at the table (Tabletalk): a play aimed at a player this AI promised to leave alone is turned
+         * down as the AI weighs it, so it picks something else. Forge keeps its decision maker in a private field.
+         */
+        private void holdToDeals(final Game game, final Player p) {
+            try {
+                final java.lang.reflect.Field f = PlayerControllerAi.class.getDeclaredField("brains");
+                f.setAccessible(true);
+                f.set(this, new forge.ai.AiController(p, game) {
+                    @Override
+                    public forge.ai.AiPlayDecision canPlaySa(final SpellAbility sa) {
+                        final forge.ai.AiPlayDecision d = super.canPlaySa(sa);
+                        return d == forge.ai.AiPlayDecision.WillPlay && TableTalk.forbidsTarget(player, sa) ? forge.ai.AiPlayDecision.AnotherTime : d;
+                    }
+                });
+            } catch (final ReflectiveOperationException | RuntimeException e) {
+                System.err.println("[tabletalk] promises about targets can't be held to: " + e);
+            }
         }
 
         private static String key(final String name) {
@@ -164,6 +190,7 @@ public final class PlannedAi extends LobbyPlayerAi {
         public void declareAttackers(final Player attacker, final Combat combat) {
             refresh();
             super.declareAttackers(attacker, combat);
+            keepAttackDeals(combat);
             for (final Card c : new ArrayList<>(combat.getAttackers())) {
                 if (!isProtected(c)) continue;
                 final GameEntity def = combat.getDefenderByAttacker(c);
@@ -172,6 +199,58 @@ public final class PlannedAi extends LobbyPlayerAi {
                     combat.removeFromCombat(c);
                     log("" + player.getName() + " keeps " + c.getName() + " home (it would die attacking)");
                 }
+            }
+        }
+
+        /**
+         * Attackers sent at somebody this AI promised not to attack go at another opponent instead, when that isn't
+         * throwing them away, or stay home; with a promise to attack somebody, the attack goes there. A creature
+         * that has to attack keeps to the rules before the deal.
+         */
+        private void keepAttackDeals(final Combat combat) {
+            final Player urged = TableTalk.urgedAt(player);
+            boolean changed = false;
+            final java.util.Map<Card, GameEntity> before = new java.util.LinkedHashMap<>();
+            for (final Card c : combat.getAttackers()) before.put(c, combat.getDefenderByAttacker(c));
+            for (final java.util.Map.Entry<Card, GameEntity> e : before.entrySet()) {
+                final Card c = e.getKey();
+                final GameEntity def = e.getValue();
+                final Player at = def instanceof Player p ? p : def instanceof Card card ? card.getController() : null;
+                Player to = null;
+                final boolean forbidden = TableTalk.forbidsAttack(player, at);
+                if (urged != null && at != urged && forge.game.combat.CombatUtil.canAttack(c, urged)) {
+                    to = urged;
+                } else if (forbidden) {
+                    for (final Player p : player.getOpponents()) {
+                        if (p != at && !p.hasLost() && !TableTalk.forbidsAttack(player, p) && forge.game.combat.CombatUtil.canAttack(c, p)
+                                && !ComputerUtilCard.canBeBlockedProfitably(p, c, true)) {
+                            to = p;
+                            break;
+                        }
+                    }
+                } else {
+                    continue;
+                }
+                if (to == null && !forbidden) continue;
+                combat.removeFromCombat(c);
+                if (to != null) combat.addAttacker(c, to);
+                changed = true;
+                log(player.getName() + (to != null ? " sends " + c.getName() + " at " + to.getName() : " keeps " + c.getName() + " home") + " (deal)");
+            }
+            if (urged != null && combat.getAttackersOf(urged).isEmpty()) {
+                for (final Card c : player.getCreaturesInPlay()) {
+                    if (!combat.isAttacking(c) && !isProtected(c) && forge.game.combat.CombatUtil.canAttack(c, urged) && !ComputerUtilCard.canBeBlockedProfitably(urged, c, true)) {
+                        combat.addAttacker(c, urged);
+                        changed = true;
+                        log(player.getName() + " sends " + c.getName() + " at " + urged.getName() + " (deal)");
+                    }
+                }
+            }
+            if (changed && !forge.game.combat.CombatUtil.validateAttackers(combat)) {
+                // not a legal attack (something must attack): Forge's own stands
+                for (final Card c : new ArrayList<>(combat.getAttackers())) combat.removeFromCombat(c);
+                before.forEach(combat::addAttacker);
+                log(player.getName() + " has to attack as it was (deal set aside)");
             }
         }
 

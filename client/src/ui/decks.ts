@@ -1,7 +1,7 @@
 import type { DeckInfo, GameplanInfo, LobbyDeckInfo, PreconInfo, SeatDeckSpec } from '../protocol';
 import type { Bridge } from '../net';
 import { cardArtUrl } from '../scene/textures';
-import { buildIn, buildOut, closeModal } from './buildin';
+import { askYes, buildIn, buildOut, closeModal } from './buildin';
 
 /**
  * Game setup: a name and a deck for every seat: a random Forge precon, a precon you pick (by commander),
@@ -32,6 +32,8 @@ export interface GameSetup {
   decks: (SeatDeckSpec | null)[];
   /** what each seat is called (index 0 is you) */
   names: string[];
+  /** Tabletalk: the AI opponents chat, and can be talked to */
+  talk?: boolean;
 }
 
 const PRECON = 'precon:';
@@ -90,6 +92,28 @@ function setGameplan(choice: string, text: string): void {
 export function claudeKey(): string {
   return load<string>(CLAUDE_KEY, '');
 }
+const TALK_KEY = 'mtg-tabletop.tabletalk';
+export function tabletalkOn(): boolean {
+  return load<boolean>(TALK_KEY, false);
+}
+export function setTabletalk(on: boolean): void {
+  save(TALK_KEY, on);
+}
+
+/** The Tabletalk choice, as on both setup screens. */
+export function tabletalkRow(on: boolean, onChange: (on: boolean) => void): HTMLElement {
+  const row = h('label', 'talk-option');
+  const box = h('input');
+  box.type = 'checkbox';
+  box.id = 'tabletalk-option';
+  box.checked = on;
+  box.onchange = () => onChange(box.checked);
+  const text = h('span', 'talk-option-text');
+  text.append(h('b', '', 'Tabletalk'), h('span', '', 'AI opponents chat, and you can bargain with them. Uses your Claude API key during the game.'));
+  row.append(box, text);
+  return row;
+}
+
 const seatsKey = (format: Format, players: number) => `mtg-tabletop.seats.${format}.${players}`;
 
 function load<T>(key: string, fallback: T): T {
@@ -257,9 +281,20 @@ export class DeckSetup {
         ov.append(seats);
 
         // the Claude API key gameplans need, reachable without opening a gameplan first
+        const talkRow = tabletalkRow(tabletalkOn(), async (on) => {
+          setTabletalk(on);
+          // it talks through Claude: without a key there's nothing to say
+          if (on && !claudeKey()) {
+            await this.keyEditor();
+            setTabletalk(!!claudeKey());
+          }
+          render();
+        });
+        ov.append(talkRow);
+
         const keyLine = h('div', 'setup-key');
         const keySet = !!claudeKey();
-        keyLine.append(h('span', '', keySet ? 'Claude API key saved' : 'Opponents’ gameplans use Claude.'));
+        keyLine.append(h('span', '', keySet ? 'Claude API key saved' : 'Tabletalk and opponents’ gameplans use Claude.'));
         const keyBtn = h('button', 'link-btn', keySet ? 'Change' : 'Add your API key…');
         keyBtn.onclick = async () => {
           await this.keyEditor();
@@ -285,7 +320,7 @@ export class DeckSetup {
             const t = n.trim();
             return t && a.findIndex((x) => x.trim().toLowerCase() === t.toLowerCase()) === i && t.toLowerCase() !== 'you' ? t : `AI ${i + 1}`;
           })];
-          close({ format, players: count, decks, names: seatNames });
+          close({ format, players: count, decks, names: seatNames, talk: tabletalkOn() });
         };
         actions.append(back, start);
         ov.append(actions);
@@ -299,7 +334,7 @@ export class DeckSetup {
           buildIn(rows, 0.24, 0.08);
           buildIn(rows.map((r) => r.querySelector('.seat-badge')), 0.42, 0.08);
           const after = 0.24 + rows.length * 0.08 + 0.06;
-          buildIn([keyLine, actions], after, 0.07);
+          buildIn([talkRow, keyLine, actions], after, 0.07);
         } else if (anim === 'seats') {
           buildIn(rows, 0, 0.05);
         }
@@ -384,7 +419,7 @@ export class DeckSetup {
   }
 
   /** Set, change or remove the Claude API key (kept in this browser; the local rules engine uses it). */
-  private keyEditor(): Promise<void> {
+  keyEditor(): Promise<void> {
     return new Promise((resolve) => {
       const modal = h('div', 'modal deck-modal');
       const box = h('div', 'modal-panel gameplan-panel');
@@ -394,7 +429,7 @@ export class DeckSetup {
       };
       box.append(
         h('div', 'modal-title', 'Claude API key'),
-        h('div', 'modal-sub', 'Opponents’ gameplans are turned into AI settings by Claude, once per deck and gameplan (a few cents each; the result is saved). Create a key at console.anthropic.com → API Keys.'),
+        h('div', 'modal-sub', 'Claude speaks for your opponents in Tabletalk (a request each time they talk, so it adds up over a long game), and turns their gameplans into AI settings (once per deck and gameplan; the result is saved). Usage is billed to your key. Create a key at console.anthropic.com → API Keys.'),
       );
       const input = h('input', 'paste-name');
       input.type = 'password';
@@ -663,9 +698,9 @@ export class DeckSetup {
           };
           const del = h('button', 'deck-x del', '×');
           del.title = 'Delete deck';
-          del.onclick = (e) => {
+          del.onclick = async (e) => {
             e.stopPropagation();
-            if (!confirm(`Delete "${d.name}"?`)) return;
+            if (!(await askYes(this.root, `Delete “${d.name}”?`, 'The saved list is removed from this device.', 'Delete'))) return;
             deleteDeck(d.id);
             if (current === d.id) current = null;
             void render();

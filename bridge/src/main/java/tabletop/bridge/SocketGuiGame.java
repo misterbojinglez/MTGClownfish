@@ -183,8 +183,13 @@ public class SocketGuiGame extends AbstractGuiGame {
         if (getGameController() instanceof forge.player.PlayerControllerHuman pch) {
             // Pass Turn is in effect (the button offers to take it back), and whether what's being aimed would hurt
             promptOut.addProperty("passing", pch.getYieldController().isYieldActive());
-            if (pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputSelectTargets t && harmful(t)) {
-                promptOut.addProperty("harmful", true);
+            if (pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputSelectTargets t) {
+                final forge.game.spellability.SpellAbility sa = targeting(t);
+                if (harmful(sa)) promptOut.addProperty("harmful", true);
+                // "for each player, up to one ..." / "... controlled by different players" / "... from a single graveyard"
+                final forge.game.spellability.TargetRestrictions tr = sa == null ? null : sa.getTargetRestrictions();
+                if (tr != null && (tr.isForEachPlayer() || tr.isDifferentControllers())) promptOut.addProperty("onePer", "player");
+                if (tr != null && tr.isSameController()) promptOut.addProperty("samePlayer", true);
             }
         }
         final JsonObject selection = Serializer.selection(getSelection());
@@ -666,16 +671,20 @@ public class SocketGuiGame extends AbstractGuiGame {
             forge.game.ability.ApiType.DealDamage, forge.game.ability.ApiType.LoseLife, forge.game.ability.ApiType.Discard,
             forge.game.ability.ApiType.Poison, forge.game.ability.ApiType.Sacrifice, forge.game.ability.ApiType.LosesGame);
 
-    /** Whether the spell or ability being aimed is bad for the player it's aimed at. */
-    private static boolean harmful(final forge.gamemodes.match.input.InputSelectTargets input) {
+    /** The spell or ability being aimed. */
+    private static forge.game.spellability.SpellAbility targeting(final forge.gamemodes.match.input.InputSelectTargets input) {
         try {
             final java.lang.reflect.Field f = forge.gamemodes.match.input.InputSelectTargets.class.getDeclaredField("sa");
             f.setAccessible(true);
-            final forge.game.spellability.SpellAbility sa = (forge.game.spellability.SpellAbility) f.get(input);
-            return sa != null && sa.getApi() != null && (HARMFUL.contains(sa.getApi()) || sa.isCurse());
+            return (forge.game.spellability.SpellAbility) f.get(input);
         } catch (final ReflectiveOperationException | RuntimeException e) {
-            return false;
+            return null;
         }
+    }
+
+    /** Whether the spell or ability being aimed is bad for the player it's aimed at. */
+    private static boolean harmful(final forge.game.spellability.SpellAbility sa) {
+        return sa != null && sa.getApi() != null && (HARMFUL.contains(sa.getApi()) || sa.isCurse());
     }
 
     private static <T> JsonObject option(final T item, final FSerializableFunction<T, String> display) {
@@ -852,6 +861,22 @@ public class SocketGuiGame extends AbstractGuiGame {
         for (final CardView c : shown) {
             if (out.size() >= min) { break; }
             if (legal.contains(c) && !out.contains(c)) { out.add(c); }
+        }
+        return out;
+    }
+
+    /** One from each player's cards (Breach the Multiverse), all in one dialog with a section per player. */
+    List<CardView> pickOnePerPlayer(final String message, final List<CardView> cards, final int min, final int max) {
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", message);
+        req.addProperty("min", min);
+        req.addProperty("max", max);
+        req.addProperty("onePer", "player");
+        req.add("options", options(cards, null, true));
+        final List<CardView> out = new ArrayList<>();
+        final java.util.Set<Integer> owners = new java.util.HashSet<>();
+        for (final int i : indices(ask("choose", req))) {
+            if (i >= 0 && i < cards.size() && owners.add(cards.get(i).getOwner().getId())) { out.add(cards.get(i)); }
         }
         return out;
     }

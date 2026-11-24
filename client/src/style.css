@@ -931,45 +931,95 @@ button {
   position: absolute;
   left: 0;
   right: var(--zoom-room);
-  top: 10%;
-  bottom: 22%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  background: radial-gradient(ellipse at center, rgba(8, 6, 14, 0.88), rgba(8, 6, 14, 0.6) 70%, transparent);
+  top: 92px;
+  bottom: 60px;
+  display: grid;
+  place-items: center;
+  padding-left: 16px;
+  pointer-events: none;
   animation: fadein 0.18s;
   z-index: 5;
 }
 
-.browser-title {
-  font-family: var(--display, Alegreya, Georgia, serif);
-  font-size: 19px;
-  max-width: 900px;
-  text-align: center;
-  white-space: pre-line;
-  text-shadow: 0 2px 6px #000;
+.browser-panel.modal-panel {
+  pointer-events: auto;
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: 100%;
+  min-width: min(520px, 100%);
+  gap: 12px;
+  padding: 18px 22px;
+}
+
+.browser-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.modal-panel > .browser-body {
+  flex: 0 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: stretch;
+  gap: 14px;
+  max-width: 100%;
+  padding: 4px;
+}
+
+.browser-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.browser-group:has(> .pile-head) {
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(214, 178, 94, 0.3);
+  background: rgba(8, 6, 14, 0.45);
+}
+
+.browser-group.done {
+  border-color: rgba(168, 214, 255, 0.7);
 }
 
 .browser-cards {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   max-width: 100%;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px 20px;
+  padding: 6px 4px 2px;
 }
 
 .browser-cards.many .thumb {
-  width: 122px;
+  width: 114px;
 }
 
 .browser-cards .thumb {
   flex: 0 0 auto;
-  width: 176px;
+  width: 160px;
+}
+
+.browser-cards .thumb.waiting img {
+  filter: brightness(0.55) saturate(0.6);
+}
+
+.browser.peek > .browser-panel {
+  visibility: hidden;
+}
+
+.browser > .peek-btn {
+  pointer-events: auto;
+  left: calc((100vw - var(--zoom-room)) / 2);
 }
 
 /* ---- opponent cast reveal ---- */
@@ -2982,4 +3032,408 @@ button {
   font-weight: 700;
   color: #f5dc9a;
   padding-top: 6px;
+}
+
+/* ---- Tabletalk ---- */
+.talk-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(214, 178, 94, 0.35);
+  background: rgba(13, 16, 23, 0.7);
+}
+
+.talk-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: #3b8cff;
+}
+
+.talk-option-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.talk-option-text b {
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 17px;
+  color: #f5dc9a;
+}
+
+.talk {
+  display: none;
+  position: absolute;
+  left: 14px;
+  /* above your commander's slot, which scales with the window's height */
+  bottom: 30vh;
+  z-index: 4;
+  width: clamp(190px, 17vw, 290px);
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(217, 180, 95, 0.4);
+  background: rgba(10, 13, 20, 0.86);
+  pointer-events: auto;
+  /* at rest it lets the table show through; it comes forward when somebody speaks, and while you use it */
+  opacity: 0.34;
+  transition: opacity 0.35s;
+}
+
+.talk.lively,
+.talk.offered,
+.talk:hover,
+.talk:focus-within {
+  opacity: 1;
+}
+
+body.in-game .talk.show {
+  display: flex;
+}
+
+.talk-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.talk-title {
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 15px;
+  font-weight: 700;
+  color: #f5dc9a;
+}
+
+.talk-toggle {
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.talk-toggle:hover {
+  color: var(--text);
+}
+
+.talk.closed {
+  width: auto;
+  padding: 4px 10px;
+}
+
+.talk.closed .talk-head {
+  gap: 10px;
+}
+
+.talk.closed > :not(.talk-head) {
+  display: none;
+}
+
+.talk-log {
+  max-height: min(170px, 19vh);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.talk-line b {
+  color: #ffd68a;
+}
+
+.talk-line.human b {
+  color: #ff9c88;
+}
+
+.talk-line.system {
+  color: #a8d6ff;
+  font-style: italic;
+}
+
+.talk-deals:empty {
+  display: none;
+}
+
+.talk-deals {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.talk-deal {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.3;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(59, 140, 255, 0.16);
+  border: 1px solid rgba(168, 214, 255, 0.35);
+}
+
+.talk-left {
+  white-space: nowrap;
+  color: #a8d6ff;
+}
+
+.talk-input {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(214, 178, 94, 0.4);
+  background: #0d0b12;
+  color: var(--text);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.talk-bubble {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  width: max-content;
+  max-width: 250px;
+  padding: 9px 13px;
+  border-radius: 12px;
+  border: 1.5px solid #d9b45f;
+  background: #f4ead2;
+  color: #22190c;
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 16px;
+  line-height: 1.25;
+  pointer-events: none;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.55);
+  overflow-wrap: anywhere;
+  transition: opacity 0.25s;
+}
+
+.talk-bubble.me {
+  background: #ffe1d6;
+  border-color: #ec6a50;
+}
+
+.talk-bubble::after {
+  content: '';
+  position: absolute;
+  left: var(--tail, 50%);
+  bottom: -8px;
+  width: 13px;
+  height: 13px;
+  margin-left: -7px;
+  background: inherit;
+  border: solid #d9b45f;
+  border-color: inherit;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.talk-bubble.below::after {
+  bottom: auto;
+  top: -8px;
+  transform: rotate(225deg);
+}
+
+.talk-bubble.pop {
+  animation: fadein 0.2s;
+}
+
+.talk-bubble.out {
+  opacity: 0;
+}
+
+.modal.ask {
+  z-index: 30;
+}
+
+.modal.ask .modal-panel {
+  max-width: min(460px, 92vw);
+}
+
+/* mana and tap symbols in text */
+.sym {
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0 0.08em;
+  vertical-align: -0.12em;
+}
+
+/* ---- every dialog keeps its title and buttons in view: only the part between them scrolls ---- */
+.modal:has(> .peek-btn) {
+  box-sizing: border-box;
+  padding: 12px 0 62px;
+}
+
+.modal:has(> .peek-btn) > .modal-panel {
+  max-height: calc(100vh - 78px);
+}
+
+.modal-panel > .modes,
+.modal-panel > .distribute,
+.modal-panel > .damage-board,
+.modal-panel > .settings-rows {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* each pile's button stays with it, whatever the window's height: its cards scroll */
+.modal-panel > .piles {
+  overflow: hidden;
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.pile-option {
+  min-height: 0;
+}
+
+.piles > .pile-option > .pile-cards {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pile-pick,
+.pile-head {
+  flex-shrink: 0;
+}
+
+.lanes.three .pile-cards .thumb {
+  width: 88px;
+}
+
+.thumb .sym {
+  display: inline-block;
+  width: 0.95em;
+  border-radius: 0;
+}
+
+.modal.settings .modal-panel {
+  overflow: hidden;
+}
+
+.modal.settings .settings-rows {
+  padding-right: 8px;
+  box-sizing: border-box;
+}
+
+@media (max-height: 720px) {
+  .modal-panel {
+    gap: 10px;
+    padding: 14px 18px;
+  }
+
+  .modal:has(> .peek-btn) {
+    padding: 6px 0 50px;
+  }
+
+  .modal:has(> .peek-btn) > .modal-panel {
+    max-height: calc(100vh - 60px);
+  }
+
+  .peek-btn {
+    bottom: 8px;
+    padding: 5px 16px;
+    font-size: 14px;
+  }
+
+  .browser {
+    top: 12px;
+    bottom: 50px;
+  }
+
+  .modal-panel > .source-header {
+    padding-block: 6px;
+  }
+
+  .lane {
+    min-height: 200px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .lane {
+    min-width: 0;
+  }
+}
+
+.modal-panel > .piles {
+  flex: 0 1 auto;
+}
+
+.lanes.three .lane-card {
+  width: 92px;
+}
+
+.lanes.three .lane-to {
+  flex-direction: column;
+  align-self: stretch;
+}
+
+/* your own line, until the table has it */
+.talk-line.sending {
+  opacity: 0.65;
+}
+
+.talk-offer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: 12.5px;
+}
+
+.talk-thumb {
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1.5px solid rgba(168, 214, 255, 0.5);
+  background: rgba(59, 140, 255, 0.16);
+  color: #a8d6ff;
+  cursor: pointer;
+}
+
+.talk-thumb svg {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+}
+
+.talk-thumb.down svg {
+  transform: rotate(180deg);
+}
+
+.talk-thumb.up:hover,
+.talk-thumb.up:focus-visible {
+  background: #1f7a3d;
+  border-color: #59d97a;
+  color: #eafff0;
+}
+
+.talk-thumb.down:hover,
+.talk-thumb.down:focus-visible {
+  background: #8a2a1c;
+  border-color: #ec6a50;
+  color: #ffeae5;
+}
+
+.talk-thumb:disabled {
+  opacity: 0.4;
 }

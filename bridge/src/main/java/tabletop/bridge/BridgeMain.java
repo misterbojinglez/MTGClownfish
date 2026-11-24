@@ -150,6 +150,8 @@ public final class BridgeMain {
                 }
             }
             case "action" -> FThreads.invokeInEdtLater(() -> handleAction(c, msg));
+            case "talk" -> { if (msg.has("text") && msg.get("text").isJsonPrimitive()) TableTalk.onChat(c, msg.get("text").getAsString()); }
+            case "offer" -> { if (msg.has("id") && msg.has("accept")) TableTalk.onOffer(c, msg.get("id").getAsInt(), msg.get("accept").getAsBoolean()); }
             case "options" -> {
                 if (msg.has("options") && msg.get("options").isJsonObject()) {
                     c.options = msg.getAsJsonObject("options");
@@ -183,20 +185,20 @@ public final class BridgeMain {
             }
             seats.add(new SeatSetup(i == 0 ? c : null, i == 0 ? "You" : seatName(msg, i), spec));
         }
-        launch(seats, commander, msg.has("apiKey") && msg.get("apiKey").isJsonPrimitive() ? msg.get("apiKey").getAsString() : null, c);
+        launch(seats, commander, msg.has("apiKey") && msg.get("apiKey").isJsonPrimitive() ? msg.get("apiKey").getAsString() : null, c, msg.has("talk") && msg.get("talk").getAsBoolean());
     }
 
     /** Start a game: people in their seats (each with their own view), AI opponents in the rest. */
-    static void launch(final List<SeatSetup> seats, final boolean commander, final String apiKey, final Client host) {
-        launch(seats, commander, apiKey, host, null);
+    static void launch(final List<SeatSetup> seats, final boolean commander, final String apiKey, final Client host, final boolean talk) {
+        launch(seats, commander, apiKey, host, null, talk);
     }
 
     /** The last game started, so it can be restarted: its seats, format and the decks each seat played. */
-    private record LastGame(List<SeatSetup> seats, boolean commander, String apiKey, Client host, List<Deck> decks) { }
+    private record LastGame(List<SeatSetup> seats, boolean commander, String apiKey, Client host, List<Deck> decks, boolean talk) { }
     private static volatile LastGame lastGame;
 
     /** decks: the exact decks to play (a restart, so random precons come out the same), or null to build them */
-    private static void launch(final List<SeatSetup> seats, final boolean commander, final String apiKey, final Client host, final List<Deck> decks) {
+    private static void launch(final List<SeatSetup> seats, final boolean commander, final String apiKey, final Client host, final List<Deck> decks, final boolean talk) {
         final GameType gameType = commander ? GameType.Commander : GameType.Constructed;
         stopGame();
         BridgeHumanPlayer.resetAll();
@@ -207,6 +209,7 @@ public final class BridgeMain {
         final List<Client> people = new ArrayList<>();
         final JsonArray deckNames = new JsonArray();
         final List<Deck> played = new ArrayList<>();
+        final java.util.Set<String> ais = new java.util.LinkedHashSet<>();
         for (int i = 0; i < seats.size(); i++) {
             final SeatSetup seat = seats.get(i);
             final JsonObject spec = seat.spec();
@@ -233,13 +236,14 @@ public final class BridgeMain {
             } else {
                 // an opponent with a gameplan plays to it (made now if it isn't cached from the setup screen)
                 final Gameplan.Plan plan = spec != null ? seatPlan(spec, deck, seat.name(), apiKey) : null;
-                rp.setPlayer(plan != null ? PlannedAi.create(seat.name(), i, plan) : GamePlayerUtil.createAiPlayer(seat.name(), i));
+                rp.setPlayer(plan != null ? PlannedAi.create(seat.name(), i, plan) : talk ? PlannedAi.forTable(seat.name(), i) : GamePlayerUtil.createAiPlayer(seat.name(), i));
             }
+            if (seat.human() == null) ais.add(seat.name());
             deckNames.add(deck.getName());
             played.add(deck);
             players.add(rp);
         }
-        lastGame = new LastGame(List.copyOf(seats), commander, apiKey, host, List.copyOf(played));
+        lastGame = new LastGame(List.copyOf(seats), commander, apiKey, host, List.copyOf(played), talk);
 
         final JsonObject starting = new JsonObject();
         starting.addProperty("type", "starting");
@@ -253,18 +257,23 @@ public final class BridgeMain {
         final HostedMatch thisMatch = match;
         GameRecord.begin(gameType.name(), players.size());
         final List<SocketGuiGame> views = people.stream().map(p -> p.gui).toList();
-        match.setStartGameHook(() -> match.getGame().subscribeToEvents(new Object() {
+        match.setStartGameHook(() -> {
+            if (talk) TableTalk.begin(match.getGame(), List.copyOf(people), ais, apiKey);
+            match.getGame().subscribeToEvents(new Object() {
             @Subscribe
             public void receiveGameEvent(final GameEvent event) {
                 for (final SocketGuiGame v : views) v.onGameEvent(event);
                 final JsonObject countered = Counters.watch(thisMatch.getGame(), event);
                 if (countered != null) for (final SocketGuiGame v : views) v.onExtraEvent(countered);
+                if (countered != null) TableTalk.onCounter(thisMatch.getGame());
+                TableTalk.onEvent(thisMatch.getGame(), event);
                 GameRecord.onEvent(match.getGame(), event);
                 // an online table goes back to its lobby (players leave the game-over screen when they like)
                 // (only while it's still the current game: one that was replaced by a restart is winding down)
                 if (event instanceof forge.game.event.GameEventGameOutcome && thisMatch == match) Lobby.gameOver();
             }
-        }));
+            });
+        });
         final GameRules rules = new GameRules(gameType);
         rules.setAppliedVariants(EnumSet.of(gameType));
         rules.setGamesPerMatch(1);
@@ -273,6 +282,7 @@ public final class BridgeMain {
 
     /** End the current game, if one is running (everyone's open questions are dropped). */
     static void stopGame() {
+        TableTalk.end();
         // nothing more from this game reaches its players, whatever its thread still does on the way out
         for (final Client p : inGame) if (p.gui != null) p.gui.detach();
         if (match != null && match.getGame() != null && !match.getGame().isGameOver()) {
@@ -423,7 +433,7 @@ public final class BridgeMain {
         System.out.println("[bridge] restarting the match");
         restarting = true;
         try {
-            final Runnable again = () -> launch(g.seats(), g.commander(), g.apiKey(), g.host(), g.decks());
+            final Runnable again = () -> launch(g.seats(), g.commander(), g.apiKey(), g.host(), g.decks(), g.talk());
             if (!Lobby.restart(again)) again.run();
         } finally {
             restarting = false;

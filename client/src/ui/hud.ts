@@ -32,8 +32,29 @@ const PHASE_GROUPS = ['UPKEEP', 'DRAW', 'MAIN1', 'COMBAT_DECLARE_ATTACKERS', 'CO
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   if (cls) el.className = cls;
-  if (text !== undefined) el.textContent = text;
+  if (text !== undefined) setText(el, text);
   return el;
+}
+
+/** Text with mana and tap symbols ("{2}{B}", "{T}") drawn as symbols; a name no picture exists for stays as text. */
+function setText(el: HTMLElement, text: string): void {
+  if (!/\{[^{}\s]{1,5}\}/.test(text)) {
+    el.textContent = text;
+    return;
+  }
+  const parts: (Node | string)[] = [];
+  let at = 0;
+  for (const m of text.matchAll(/\{([^{}\s]{1,5})\}/g)) {
+    parts.push(text.slice(at, m.index));
+    at = m.index + m[0].length;
+    const img = document.createElement('img');
+    img.className = 'sym';
+    img.alt = m[0];
+    img.src = `https://svgs.scryfall.io/card-symbols/${encodeURIComponent(m[1].replace(/\//g, '').toUpperCase())}.svg`;
+    img.onerror = () => img.replaceWith(m[0]);
+    parts.push(img);
+  }
+  el.replaceChildren(...parts, text.slice(at));
 }
 
 export interface ViewBarState {
@@ -47,6 +68,59 @@ export interface ViewBarHandlers {
   table(): void;
   seat(id: number): void;
   auto(on: boolean): void;
+}
+
+/** What the card browser shows: the cards offered, what's picked, and the prompt asking. */
+export interface BrowserView {
+  cards: CardState[];
+  chosen: Set<number>;
+  max: number;
+  prompt: Prompt;
+  state: GameState;
+  localId: number;
+  /** the card whose spell or ability is asking, when it's known */
+  source: CardState | null;
+}
+
+const ZONE_NAME: Record<string, string> = { Graveyard: 'graveyard', Exile: 'exile', Hand: 'hand', Library: 'library', Command: 'command zone' };
+
+/** The browser's cards by whose they are and where, yours first, then the others in turn order. */
+function groupCards(cards: CardState[], state: GameState, localId: number): { key: string; label: string; cards: CardState[] }[] {
+  const players = state.players;
+  const mine = players.findIndex((p) => p.id === localId);
+  const seat = (id: number | null | undefined) => {
+    const i = players.findIndex((p) => p.id === id);
+    return i < 0 ? 99 : (i - mine + players.length) % players.length;
+  };
+  const groups = new Map<string, { key: string; label: string; cards: CardState[]; at: number }>();
+  for (const c of cards) {
+    const who = c.zone === 'Battlefield' || c.zone === 'Stack' ? c.controller : c.owner ?? c.controller;
+    const key = `${who}-${c.zone}`;
+    let g = groups.get(key);
+    if (!g) {
+      const p = players.find((x) => x.id === who);
+      const zone = ZONE_NAME[c.zone ?? ''] ?? (c.zone ?? 'cards').toLowerCase();
+      const whose = who === localId ? 'Your' : p ? `${p.name}’s` : 'Other';
+      g = { key, label: `${whose} ${zone}`, cards: [], at: seat(who) };
+      groups.set(key, g);
+    }
+    g.cards.push(c);
+  }
+  return [...groups.values()].sort((a, b) => a.at - b.at);
+}
+
+/** Forge's prompt in parts: "Name (2) - what it does", then what's being asked, without its counts. */
+function readPrompt(raw: string): { name: string; text: string; ask: string } {
+  const paras = tidyMessage(raw).split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const drop = (p: string) => p.split('\n').filter((l) => !/more can be targeted|^Targeted:|^Parent Targeted/.test(l));
+  const m = /^([^\n]{1,60}?) - ([\s\S]+)$/.exec(paras[0] ?? '');
+  if (m && paras.length > 1) {
+    // (the lines after "Targeted:" name the picks, which the cards themselves show)
+    const ask = paras[1].split(/\nTargeted:/)[0];
+    return { name: m[1], text: m[2], ask: drop(ask).join('\n') || 'Choose' };
+  }
+  if (paras.length > 1 && paras[0].length < 60) return { name: paras[0], text: '', ask: drop(paras.slice(1).join('\n')).join('\n') };
+  return { name: '', text: '', ask: drop(paras.join('\n').split(/\nTargeted:/)[0]).join('\n') || 'Choose' };
 }
 
 export interface HudHandlers {
@@ -692,14 +766,14 @@ export class Hud {
     else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Drag a creature onto an opponent or their planeswalker, or click your creatures and then who to attack. Drag a box on the table to select several, then drag one of them)';
     else if (prompt.input === 'InputAttack') msg += '\n(Click your creatures, or drag one onto a planeswalker to attack it. Drag a box on the table to select several)';
     else if (prompt.input === 'InputBlock') msg += '\n(Drag a creature onto an attacker to block it. Drag a box on the table to select several, then drag one of them)';
-    this.promptText.textContent = msg;
+    setText(this.promptText, msg);
     this.placeStack();
     const ok = prompt.ok;
     // your priority prompt: Forge's own "End Turn" secondary does what Pass Turn does (minus its guards against
     // stale presses and unseen opponent spells), so it isn't offered, and OK, which passes priority once, says so
     const priority = prompt.input === 'InputPassPriority';
     const cancel = priority && /^end turn$/i.test(prompt.cancel?.label ?? '') ? undefined : prompt.cancel;
-    const okLabel = this.okLabel(prompt, state, localId);
+    const okLabel = this.okLabel(prompt, state, localId, sel);
     // "up to one target" and other choices where nothing is allowed: until something is picked, OK means
     // choosing nothing. Say so, drop the "your move" glow, and keep Space/Enter from doing it by accident
     // (passing through a pile of triggers would otherwise skip Summon: Bahamut's destroy).
@@ -742,7 +816,7 @@ export class Hud {
   }
 
   /** What OK does right now, in words. */
-  private okLabel(prompt: Prompt, state: GameState | null, localId: number): string {
+  private okLabel(prompt: Prompt, state: GameState | null, localId: number, sel: Selection): string {
     const label = prompt.ok?.label ?? '';
     if (!/^OK$/i.test(label)) return label || 'OK';
     if (prompt.input === 'InputAttack' && state) {
@@ -753,7 +827,7 @@ export class Hud {
       const n = this.myBlockers(state, localId).length;
       return n ? `Block with ${n}` : 'No blocks';
     }
-    if (prompt.input !== 'InputPassPriority') return 'OK';
+    if (prompt.input !== 'InputPassPriority') return sel.max > 1 && sel.chosen.length ? `Confirm (${sel.chosen.length})` : 'OK';
     // your turn with nothing waiting: passing moves the turn on
     if (state && state.activePlayer === localId && state.stack.length === 0) {
       const next = NEXT_STEP[state.phase ?? ''];
@@ -1443,38 +1517,112 @@ export class Hud {
 
   private browser: HTMLDivElement | null = null;
   private browserKey = '';
+  private browserPick: (id: number) => void = () => {};
 
   /**
-   * Arena-style browser for selections over cards that aren't on the table (searching a library,
-   * looking at a hand). Clicking a card toggles it through the normal card action; the prompt's
-   * OK / Cancel buttons finish the selection.
+   * Arena-style browser for selections over cards that aren't on the table (looking at a hand, targets in
+   * graveyards). Cards from several graveyards or zones sit in a section each, named for whose they are, with how
+   * many are picked there. Clicking a card toggles it through the normal card action; where only one may come
+   * from each player, picking another swaps it. Its buttons are the prompt's own.
    */
-  setBrowser(cards: CardState[] | null, chosen: Set<number>, title: string, onPick: (id: number) => void): void {
-    if (!cards || cards.length === 0) {
+  setBrowser(view: BrowserView | null, onPick: (id: number) => void): void {
+    if (!view || view.cards.length === 0) {
+      if (this.browser) this.showZoom(null);
       this.browser?.remove();
       this.browser = null;
       this.browserKey = '';
       return;
     }
-    const key = cards.map((c) => c.id).join(',');
+    this.browserPick = onPick;
+    const key = `${view.prompt.inputId}|${view.cards.map((c) => c.id).join(',')}`;
+    const groups = groupCards(view.cards, view.state, view.localId);
     if (!this.browser || key !== this.browserKey) {
       this.browser?.remove();
       this.browserKey = key;
       const ov = h('div', 'browser');
-      const head = h('div', 'browser-title');
-      const row = h('div', cards.length > 8 ? 'browser-cards many' : 'browser-cards');
-      for (const c of cards) {
-        const thumb = this.cardThumb(c);
-        thumb.dataset.id = String(c.id);
-        thumb.onclick = () => onPick(c.id);
-        row.append(thumb);
+      const panel = h('div', 'browser-panel modal-panel');
+      panel.setAttribute('role', 'dialog');
+      const body = h('div', 'browser-body');
+      const many = view.cards.length > 10 || groups.length > 2;
+      for (const g of groups) {
+        const sec = h('div', 'browser-group');
+        sec.dataset.group = g.key;
+        if (groups.length > 1 || view.prompt.onePer) {
+          const head = h('div', 'pile-head');
+          head.append(h('span', 'pile-name', g.label), h('span', 'pile-count'));
+          sec.append(head);
+        }
+        const row = h('div', many ? 'browser-cards many' : 'browser-cards');
+        for (const c of g.cards) {
+          const thumb = this.cardThumb(c);
+          thumb.dataset.id = String(c.id);
+          thumb.append(h('span', 'order-badge'));
+          thumb.onclick = () => this.browserPick(c.id);
+          row.append(thumb);
+        }
+        sec.append(row);
+        body.append(sec);
       }
-      ov.append(head, row);
+      const buttons = h('div', 'modal-buttons');
+      const cancel = h('button', 'sub-btn wide browser-cancel');
+      cancel.onclick = () => this.cancelBtn.click();
+      const ok = h('button', 'main-btn wide browser-ok');
+      ok.onclick = () => this.okBtn.click();
+      buttons.append(cancel, ok);
+      panel.append(h('div', 'browser-head'), body, buttons);
+      const peek = h('button', 'peek-btn', 'View battlefield');
+      peek.onclick = () => {
+        peek.textContent = ov.classList.toggle('peek') ? 'Back to the choice' : 'View battlefield';
+        this.showZoom(null);
+      };
+      ov.append(panel, peek);
       this.root.append(ov);
       this.browser = ov;
     }
-    this.browser.querySelector('.browser-title')!.textContent = title;
-    this.browser.querySelectorAll<HTMLElement>('.thumb').forEach((el) => el.classList.toggle('picked', chosen.has(Number(el.dataset.id))));
+    // what it's for: the spell or ability asking, then what to choose
+    const asked = readPrompt(view.prompt.message ?? '');
+    const head = this.browser.querySelector('.browser-head')!;
+    const headKey = JSON.stringify([asked, view.chosen.size, view.max]);
+    if ((head as HTMLElement).dataset.key !== headKey) {
+      (head as HTMLElement).dataset.key = headKey;
+      const parts: HTMLElement[] = [];
+      if (asked.name) parts.push(this.sourceHeader({ card: view.source?.id ?? null, name: asked.name, text: asked.text.includes(asked.ask) ? '' : asked.text, ability: false, trigger: false, controller: null }, view.state));
+      parts.push(h('div', 'modal-title', asked.ask));
+      const n = view.chosen.size;
+      const limit = view.prompt.onePer ? 'At most one from each player. Pick another in the same graveyard to swap.'
+        : view.prompt.samePlayer ? 'All from one player’s cards.' : '';
+      const count = view.max > 1 ? `${n} of ${view.max} chosen` : '';
+      if (count || limit) parts.push(h('div', 'modal-sub', [count, limit].filter(Boolean).join(' · ')));
+      head.replaceChildren(...parts);
+    }
+    // with all from one player, the others' cards wait once the first is picked
+    const from = new Set(view.cards.filter((c) => view.chosen.has(c.id)).map((c) => c.owner));
+    this.browser.querySelectorAll<HTMLElement>('.thumb').forEach((el) => {
+      const id = Number(el.dataset.id);
+      const on = view.chosen.has(id);
+      const owner = view.cards.find((c) => c.id === id)?.owner ?? null;
+      el.classList.toggle('picked', on);
+      el.setAttribute('aria-pressed', String(on));
+      el.querySelector('.order-badge')!.textContent = on ? '✓' : '';
+      el.classList.toggle('waiting', !on && ((view.prompt.onePer === 'player' && from.has(owner)) || (!!view.prompt.samePlayer && from.size > 0 && !from.has(owner))));
+    });
+    for (const g of groups) {
+      const sec = this.browser.querySelector<HTMLElement>(`[data-group="${g.key}"]`);
+      const note = sec?.querySelector('.pile-count');
+      if (!note) continue;
+      const n = g.cards.filter((c) => view.chosen.has(c.id)).length;
+      note.textContent = view.prompt.onePer ? (n ? 'chosen' : 'up to one') : n ? `${n} chosen` : g.cards.length === 1 ? '1 card' : `${g.cards.length} cards`;
+      sec!.classList.toggle('done', n > 0);
+    }
+    const mirror = (cls: string, b: HTMLButtonElement) => {
+      const el = this.browser!.querySelector<HTMLButtonElement>(cls)!;
+      el.textContent = b.textContent;
+      el.disabled = b.disabled;
+      el.hidden = b.style.visibility === 'hidden';
+    };
+    mirror('.browser-ok', this.okBtn);
+    mirror('.browser-cancel', this.cancelBtn);
+    this.browser.querySelector('.browser-ok')!.classList.toggle('skip', this.skipping);
   }
 
   // ---- opponent cast reveal ------------------------------------------------------------------------
@@ -1532,7 +1680,11 @@ export class Hud {
 
   // ---- requests -----------------------------------------------------------------------------------
 
-  request(req: RequestMsg, state: GameState | null): Promise<unknown> {
+  /** the local player, for whose cards are "yours" */
+  private localId = -1;
+
+  request(req: RequestMsg, state: GameState | null, localId = this.localId): Promise<unknown> {
+    this.localId = localId;
     if (req.kind === 'distribute' && !req.combat) {
       const onTable = this.distributeOnTable(req, state);
       if (onTable) return onTable;
@@ -1670,6 +1822,12 @@ export class Hud {
       if (!reveal && !off.has(i)) {
         el.onclick = () => {
           const at = picked.indexOf(i);
+          if (at < 0 && req.onePer === 'player') {
+            // one from each player: another of theirs takes its place
+            const owner = cardOf(o)?.owner;
+            const same = picked.findIndex((k) => cardOf(options[k])?.owner === owner);
+            if (same >= 0) picked.splice(same, 1);
+          }
           if (at < 0 && req.distinct) {
             const same = picked.findIndex((k) => options[k].label === o.label);
             if (same >= 0) picked.splice(same, 1);
@@ -1691,7 +1849,25 @@ export class Hud {
       items.push(el);
       list.append(el);
     });
-    panel.append(list);
+    // cards from several graveyards, hands or zones: a section each, named for whose they are
+    const shown = options.map((o) => cardOf(o));
+    if (hasCards && state && req.kind === 'choose' && options.every((o) => o.ability == null) && shown.every((c) => c?.visible && c.zone)) {
+      const groups = groupCards(shown as CardState[], state, this.localId);
+      if (groups.length > 1 || req.onePer) {
+        const body = h('div', 'browser-body');
+        for (const g of groups) {
+          const sec = h('div', 'browser-group');
+          const head = h('div', 'pile-head');
+          head.append(h('span', 'pile-name', g.label));
+          if (req.onePer) head.append(h('span', 'pile-count', min > 0 ? 'one' : 'up to one'));
+          const row = h('div', n > 10 || groups.length > 2 ? 'browser-cards many' : 'browser-cards');
+          g.cards.forEach((c) => row.append(items[shown.indexOf(c)]));
+          sec.append(head, row);
+          body.append(sec);
+        }
+        panel.append(body);
+      } else panel.append(list);
+    } else panel.append(list);
 
     const answered = (order: number[]): unknown => (req.canRemember ? { order, remember } : order);
     const row = h('div', 'modal-buttons');
@@ -1780,7 +1956,7 @@ export class Hud {
     const hint = h('div', 'modal-sub', '');
     panel.append(hint);
 
-    const lanes = h('div', options.length > 3 ? 'lanes many' : 'lanes');
+    const lanes = h('div', `lanes${options.length > 3 ? ' many' : ''}${places.length > 2 ? ' three' : ''}`);
     lanes.style.setProperty('--n', String(options.length));
     const laneEls = places.map((p) => {
       const el = h('div', `pile-option lane ${p.kind}`);
@@ -2428,7 +2604,8 @@ function escapeRe(s: string): string {
  * the local player ("You scries 1. You draw a card.") into plain imperatives ("Scry 1. Draw a card.").
  */
 function effectText(raw: string, name: string): string {
-  let t = tidyMessage(raw).replace(new RegExp(`^${escapeRe(name)}\\s*-\\s*`), '');
+  // (without Forge's bracketed context notes: "[Zone Changer: …]")
+  let t = tidyMessage(raw.replace(/\s*\[[^\]\n]*:[^\]\n]*\]/g, '')).replace(new RegExp(`^${escapeRe(name)}\\s*-\\s*`), '');
   t = t.replace(/(^|[.!?]\s+)You (\w+)/g, (m, lead: string, verb: string) => {
     if (/^(may|can|must|might|control|have)$/i.test(verb)) return m;
     const base = /(ch|sh|ss|x)es$/.test(verb) ? verb.slice(0, -2) : /ies$/.test(verb) && verb !== 'dies' ? verb.slice(0, -3) + 'y' : /[^s]s$/.test(verb) ? verb.slice(0, -1) : verb;
