@@ -118,6 +118,10 @@ public final class BridgeMain {
             // leaving for the main menu: the host's leaving stops the game so the AIs don't play on in the
             // background; anyone else leaving concedes their seat
             case "endGame" -> spawn(c, "bridge-end", () -> leaveGame(c));
+            // restart the game with the same seats and decks: at once when you're the only person at the table,
+            // otherwise everyone in it votes
+            case "restart" -> spawn(c, "bridge-restart", () -> requestRestart(c));
+            case "restartVote" -> spawn(c, "bridge-restart", () -> castVote(c, msg.has("agree") && msg.get("agree").getAsBoolean()));
             case "validateDeck" -> spawn(c, "bridge-deck", () -> validateDeck(c, msg));
             case "listPrecons" -> spawn(c, "bridge-precons", () -> listPrecons(c, msg));
             case "compileGameplan" -> { if (local) spawn(c, "bridge-gameplan", () -> compileGameplan(c, msg)); }
@@ -146,6 +150,13 @@ public final class BridgeMain {
                 }
             }
             case "action" -> FThreads.invokeInEdtLater(() -> handleAction(c, msg));
+            case "options" -> {
+                if (msg.has("options") && msg.get("options").isJsonObject()) {
+                    c.options = msg.getAsJsonObject("options");
+                    final SocketGuiGame gui = c.gui;
+                    if (gui != null) gui.optionsChanged();
+                }
+            }
             case "ping" -> {
                 final JsonObject pong = new JsonObject();
                 pong.addProperty("type", "pong");
@@ -177,6 +188,15 @@ public final class BridgeMain {
 
     /** Start a game: people in their seats (each with their own view), AI opponents in the rest. */
     static void launch(final List<SeatSetup> seats, final boolean commander, final String apiKey, final Client host) {
+        launch(seats, commander, apiKey, host, null);
+    }
+
+    /** The last game started, so it can be restarted: its seats, format and the decks each seat played. */
+    private record LastGame(List<SeatSetup> seats, boolean commander, String apiKey, Client host, List<Deck> decks) { }
+    private static volatile LastGame lastGame;
+
+    /** decks: the exact decks to play (a restart, so random precons come out the same), or null to build them */
+    private static void launch(final List<SeatSetup> seats, final boolean commander, final String apiKey, final Client host, final List<Deck> decks) {
         final GameType gameType = commander ? GameType.Commander : GameType.Constructed;
         stopGame();
         BridgeHumanPlayer.resetAll();
@@ -186,11 +206,14 @@ public final class BridgeMain {
         final java.util.Map<RegisteredPlayer, forge.gui.interfaces.IGuiGame> guis = new java.util.LinkedHashMap<>();
         final List<Client> people = new ArrayList<>();
         final JsonArray deckNames = new JsonArray();
+        final List<Deck> played = new ArrayList<>();
         for (int i = 0; i < seats.size(); i++) {
             final SeatSetup seat = seats.get(i);
             final JsonObject spec = seat.spec();
-            Deck deck = null;
-            if (spec != null && spec.has("precon")) {
+            Deck deck = decks != null && i < decks.size() ? decks.get(i) : null;
+            if (deck != null) {
+                // a restart: the same deck as last time
+            } else if (spec != null && spec.has("precon")) {
                 deck = precon(spec.get("precon").getAsString(), commander);
             } else if (spec != null && spec.has("plainList")) {
                 deck = deckFromList(spec.get("plainList").getAsString());
@@ -213,8 +236,10 @@ public final class BridgeMain {
                 rp.setPlayer(plan != null ? PlannedAi.create(seat.name(), i, plan) : GamePlayerUtil.createAiPlayer(seat.name(), i));
             }
             deckNames.add(deck.getName());
+            played.add(deck);
             players.add(rp);
         }
+        lastGame = new LastGame(List.copyOf(seats), commander, apiKey, host, List.copyOf(played));
 
         final JsonObject starting = new JsonObject();
         starting.addProperty("type", "starting");
@@ -225,15 +250,19 @@ public final class BridgeMain {
         inGame = List.copyOf(people);
         gameHost = host;
         match = GuiBase.getInterface().hostMatch();
+        final HostedMatch thisMatch = match;
         GameRecord.begin(gameType.name(), players.size());
         final List<SocketGuiGame> views = people.stream().map(p -> p.gui).toList();
         match.setStartGameHook(() -> match.getGame().subscribeToEvents(new Object() {
             @Subscribe
             public void receiveGameEvent(final GameEvent event) {
                 for (final SocketGuiGame v : views) v.onGameEvent(event);
+                final JsonObject countered = Counters.watch(thisMatch.getGame(), event);
+                if (countered != null) for (final SocketGuiGame v : views) v.onExtraEvent(countered);
                 GameRecord.onEvent(match.getGame(), event);
                 // an online table goes back to its lobby (players leave the game-over screen when they like)
-                if (event instanceof forge.game.event.GameEventGameOutcome) Lobby.gameOver();
+                // (only while it's still the current game: one that was replaced by a restart is winding down)
+                if (event instanceof forge.game.event.GameEventGameOutcome && thisMatch == match) Lobby.gameOver();
             }
         }));
         final GameRules rules = new GameRules(gameType);
@@ -244,8 +273,17 @@ public final class BridgeMain {
 
     /** End the current game, if one is running (everyone's open questions are dropped). */
     static void stopGame() {
+        // nothing more from this game reaches its players, whatever its thread still does on the way out
+        for (final Client p : inGame) if (p.gui != null) p.gui.detach();
         if (match != null && match.getGame() != null && !match.getGame().isGameOver()) {
             for (final Client p : inGame) p.cancelPending();
+            // end it for everyone still in it: endCurrentGame only lets go of the people, so with every person
+            // conceded the AIs played the old game on in the background (as Forge's own leave-after-losing does)
+            final forge.game.Game game = match.getGame();
+            game.getAction().invoke(() -> {
+                game.setGameOver(forge.game.GameEndReason.AllHumansLost);
+                forge.gamemodes.match.DrawOfferCoordinator.releaseInputQueues(game);
+            });
             match.endCurrentGame();
             // a player in the middle of an input (paying mana, declaring attackers) holds the game thread on it:
             // let it go, or the old game's thread waits forever
@@ -260,11 +298,136 @@ public final class BridgeMain {
             n.addProperty("type", "notice");
             n.addProperty("kind", "gameAbandoned");
             n.addProperty("text", "The host ended the game.");
-            for (final Client p : inGame) if (p != gameHost) p.send(n);
+            // (a restart tells everyone itself)
+            if (!restarting) for (final Client p : inGame) if (p != gameHost) p.send(n);
         }
         Lobby.gameOver();
         for (final Client p : inGame) p.gui = null;
         inGame = List.of();
+    }
+
+    // ---- restarting ------------------------------------------------------------------------------------
+
+    /** set while a restart replaces the game, so stopping the old one isn't reported as the host ending it */
+    private static volatile boolean restarting;
+    private static final Object VOTE_LOCK = new Object();
+    /** the restart vote under way, if any: who votes (the people at the table), who has agreed, who asked */
+    private static List<Client> voters;
+    private static final java.util.Set<Client> agreed = new java.util.HashSet<>();
+    private static Client voteBy;
+    private static int voteId;
+    private static final long VOTE_MS = 30_000;
+
+    /** {type: restart}: restart now if you're the only person playing, otherwise put it to a vote. */
+    private static void requestRestart(final Client c) {
+        if (!inGame.contains(c) || lastGame == null) return;
+        final List<Client> people = inGame.stream().filter(Client::connected).toList();
+        if (people.size() <= 1) {
+            restartNow();
+            return;
+        }
+        final int id;
+        synchronized (VOTE_LOCK) {
+            if (voters != null) return; // one vote at a time
+            voters = people;
+            agreed.clear();
+            agreed.add(c);
+            voteBy = c;
+            id = ++voteId;
+        }
+        System.out.println("[bridge] " + c.name + " called a vote to restart");
+        sendVote(null, null);
+        // nobody answering in time counts as no
+        new Thread(() -> {
+            try { Thread.sleep(VOTE_MS); } catch (final InterruptedException ignored) { }
+            synchronized (VOTE_LOCK) {
+                if (voters == null || voteId != id) return;
+            }
+            endVote("expired", "Not everyone answered in time, so the game carries on.");
+        }, "bridge-vote-timer").start();
+    }
+
+    /** {type: restartVote, agree}: one person's answer. Everyone must agree; one no ends the vote. */
+    private static void castVote(final Client c, final boolean agree) {
+        boolean passed = false;
+        synchronized (VOTE_LOCK) {
+            if (voters == null || !voters.contains(c)) return;
+            if (agree) {
+                agreed.add(c);
+                passed = agreed.containsAll(voters.stream().filter(Client::connected).toList());
+            }
+        }
+        if (!agree) {
+            endVote("failed", c.name + " would rather keep playing.");
+        } else if (passed) {
+            endVote("passed", "Everyone agreed: restarting the match.");
+            restartNow();
+        } else {
+            sendVote(null, null);
+        }
+    }
+
+    private static void endVote(final String result, final String reason) {
+        synchronized (VOTE_LOCK) {
+            if (voters == null) return;
+        }
+        sendVote(result, reason);
+        synchronized (VOTE_LOCK) {
+            voters = null;
+            agreed.clear();
+            voteBy = null;
+        }
+    }
+
+    /** The vote as it stands, to everyone voting: who asked, who has agreed, and the result once there is one. */
+    private static void sendVote(final String result, final String reason) {
+        final List<Client> to;
+        final JsonObject m = new JsonObject();
+        synchronized (VOTE_LOCK) {
+            if (voters == null) return;
+            to = voters;
+            m.addProperty("type", "vote");
+            m.addProperty("id", voteId);
+            m.addProperty("kind", "restart");
+            m.addProperty("by", voteBy != null ? voteBy.name : "");
+            final JsonArray all = new JsonArray();
+            final JsonArray yes = new JsonArray();
+            for (final Client v : voters) {
+                all.add(v.name);
+                if (agreed.contains(v)) yes.add(v.name);
+            }
+            m.add("voters", all);
+            m.add("agreed", yes);
+            m.addProperty("seconds", (int) (VOTE_MS / 1000));
+            if (result != null) m.addProperty("result", result);
+            if (reason != null) m.addProperty("reason", reason);
+        }
+        for (final Client v : to) {
+            final JsonObject mine = m.deepCopy();
+            synchronized (VOTE_LOCK) {
+                mine.addProperty("voted", agreed.contains(v));
+            }
+            v.send(mine);
+        }
+    }
+
+    /** The same seats and decks again, in a fresh game; an online table stays in its game rather than its lobby. */
+    private static synchronized void restartNow() {
+        final LastGame g = lastGame;
+        if (g == null) return;
+        final JsonObject n = new JsonObject();
+        n.addProperty("type", "notice");
+        n.addProperty("kind", "restarting");
+        n.addProperty("text", "Restarting the match…");
+        for (final Client p : inGame) p.send(n);
+        System.out.println("[bridge] restarting the match");
+        restarting = true;
+        try {
+            final Runnable again = () -> launch(g.seats(), g.commander(), g.apiKey(), g.host(), g.decks());
+            if (!Lobby.restart(again)) again.run();
+        } finally {
+            restarting = false;
+        }
     }
 
     /** A player heads for the main menu: the one who started the game stops it; anyone else concedes. */
@@ -602,6 +765,15 @@ public final class BridgeMain {
                     }
                 }
             }
+            // takes Pass Turn back: the rest of the turn stops for the player again
+            case "resumeTurn" -> {
+                if (controller instanceof forge.player.PlayerControllerHuman pch) {
+                    pch.getYieldController().clearActiveYieldAndDispatch();
+                    gui.refreshField();
+                }
+            }
+            // triggers and replacement effects the player asked to keep in the same order: ask again from now on
+            case "forgetOrders" -> controller.sendYieldUpdate(new forge.gamemodes.match.YieldUpdate.ClearAbilityOrders());
             case "reorderHand" -> {
                 final CardView card = tracker.getObj(TrackableTypes.CardViewType, id);
                 if (card != null) { controller.reorderHand(card, msg.get("index").getAsInt()); }

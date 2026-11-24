@@ -243,6 +243,9 @@ public final class Serializer {
         if (s.isCreature() && s.hasKeyword(forge.game.keyword.Keyword.FLYING)) {
             o.addProperty("flying", true);
         }
+        if (s.hasKeyword(forge.game.keyword.Keyword.WARD)) {
+            o.addProperty("ward", true);
+        }
         // keywords worth seeing at a glance on the battlefield, and whether it could block at all
         final JsonArray kws = new JsonArray();
         for (final forge.game.keyword.Keyword k : SHOWN_KEYWORDS) {

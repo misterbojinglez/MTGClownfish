@@ -351,7 +351,7 @@ export function computeLayout(
     const pileScale = seat.local ? 0.7 : 0.55;
     // a top of library its owner may look at sits face up on the library pile (same height as the pile mesh)
     if (p.zones.LibraryTop != null) {
-      const height = Math.max(0.001, Math.min(1.4, p.zones.LibraryCount * 0.019));
+      const height = libraryHeight(p.zones.LibraryCount);
       const rot = flat.clone();
       rot.y = seat.rotY;
       out.set(p.zones.LibraryTop, { space: 'table', pos: seatToWorld(seat, seat.piles.library.clone().setY(height + 0.02)), rot, scale: pileScale, faceUp: true, order: 0 });
@@ -503,6 +503,11 @@ function layoutOpponentHand(ids: number[], out: Map<number, Placement>): void {
       order: i,
     });
   });
+}
+
+/** How tall a library's pile stands. */
+export function libraryHeight(count: number): number {
+  return Math.max(0.001, Math.min(1.4, count * 0.019));
 }
 
 /** Where a player's library sits, for draw / mill animations and the pile mesh. */

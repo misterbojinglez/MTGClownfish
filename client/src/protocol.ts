@@ -31,6 +31,8 @@ export interface CardState {
   planeswalker?: boolean;
   /** a creature with flying (hovers above the table) */
   flying?: boolean;
+  /** spells and abilities of opponents that target it are countered unless they pay */
+  ward?: boolean;
   /** keywords worth showing on the battlefield (Haste, Vigilance, Trample…) */
   keywords?: string[];
   /** prepared (Strixhaven): the name of the spell copy waiting to be cast; clicking the card casts it */
@@ -137,6 +139,10 @@ export interface ResolvingSource {
 }
 
 export interface Prompt {
+  /** Pass Turn is in effect */
+  passing?: boolean;
+  /** what's being aimed is bad for the player it's aimed at */
+  harmful?: boolean;
   message: string;
   card?: number | null;
   ok?: Button;
@@ -210,7 +216,27 @@ export interface ChoiceOption {
 export interface RequestMsg {
   type: 'request';
   id: number;
-  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input' | 'distribute' | 'piles';
+  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input' | 'distribute' | 'piles' | 'place' | 'modes' | 'number';
+  /** place: the named places cards go to, and the one they start in; answered { places: option indices per place
+   * (in draw order where ordered), skip }. allowed: the options that may go there (all of them without it) */
+  places?: { label: string; kind: string; min: number; max: number; ordered: boolean; allowed?: number[] }[];
+  start?: number;
+  /** place, for scry and surveil: what it's called, and how many more like it wait on the stack */
+  verb?: string | null;
+  remaining?: number;
+  /** choose: options shown but not to be picked; distinct: no two with the same name */
+  disabled?: number[];
+  distinct?: boolean;
+  /** order: the answer may be remembered, as { order, remember } */
+  canRemember?: boolean;
+  /** modes: the same one may be chosen more than once */
+  repeat?: boolean;
+  /** number: backing out (null) is allowed */
+  cancel?: boolean;
+  /** the card it's about, when it may not be on the table */
+  cardData?: CardState;
+  /** distribute, combat: any damage at all kills a creature */
+  deathtouch?: boolean;
   /** piles: the two piles to choose between (a face-down pile sends only its count); answered 0 or 1 */
   piles?: { label: string; count: number; hidden: boolean; options: ChoiceOption[] }[];
   /** distribute: total to divide, and whether every option needs at least one */
@@ -303,13 +329,35 @@ export type ServerMsg =
   | LobbyState
   | { type: 'lobbyClosed'; reason: string }
   | { type: 'welcome'; returning: boolean; remote: boolean; relay?: string | null }
-  | { type: 'precons'; format: string; decks: PreconInfo[] };
+  | { type: 'precons'; format: string; decks: PreconInfo[] }
+  | VoteMsg
+  /** a one-time stop was used: key as in PlayOptions.stops */
+  | { type: 'stopUsed'; key: string };
+
+/** A vote among the people at the table (restarting the match): sent as it opens, as people answer, and with its result. */
+export interface VoteMsg {
+  type: 'vote';
+  id: number;
+  kind: 'restart';
+  /** who called it */
+  by: string;
+  voters: string[];
+  agreed: string[];
+  /** whether you have agreed */
+  voted: boolean;
+  /** how long the vote stays open */
+  seconds: number;
+  result?: 'passed' | 'failed' | 'expired';
+  reason?: string;
+}
 
 export type Action =
   /** auto: the client's own auto-pay (the bridge won't let it sacrifice a mana source) */
   | { action: 'ok'; auto?: boolean }
   | { action: 'cancel' | 'alphaStrike' | 'undo' | 'concede' }
   /** turn: the turn the client is showing, so a late click can't carry into the next turn */
+  /** take Pass Turn back; ask again about orders that were to be remembered */
+  | { action: 'resumeTurn' | 'forgetOrders' }
   | { action: 'passUntilEndOfTurn'; turn?: number; stack?: number[] }
   | { action: 'card'; id: number; button?: number }
   | { action: 'player'; id: number; button?: number }

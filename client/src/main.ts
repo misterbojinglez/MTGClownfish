@@ -1,3 +1,4 @@
+import { fullControl, onStops, setFullControl, setStop, stopsNow } from './stops';
 import './style.css';
 import './theme.css';
 import * as THREE from 'three';
@@ -13,7 +14,8 @@ import { CameraDirector } from './game/camera';
 import { Hud } from './ui/hud';
 import { RadialMenu } from './ui/radial';
 import { sfx } from './audio';
-import { settings } from './settings';
+import { closeTour, maybeFirstGameTour } from './ui/tour';
+import { settings, onSettings } from './settings';
 import { claudeKey, DeckSetup, type GameSetup } from './ui/decks';
 import { askName, joinScreen, LobbyView, onlineChooser } from './ui/lobby';
 
@@ -21,7 +23,7 @@ const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement);
 const table = new Table(stage);
 const hud = new Hud();
 // hold Command (Ctrl on Windows) for the prompt's actions around the pointer
-new RadialMenu(() => hud.radialActions(), () => document.body.classList.contains('in-game') && !document.querySelector('.modal'));
+new RadialMenu(() => hud.radialActions(), () => document.body.classList.contains('in-game') && !document.querySelector('.modal, .tour'));
 // arrows aimed at a player end on their badge, wherever the HUD has put it
 table.badgeAt = (id) => hud.badgeCenter(id);
 // tethers from a spell or ability on the Stack start at its card in the panel; hovering one shows its targets
@@ -281,6 +283,7 @@ async function handle(msg: ServerMsg): Promise<void> {
       break;
     case 'gameStarted':
       inGame = true;
+      restarting = false;
       resolving = null;
       // the game HUD (phase tracker, buttons, stack) only shows during a game
       document.body.classList.add('in-game');
@@ -290,7 +293,11 @@ async function handle(msg: ServerMsg): Promise<void> {
       hud.resetPlayers();
       table.localId = msg.you[0];
       gameOverShown = false;
+      setFullControl('off');
+      sendOptions();
       hud.closeOverlay();
+      sfx.startMusic();
+      maybeFirstGameTour(document.getElementById('hud')!, () => (table.state?.players.find((p) => p.id === table.localId)?.zones.Hand.length ?? 0) > 0);
       break;
     case 'update':
       if (!inGame) break;
@@ -300,16 +307,22 @@ async function handle(msg: ServerMsg): Promise<void> {
       if (!inGame) break;
       await answer(msg);
       break;
+    case 'stopUsed':
+      if (stopsNow()[msg.key] === 'once') setStop(msg.key, null);
+      break;
+    case 'vote':
+      hud.showVote(msg);
+      break;
     case 'welcome':
       if (msg.relay !== undefined) relayHttp = msg.relay ?? null;
       break;
     case 'lobby':
-      // drawn now unless a game is on screen (then when the player leaves it)
-      if (!inGame) {
+      // drawn now unless a game is on screen (then when the player leaves it), or one is being restarted
+      if (!inGame && !restarting) {
         hud.closeOverlay();
         document.querySelectorAll('.modal:not(.deck-modal)').forEach((m) => m.remove());
       }
-      lobby.update(msg, !inGame);
+      lobby.update(msg, !inGame && !restarting);
       break;
     case 'lobbyClosed':
       lobby.clear();
@@ -322,6 +335,13 @@ async function handle(msg: ServerMsg): Promise<void> {
       break;
     case 'notice':
       if (msg.kind === 'message' || msg.kind === 'error') hud.toast(msg.text ?? '', msg.kind);
+      // a restart: the table clears and the same match deals again (gameStarted follows)
+      if (msg.kind === 'restarting') {
+        restarting = true;
+        hud.closeVote();
+        leaveTable();
+        hud.loading(msg.text ?? 'Restarting the match…');
+      }
       // the host ended an online game: back to the lobby
       if (msg.kind === 'gameAbandoned') {
         hud.toast(msg.text ?? 'The game was ended.', 'message');
@@ -417,6 +437,19 @@ function explainCombat(msg: UpdateMsg): void {
   }
 }
 
+/** An opponent's scry or surveil: how many stayed on top. */
+function tellLooks(msg: UpdateMsg): void {
+  for (const e of msg.events) {
+    if (e.event !== 'Scry' && e.event !== 'Surveil') continue;
+    const id = (e.player as { player?: number } | null)?.player;
+    const who = table.state?.players.find((p) => p.id === id);
+    if (!who || id === table.localId) continue;
+    const top = Number((e.event === 'Scry' ? e.toTop : e.toLibrary) ?? 0);
+    const away = Number((e.event === 'Scry' ? e.toBottom : e.toGraveyard) ?? 0);
+    hud.toast(`${who.name} ${e.event === 'Scry' ? 'scries' : 'surveils'}: ${top} on top, ${away} ${e.event === 'Scry' ? 'on the bottom' : 'to the graveyard'}`, 'message');
+  }
+}
+
 async function applyUpdate(msg: UpdateMsg): Promise<void> {
   if (msg.prompt.input !== 'InputAttack') attackGroup = [];
   // a box-selected group lasts only while declaring (the table's refresh below redraws without it)
@@ -426,6 +459,9 @@ async function applyUpdate(msg: UpdateMsg): Promise<void> {
   // the camera turns toward what's about to happen while it animates
   director.update(table.state!, table.localId, msg.events, msg.selection, table.targetablePlayers());
   explainCombat(msg);
+  tellLooks(msg);
+  // full control for the turn lapses when the turn does
+  if (fullControl() === 'turn' && msg.events.some((e) => e.event === 'TurnBegan')) setFullControl('off');
   await animating;
   refreshPrompt();
   if (msg.state.gameOver) showGameOver();
@@ -462,6 +498,8 @@ const deckSetup = new DeckSetup(document.getElementById('hud')!, bridge);
 
 /** Whether a game is on: once you've left one, its last updates are ignored until the next game starts. */
 let inGame = false;
+/** a restart is under way: the old game is cleared, the new one not dealt yet (the lobby stays out of sight) */
+let restarting = false;
 
 /** Leave the game: stop it on the bridge, clear the table, and go back to the main menu. */
 function exitToMenu(): void {
@@ -474,6 +512,9 @@ function exitToMenu(): void {
 function leaveTable(): void {
   inGame = false;
   document.body.classList.remove('in-game');
+  sfx.stopMusic();
+  hud.closeVote();
+  closeTour();
   queue.length = 0;
   table.reset();
   director.reset();
@@ -536,7 +577,10 @@ bridge.onMessage((msg) => {
   queue.push(msg);
   void drain();
 });
-bridge.onStatus((connected) => hud.setConnection(connected));
+bridge.onStatus((connected) => {
+  hud.setConnection(connected);
+  if (connected) sendOptions();
+});
 
 /**
  * Declaring attackers in multiplayer: Forge sends clicked creatures at its "current defender" (the first
@@ -566,7 +610,7 @@ function chooseDefender(pick: () => void): void {
 
 function pickPlayer(id: number): void {
   if (table.isDeclaringAttack()) chooseDefender(() => bridge.act({ action: 'player', id }));
-  else bridge.act({ action: 'player', id });
+  else sureOfTarget({ player: id }, () => bridge.act({ action: 'player', id }));
 }
 
 /**
@@ -660,6 +704,37 @@ function blockWith(ids: number[], attackerId: number): void {
   reportRefused(go, () => table.isDeclaringBlock(), blocks, (names) => `${names} can't block ${attacker?.name ?? 'that attacker'}`);
 }
 
+/** How the table should behave for this player: their stops, full control and automation, for the bridge. */
+function sendOptions(): void {
+  const on = (v: string) => v === 'on';
+  bridge.options({
+    stops: stopsNow(),
+    fullControl: fullControl() !== 'off',
+    autoPassOwn: on(settings.autoPassOwn),
+    autoTriggers: on(settings.autoTriggers),
+    autoReplacements: on(settings.autoReplacements),
+    autoDamage: on(settings.autoDamage),
+    warnings: on(settings.warnings),
+  });
+}
+onStops(sendOptions);
+onSettings(sendOptions);
+
+/** A target that's probably a mistake (something harmful at yourself, a card with ward) asks first. */
+function sureOfTarget(t: { card?: number; player?: number }, go: () => void): void {
+  const p = table.prompt;
+  if (settings.warnings === 'off' || p.input !== 'InputSelectTargets') return go();
+  if (t.player != null && t.player === table.localId && p.harmful) {
+    return hud.confirmChoice('Target yourself?', 'This looks like something you’d aim at an opponent.', 'Target me', go);
+  }
+  const c = t.card != null ? table.state?.cards[t.card] : undefined;
+  const picked = table.selection.chosen.some((r) => r?.card === t.card);
+  if (c && !picked && table.selection.cards.includes(c.id) && c.zone === 'Battlefield' && c.controller !== table.localId && c.ward) {
+    return hud.confirmChoice(`${c.name} has ward`, 'Your spell or ability will be countered unless you pay its ward cost.', 'Target it anyway', go, c);
+  }
+  go();
+}
+
 hud.bind({
   ok: () => bridge.act({ action: 'ok' }),
   cancel: () => bridge.act({ action: 'cancel' }),
@@ -678,6 +753,19 @@ hud.bind({
   },
   // the stack as shown: a pass pressed before an opponent's newest spell reached the screen doesn't let it resolve unseen
   passTurn: () => bridge.act({ action: 'passUntilEndOfTurn', turn: table.state?.turn, stack: (table.state?.stack ?? []).map((s) => s.id) }),
+  resumeTurn: () => bridge.act({ action: 'resumeTurn' }),
+  forgetOrders: () => bridge.act({ action: 'forgetOrders' }),
+  clearBlocks: () => {
+    for (const c of Object.values(table.state?.cards ?? {})) {
+      if (c.zone === 'Battlefield' && c.controller === table.localId && c.blocking) bridge.act({ action: 'card', id: c.id, button: 3 });
+    }
+  },
+  anchor: (o) => {
+    if (o.player != null) return hud.badgeCenter(o.player);
+    const c = o.card != null ? table.state?.cards[o.card] : undefined;
+    const at = c?.zone === 'Battlefield' ? table.cardWorld(c.id) : null;
+    return at ? table.toScreen(at.clone()) : null;
+  },
   concede: () => bridge.act({ action: 'concede' }),
   undo: () => bridge.act({ action: 'undo' }),
   payLife: () => {
@@ -685,12 +773,17 @@ hud.bind({
     if (lp) bridge.act({ action: 'player', id: lp.player });
   },
   exitToMenu: () => exitToMenu(),
+  restart: () => bridge.restart(),
+  vote: (agree) => bridge.restartVote(agree),
+  soloTable: () => (table.state?.players ?? []).filter((p) => !p.ai).length <= 1,
   resolveAll: () => startResolveAll(),
   useFloating: () => bridge.act({ action: 'floating' }),
 });
 
 const input = new Input(stage, table, {
   clickCard: (id, button) => {
+    // a dialog stepped aside to show the table: looking only
+    if (document.querySelector('.modal:not(.out)')) return;
     // a box-selected group: a click on something it can go at sends it there (an attacker to block, an
     // opponent's card or planeswalker to attack); any other click lets go of the group
     if (table.group.size && button === 1) {
@@ -762,9 +855,10 @@ const input = new Input(stage, table, {
     if (c && !paying && button === 1 && !c.land && (table.isLocalHand(id) || c.zone === 'Battlefield' || c.zone === 'Command' || c.zone === 'Library')) {
       armAutoPay();
     }
-    bridge.act({ action: 'card', id, button });
+    sureOfTarget({ card: id }, () => bridge.act({ action: 'card', id, button }));
   },
   clickTable: (pid) => {
+    if (document.querySelector('.modal:not(.out)')) return;
     if (table.targetablePlayers().has(pid)) pickPlayer(pid);
   },
   // clicking an opponent's side sends a box-selected group of attackers at them; anywhere else lets go of it

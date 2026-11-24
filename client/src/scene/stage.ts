@@ -5,6 +5,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { createPalmPass, PALM_DURATION, PALM_IMPACT } from './counterPalm';
 import { onSettings, settings } from '../settings';
 
 // Camera framing measured from Arena's battlefield scenes (docs/arena-reference.md).
@@ -63,6 +64,10 @@ export class Stage {
   private readonly composer: EffectComposer;
   private readonly bloom: UnrealBloomPass;
   private readonly hitPass: ShaderPass;
+  /** the counterspell palm (counterPalm.ts), and how far into it we are (seconds; <0 when not running) */
+  private readonly palmPass: ShaderPass;
+  private palmT = -1;
+  private palmDone: (() => void) | null = null;
   private hitAmt = 0;
   private spotAmt = 0;
   private readonly tickers = new Set<(dt: number, t: number) => void>();
@@ -149,6 +154,8 @@ export class Stage {
     });
     this.hitPass.enabled = false;
     this.composer.addPass(this.hitPass);
+    this.palmPass = createPalmPass();
+    this.composer.addPass(this.palmPass);
     this.composer.addPass(new OutputPass());
 
     window.addEventListener('resize', () => this.resize());
@@ -184,7 +191,7 @@ export class Stage {
 
   /** Something on screen is moving fast enough to want the full frame rate. */
   private moving(now: number): boolean {
-    if (now < this.wakeUntil || this.shake > 0.001 || this.hitAmt > 0.002) return true;
+    if (now < this.wakeUntil || this.shake > 0.001 || this.hitAmt > 0.002 || this.palmT >= 0) return true;
     // card flights, camera glides, counters: gsap removes finished tweens from its global timeline
     if (gsap.globalTimeline.getChildren(false, true, true).length > 0) return true;
     for (const busy of this.busyChecks) if (busy()) return true;
@@ -360,6 +367,20 @@ export class Stage {
     this.wake();
   }
 
+  /**
+   * The counterspell palm: a phantasmal blue hand lands in the middle of the screen with a refractive ripple
+   * running out from it (about 1.6 s). Resolves when it's over. lowDetail: fewer noise layers.
+   */
+  counterPalm(lowDetail = false): Promise<void> {
+    this.palmDone?.();
+    this.palmT = 0;
+    this.palmPass.uniforms.uOctaves.value = lowDetail ? 2 : 4;
+    this.palmPass.uniforms.uT.value = 0;
+    this.palmPass.enabled = true;
+    this.wake(PALM_DURATION + 0.2);
+    return new Promise((resolve) => (this.palmDone = resolve));
+  }
+
   /** A short camera jolt for heavy hits; strength ~0.2–1. */
   addShake(strength: number): void {
     this.shake = Math.min(1.2, this.shake + strength);
@@ -374,6 +395,7 @@ export class Stage {
     const aspect = w / h;
     this.camera.aspect = aspect;
     this.hitPass.uniforms.uAspect.value = aspect;
+    this.palmPass.uniforms.uAspect.value = aspect;
     // Arena frames for 16:9; on narrower windows widen the vertical FOV so the table's width still fits.
     if (aspect < DESIGN_ASPECT) {
       const halfH = Math.tan(THREE.MathUtils.degToRad(CAMERA_FOV / 2)) * (DESIGN_ASPECT / aspect);
@@ -415,6 +437,25 @@ export class Stage {
     this.hitPass.uniforms.uAmt.value = this.hitAmt;
     this.hitPass.uniforms.uSpot.value = this.spotAmt;
     this.hitPass.enabled = this.hitAmt > 0 || this.spotAmt > 0.002;
+    if (this.palmT >= 0) {
+      const before = this.palmT;
+      this.palmT += dt;
+      // the landing: a jolt and a quick push in, as the ripple sets off
+      if (before < PALM_IMPACT && this.palmT >= PALM_IMPACT) {
+        this.addShake(0.55);
+        this.punch(0.7);
+      }
+      if (this.palmT >= PALM_DURATION) {
+        this.palmT = -1;
+        this.palmPass.enabled = false;
+        const done = this.palmDone;
+        this.palmDone = null;
+        done?.();
+      } else {
+        this.palmPass.uniforms.uT.value = this.palmT;
+        this.palmPass.enabled = true;
+      }
+    }
     cameraPosition(this.view, this.basePos);
     // fog starts beyond whatever the camera is framing, however far back it has pulled
     const fog = this.scene.fog as THREE.Fog;

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
-import { avatarAnchor, computeLayout, libraryAnchor, nearestHandSlot, seatAt, seatFrames, seatRotation, seatsFor, tableMats, type Placement } from '../scene/layout';
+import { avatarAnchor, computeLayout, libraryAnchor, libraryHeight, nearestHandSlot, seatAt, seatFrames, seatRotation, seatsFor, tableMats, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx, type LinkMark } from '../scene/fx';
 import { CommandAura } from '../scene/commandAura';
 import { Magic } from '../scene/magic';
@@ -122,6 +122,8 @@ export class Table {
   }
 
   reset(): void {
+    for (const t of this.topLeaving.values()) window.clearTimeout(t);
+    this.topLeaving.clear();
     for (const c of this.cards.values()) c.dispose();
     this.cards.clear();
     this.tucked.clear();
@@ -187,7 +189,9 @@ export class Table {
       if (!obj) {
         obj = new CardObject(c);
         this.cards.set(id, obj);
-        if (this.spawn(obj, c, prev)) fromLibrary.add(id);
+        const top = c.zone === 'Library';
+        if (this.spawn(obj, c, prev) && !top) fromLibrary.add(id);
+        if (top && prev) void this.turnOver(obj, true);
       } else {
         const was = obj.state;
         obj.update(c);
@@ -219,6 +223,15 @@ export class Table {
         // one update), so it can't wait to land.
         const tokenGone = !!cards[id]?.token;
         if (zone && IN_TRANSIT_ZONES.has(zone) && !tokenGone) continue;
+        // The top of a library, no longer shown: the engine can take it out and put it straight back (a scry that
+        // keeps it, a permission being worked out again), so it waits there a moment before turning face down.
+        // A new top card showing replaces it at once.
+        if (zone === 'Library' && obj.state.zone === 'Library') {
+          const replaced = state.players.some((p) => p.id === obj.state.owner && p.zones.LibraryTop != null);
+          if (replaced) this.dropTop(obj);
+          else if (!this.topLeaving.has(id)) this.concealLater(obj);
+          continue;
+        }
         const snap = snapshots.get(id);
         tasks.push(tokenGone ? deathsGo.then(() => this.vanish(obj, prev, snap)) : this.vanish(obj, prev, snap));
         continue;
@@ -232,6 +245,7 @@ export class Table {
       if (!target) continue;
       const before = snapshots.get(id);
       const zoneChanged = before && before.zone !== obj.state.zone;
+      this.keepTop(obj);
       // the Stack panel shows what's on the stack: a spell flies toward it, then tucks away into it;
       // leaving the stack, it shows again on its way to wherever it goes
       if (obj.state.zone !== 'Stack' && this.tucked.delete(id)) {
@@ -653,11 +667,11 @@ export class Table {
   /** A new card appears: drawn from its library, created as a token, or revealed from hiding. True if it starts on the library. */
   private spawn(obj: CardObject, c: CardState, prev: GameState | null): boolean {
     const p = computeLayout(this.state!, this.localId, this.layoutOpts()).get(c.id);
-    const lib = c.owner != null && prev ? libraryAnchor(this.state!, this.localId, c.owner) : null;
+    const lib = c.owner != null && prev && c.zone !== 'Library' ? this.libraryTop(c.owner) : null;
     if (p && lib && (c.zone === 'Hand' || (!c.token && c.zone !== 'Command'))) {
-      // start face-down on top of the library, then fly
+      // start on top of the library, then fly (the revealed top card itself just turns over where it lies)
       this.stage.scene.add(obj.root);
-      obj.root.position.copy(lib).add(new THREE.Vector3(0, 0.6, 0));
+      obj.root.position.copy(lib);
       obj.root.rotation.set(-Math.PI / 2, 0, 0, 'YXZ');
       obj.root.scale.setScalar(0.7);
       obj.update(c);
@@ -687,9 +701,8 @@ export class Table {
       obj.dispose();
       return;
     }
-    const s = this.state!;
     const owner = obj.state.owner;
-    const lib = owner != null ? libraryAnchor(s, this.localId, owner) : null;
+    const lib = owner != null ? this.libraryTop(owner) : null;
     const wasOnField = snap?.zone === 'Battlefield';
     if (obj.state.token) {
       // tokens never go home: burn away on the battlefield, or just fade from wherever they ended up
@@ -703,7 +716,7 @@ export class Table {
       return;
     }
     if (lib && prev) {
-      const p: Placement = { space: 'table', pos: lib.clone().add(new THREE.Vector3(0, 0.4, 0)), rot: new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'), scale: 0.6, faceUp: false, order: 0 };
+      const p: Placement = { space: 'table', pos: lib, rot: new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'), scale: 0.6, faceUp: false, order: 0 };
       await this.fly(obj, snap?.zone ?? null, 'Library' as ZoneName, p, 0.6);
     }
     obj.dispose();
@@ -774,7 +787,7 @@ export class Table {
             const at = this.playerArrowEnd(pid);
             if (at) {
               this.magic.burst(at, 'B', 0.3);
-              sfx.hit(-diff, true, this.panOf(at));
+              sfx.lifeLoss(-diff, this.panOf(at));
             }
           }
           break;
@@ -789,6 +802,12 @@ export class Table {
             this.fx.exile(at);
             sfx.exile(this.panOf(at));
           }
+          break;
+        }
+        // a spell countered (the bridge spots it: see Counters.java): the phantasmal palm, wherever the camera is
+        case 'SpellCountered': {
+          sfx.counterspell();
+          if (settings.particles !== 'off') jobs.push(this.stage.counterPalm(settings.floorDetail === 'low'));
           break;
         }
         case 'TurnBegan': {
@@ -1230,6 +1249,72 @@ export class Table {
 
   // ---- libraries ----------------------------------------------------------------------------------
 
+  /** Just above the top card of a player's library pile. */
+  private libraryTop(pid: number): THREE.Vector3 | null {
+    const s = this.state!;
+    const count = s.players.find((p) => p.id === pid)?.zones.LibraryCount ?? 0;
+    return libraryAnchor(s, this.localId, pid)?.setY(libraryHeight(count) + 0.03) ?? null;
+  }
+
+  /** top-of-library cards no longer shown, waiting to turn face down unless they're shown again first */
+  private readonly topLeaving = new Map<number, number>();
+
+  private concealLater(obj: CardObject): void {
+    const wait = (): void => {
+      const t = window.setTimeout(() => {
+        if (this.flying.size > 0) return wait(); // updates wait for what's moving; so does this
+        void this.turnOver(obj, false).then((done) => {
+          if (done && this.topLeaving.get(obj.id) === t) this.dropTop(obj);
+        });
+      }, 600);
+      this.topLeaving.set(obj.id, t);
+    };
+    wait();
+  }
+
+  /** A card that was about to be concealed is shown again (or has moved on): it stays. */
+  private keepTop(obj: CardObject): void {
+    const t = this.topLeaving.get(obj.id);
+    if (t === undefined) return;
+    window.clearTimeout(t);
+    this.topLeaving.delete(obj.id);
+    gsap.killTweensOf(obj.body.scale);
+    obj.body.scale.x = 1;
+    obj.update(obj.state);
+  }
+
+  private dropTop(obj: CardObject): void {
+    window.clearTimeout(this.topLeaving.get(obj.id));
+    this.topLeaving.delete(obj.id);
+    gsap.killTweensOf(obj.body.scale);
+    if (this.cards.get(obj.id) === obj) this.cards.delete(obj.id);
+    obj.dispose();
+  }
+
+  /** Turn a card over where it lies, face up or face down. Resolves false when it was cut short. */
+  private turnOver(obj: CardObject, up: boolean): Promise<boolean> {
+    const s = obj.body.scale;
+    const face = obj.state;
+    const half = 0.14 / this.timeScale;
+    const show = (faceUp: boolean): void => {
+      // only the picture: the card's own state stays what the engine last said
+      obj.update({ ...obj.state, visible: faceUp && face.visible });
+      obj.state = face;
+    };
+    gsap.killTweensOf(s);
+    show(!up);
+    return new Promise((resolve) => {
+      gsap.to(s, {
+        x: 0.02, duration: half, ease: 'sine.in', onInterrupt: () => resolve(false),
+        onComplete: () => {
+          if (this.cards.get(obj.id) !== obj) return resolve(false);
+          if (obj.state === face) show(up);
+          gsap.to(s, { x: 1, duration: half, ease: 'sine.out', onInterrupt: () => resolve(false), onComplete: () => resolve(true) });
+        },
+      });
+    });
+  }
+
   private updateLibraries(state: GameState): void {
     for (const p of state.players) {
       let mesh = this.libraries.get(p.id);
@@ -1246,7 +1331,7 @@ export class Table {
       }
       const local = p.id === this.localId;
       const scale = local ? 0.7 : 0.55;
-      const height = Math.max(0.001, Math.min(1.4, p.zones.LibraryCount * 0.019));
+      const height = libraryHeight(p.zones.LibraryCount);
       mesh.visible = p.zones.LibraryCount > 0 && !this.sunk.has(p.id);
       mesh.scale.set(scale, height, scale);
       mesh.position.set(anchor.x, height / 2, anchor.z);

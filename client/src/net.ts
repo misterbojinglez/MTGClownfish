@@ -173,6 +173,16 @@ export class Bridge {
     this.send({ type: 'endGame' });
   }
 
+  /** Restart the game with the same seats and decks (put to a vote when other people are playing). */
+  restart(): void {
+    this.send({ type: 'restart' });
+  }
+
+  /** Answer a restart vote. */
+  restartVote(agree: boolean): void {
+    this.send({ type: 'restartVote', agree });
+  }
+
   /** apiKey: the player's Claude API key, for opponents' gameplans not yet turned into AI settings */
   start(format: 'constructed' | 'commander', players: number, deck?: string, decks?: (SeatDeckSpec | null)[], names?: string[], apiKey?: string): void {
     this.send({ type: 'start', format, players, ...(deck ? { deck } : {}), ...(decks ? { decks } : {}), ...(names ? { names } : {}), ...(apiKey ? { apiKey } : {}) });
@@ -235,6 +245,11 @@ export class Bridge {
 
   act(a: Action, input = this.shownInput): void {
     this.send({ type: 'action', ...a, ...(input != null ? { input } : {}) });
+  }
+
+  /** How the player wants the table to behave; sent on connecting, at each game, and on every change. */
+  options(options: Record<string, unknown>): void {
+    this.send({ type: 'options', options });
   }
 
   respond(id: number, value: unknown): void {

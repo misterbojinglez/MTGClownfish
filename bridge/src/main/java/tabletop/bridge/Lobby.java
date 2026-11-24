@@ -257,9 +257,26 @@ final class Lobby {
         broadcast();
     }
 
+    /** set while a restart replaces the lobby's game: stopping the old one doesn't send the table back here */
+    private static boolean restarting;
+
+    /** Restart the lobby's game (relaunch starts it), the table staying in play. False when there's no lobby game. */
+    static synchronized boolean restart(final Runnable relaunch) {
+        if (host == null || !playing) return false;
+        restarting = true;
+        try {
+            relaunch.run();
+        } finally {
+            restarting = false;
+        }
+        playing = true;
+        broadcast();
+        return true;
+    }
+
     /** The game is over (or abandoned): back to the lobby, everyone's seat and deck as they were. */
     static synchronized void gameOver() {
-        if (!playing) return;
+        if (!playing || restarting) return;
         playing = false;
         for (final Seat s : seats) s.ready = false;
         broadcast();

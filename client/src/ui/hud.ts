@@ -1,7 +1,9 @@
 import type { CardState, ChoiceOption, GameState, PlayerState, Prompt, RequestMsg, ResolvingSource, Selection } from '../protocol';
 import { DEFAULT_SETTINGS, onSettings, setSetting, type Settings } from '../settings';
 import { cardArtUrl, cardImageUrl, cardZoomUrl } from '../scene/textures';
+import { STEPS, fullControl, onStops, resetStops, setFullControl, setStop, stopsNow } from '../stops';
 import { sfx } from '../audio';
+import { startTour } from './tour';
 import type { RadialAction } from './radial';
 
 const PHASES: [string, string][] = [
@@ -18,6 +20,12 @@ const PHASES: [string, string][] = [
   ['END_OF_TURN', 'End'],
   ['CLEANUP', 'Cleanup'],
 ];
+
+/** what passing with an empty stack leads to, on your own turn */
+const NEXT_STEP: Record<string, string> = {
+  UPKEEP: 'To draw', DRAW: 'To main', MAIN1: 'To combat', COMBAT_BEGIN: 'To attack', COMBAT_DECLARE_ATTACKERS: 'To blocks',
+  COMBAT_DECLARE_BLOCKERS: 'To damage', COMBAT_FIRST_STRIKE_DAMAGE: 'To damage', COMBAT_DAMAGE: 'End combat', COMBAT_END: 'To main 2', MAIN2: 'To end step', END_OF_TURN: 'End turn',
+};
 
 const PHASE_GROUPS = ['UPKEEP', 'DRAW', 'MAIN1', 'COMBAT_DECLARE_ATTACKERS', 'COMBAT_DECLARE_BLOCKERS', 'COMBAT_DAMAGE', 'MAIN2', 'END_OF_TURN'];
 
@@ -46,6 +54,14 @@ export interface HudHandlers {
   cancel(): void;
   player(id: number): void;
   passTurn(): void;
+  /** take Pass Turn back */
+  resumeTurn(): void;
+  /** take all your blocks back */
+  clearBlocks(): void;
+  /** ask again about orders you chose to keep */
+  forgetOrders(): void;
+  /** where something is on screen (a card on the table, a player's badge), or null */
+  anchor(o: { card?: number; player?: number }): { x: number; y: number } | null;
   concede(): void;
   /** undo the last undoable action (a mana tap, a declaration) */
   undo(): void;
@@ -57,6 +73,12 @@ export interface HudHandlers {
   useFloating(): void;
   /** leave the game for the main menu */
   exitToMenu(): void;
+  /** restart the match (at once, or by a vote of the people at the table) */
+  restart(): void;
+  /** answer a restart vote */
+  vote(agree: boolean): void;
+  /** every other seat is an AI, so a restart needs nobody's agreement */
+  soloTable(): boolean;
 }
 
 export class Hud {
@@ -80,6 +102,11 @@ export class Hud {
   private readonly resolveAllBtn = h('button', 'sub-btn resolve-all-btn');
   private readonly floatingBtn = h('button', 'sub-btn floating-btn');
   private readonly phaseBar = h('div', 'phase-bar');
+  private readonly fullChip = h('button', 'full-chip');
+  /** Pass Turn is in effect: the button takes it back */
+  private passing = false;
+  /** the secondary button clears your blocks (Forge offers none there) */
+  private clearing = false;
   private readonly turnLabel = h('div', 'turn-label');
   private readonly zoom = h('div', 'zoom');
   private readonly zoomImg = h('img');
@@ -99,9 +126,9 @@ export class Hud {
     // the button column at the bottom right, top to bottom: Pass Turn, Undo, Pay 2 life (when a cost allows it), the prompt's secondary, OK
     const pass = this.passBtn;
     pass.title = 'Pass priority until end of turn (Shift+Enter)';
-    pass.onclick = () => this.handlers.passTurn();
+    pass.onclick = () => (this.passing ? this.handlers.resumeTurn() : this.handlers.passTurn());
     const undo = this.undoBtn;
-    undo.title = 'Undo the last thing you did, where the rules allow (Z while paying)';
+    undo.title = 'Undo the last thing you did, where the rules allow (Z)';
     undo.onclick = () => this.handlers.undo();
     const pair = h('div', 'actions');
     pair.append(this.cancelBtn, this.okBtn);
@@ -125,12 +152,28 @@ export class Hud {
       const label = PHASES.find(([k]) => k === key)![1];
       const pip = h('div', 'phase', label);
       pip.dataset.phase = key;
+      pip.append(h('i', 'stop-mark mine'), h('i', 'stop-mark theirs'));
       this.phaseBar.append(pip);
     }
+    // the bar opens the stops: where the game waits for you
+    this.phaseBar.setAttribute('role', 'button');
+    this.phaseBar.tabIndex = 0;
+    this.phaseBar.title = 'Choose where the game stops for you';
+    this.phaseBar.onclick = () => this.toggleStops();
+    this.phaseBar.onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.toggleStops();
+    };
+    this.fullChip.onclick = () => setFullControl('off');
+    phaseWrap.append(this.fullChip);
+    onStops(() => this.showStops());
+    this.showStops();
     this.zoom.append(this.zoomImg, this.zoomText, this.zoomStats);
     this.root.append(this.promptBox, this.stackPanel, phaseWrap, this.zoom, this.toasts, this.status);
     this.okBtn.onclick = () => this.handlers.ok();
-    this.cancelBtn.onclick = () => this.handlers.cancel();
+    this.cancelBtn.onclick = () => (this.clearing ? this.handlers.clearBlocks() : this.handlers.cancel());
 
     const menu = h('div', 'corner-menu');
     const concede = h('button', 'chip danger', 'Concede');
@@ -156,6 +199,33 @@ export class Hud {
       row('Sound effects', () => sfx.fx, (v) => sfx.setFx(v)),
       row('Music', () => sfx.music, (v) => sfx.setMusic(v)),
     ];
+    // the game's track, switched with the arrows (or the arrow keys while this menu is open)
+    const trackRow = h('div', 'sound-row track-row');
+    const prev = h('button', 'track-step', '‹');
+    const next = h('button', 'track-step', '›');
+    const trackName = h('span', 'track-name');
+    prev.title = 'Previous track (←)';
+    next.title = 'Next track (→)';
+    prev.setAttribute('aria-label', 'Previous track');
+    next.setAttribute('aria-label', 'Next track');
+    prev.onclick = () => sfx.stepTrack(-1);
+    next.onclick = () => sfx.stepTrack(1);
+    trackRow.append(prev, trackName, next);
+    soundMenu.append(trackRow);
+    const showTrack = () => {
+      const t = sfx.track;
+      trackName.textContent = t ? `♪ ${t.artist}` : '♪ —';
+      trackName.title = t ? `Now playing: music by ${t.artist} (Pixabay)` : '';
+    };
+    sfx.onTrack(showTrack);
+    showTrack();
+    window.addEventListener('keydown', (e) => {
+      if (!soundWrap.classList.contains('open') || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+      if ((e.target as HTMLElement).closest?.('input[type="range"], textarea')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      sfx.stepTrack(e.key === 'ArrowLeft' ? -1 : 1);
+    }, true);
     const vol = h('input', 'sound-volume');
     vol.type = 'range';
     vol.min = '0';
@@ -167,7 +237,7 @@ export class Hud {
     const showSound = () => {
       syncs.forEach((f) => f());
       vol.value = String(Math.round(sfx.volume * 100));
-      soundMenu.querySelectorAll<HTMLElement>('.sound-row').forEach((r, i) => i > 0 && r.classList.toggle('dim', sfx.muted));
+      soundMenu.querySelectorAll<HTMLElement>('.sound-row').forEach((r, i) => i > 0 && r.classList.toggle('dim', sfx.muted || (r === trackRow && !sfx.music)));
       sound.textContent = sfx.muted ? 'Sound off' : !sfx.fx && !sfx.music ? 'Sound off' : 'Sound';
       sound.classList.toggle('off', sfx.muted || (!sfx.fx && !sfx.music));
     };
@@ -209,8 +279,13 @@ export class Hud {
         if (!this.okBtn.disabled && !this.skipping) this.handlers.ok();
       } else if (e.key === 's' || e.key === 'S') {
         this.toggleStack();
-      } else if (e.key === 'Escape' || e.key === 'z') {
-        if (!this.cancelBtn.disabled) this.handlers.cancel();
+      } else if (e.key === 'z' || e.key === 'Z') {
+        if (this.undoBtn.style.visibility !== 'hidden') this.handlers.undo();
+        else if (!this.cancelBtn.disabled) this.cancelBtn.click();
+      } else if (e.key === 'f' || e.key === 'F') {
+        if (document.body.classList.contains('in-game')) setFullControl(fullControl() === 'off' ? (e.shiftKey ? 'held' : 'turn') : 'off');
+      } else if (e.key === 'Escape') {
+        if (!this.cancelBtn.disabled) this.cancelBtn.click();
       }
     });
   }
@@ -300,8 +375,58 @@ export class Hud {
     const settingsChip = h('button', 'chip menu-settings', 'Settings');
     settingsChip.title = 'Frame rate, effects and graphics detail';
     settingsChip.onclick = () => this.openSettings();
-    ov.append(settingsChip);
+    const links = h('div', 'menu-links');
+    const tutorial = h('button', 'menu-link', 'Tutorial');
+    tutorial.onclick = () => startTour(this.root);
+    const credits = h('button', 'menu-link', 'Credits');
+    credits.onclick = () => this.openCredits();
+    links.append(tutorial, h('span', 'menu-link-sep', '·'), credits);
+    ov.append(settingsChip, links);
     this.root.append(ov);
+  }
+
+  /** Who made the pieces this runs on: the rules engine, the card images and the music. */
+  openCredits(): void {
+    if (document.querySelector('.modal.credits')) return;
+    const modal = h('div', 'modal credits');
+    const panel = h('div', 'modal-panel');
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', 'Credits');
+    panel.append(h('div', 'modal-title', 'Credits'));
+    const list = h('div', 'credits-list');
+    const group = (head: string, name: string, note: string) => {
+      const g = h('div', 'credits-group');
+      g.append(h('div', 'credits-head', head), h('div', 'credits-name', name), h('div', 'credits-note', note));
+      list.append(g);
+    };
+    group('Rules engine', 'Forge AI', 'The rules engine and AI that power the gameplay');
+    group('Card images', 'Scryfall', 'The images that power the cards');
+    group('Music', 'leberch · delosound · sonican', 'For their work, licensed from Pixabay');
+    group('Sound effects', 'universfield · olivia_parker', 'Punch and impact sounds, licensed from Pixabay');
+    panel.append(list);
+    const buttons = h('div', 'modal-buttons');
+    const done = h('button', 'main-btn wide', 'Close');
+    const close = () => {
+      window.removeEventListener('keydown', onKey, true);
+      modal.classList.add('out');
+      setTimeout(() => modal.remove(), 160);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    done.onclick = close;
+    modal.onclick = (e) => {
+      if (e.target === modal) close();
+    };
+    window.addEventListener('keydown', onKey, true);
+    buttons.append(done);
+    panel.append(buttons);
+    modal.append(panel);
+    this.root.append(modal);
+    done.focus();
   }
 
   /** Graphics and performance settings: each choice applies at once and is remembered on this device. */
@@ -309,7 +434,7 @@ export class Hud {
     if (document.querySelector('.modal.settings')) return;
     const modal = h('div', 'modal settings');
     const panel = h('div', 'modal-panel');
-    panel.append(h('div', 'modal-title', 'Settings'), h('div', 'modal-sub', 'Lower settings run cooler and quieter. Changes apply right away.'));
+    panel.append(h('div', 'modal-title', 'Settings'), h('div', 'modal-sub', 'Changes apply right away. Lower graphics settings run cooler and quieter.'));
     const rows = h('div', 'settings-rows');
     const syncs: ((st: Readonly<Settings>) => void)[] = [];
     const row = <K extends keyof Settings>(key: K, label: string, hint: string, choices: [Settings[K], string][]) => {
@@ -352,6 +477,13 @@ export class Hud {
       ['2', '2 s'],
       ['3', '3 s'],
     ]);
+    rows.append(h('div', 'settings-group', 'Gameplay'));
+    const onOff: ['off' | 'on', string][] = [['off', 'Off'], ['on', 'On']];
+    row('warnings', 'Warnings', 'Ask before aiming something harmful at yourself, targeting a card with ward, or playing a second copy of a legendary.', onOff);
+    row('autoPassOwn', 'Pass on your own', 'Pass priority for you when your own spell or ability is next to resolve. Full control (F) still stops there.', onOff);
+    row('autoTriggers', 'Order triggers for me', 'Your triggers go on the stack in the order the game lists them.', onOff);
+    row('autoReplacements', 'Order replacements for me', 'When several effects would change the same event, the game picks the order.', onOff);
+    row('autoDamage', 'Assign damage for me', 'Combat damage goes lethal to each blocker in turn, and the rest tramples over.', onOff);
     panel.append(rows);
     const unsubscribe = onSettings((st) => syncs.forEach((f) => f(st)));
     const buttons = h('div', 'modal-buttons');
@@ -375,6 +507,13 @@ export class Hud {
       if (e.target === modal) close();
     };
     window.addEventListener('keydown', onKey, true);
+    const forget = h('button', 'sub-btn wide', 'Forget kept orders');
+    forget.title = 'Ask again about trigger and replacement orders you chose to keep this game';
+    forget.onclick = () => {
+      this.handlers.forgetOrders();
+      forget.textContent = 'Forgotten';
+    };
+    if (document.body.classList.contains('in-game')) buttons.append(forget);
     buttons.append(reset, done);
     panel.append(buttons);
     modal.append(panel);
@@ -395,7 +534,7 @@ export class Hud {
   gameOver(won: boolean, winner: string | null, onAgain: () => void): void {
     this.closeOverlay();
     const ov = h('div', `overlay gameover ${won ? 'won' : 'lost'}`);
-    ov.append(h('h1', '', won ? 'Victory' : 'Defeat'), h('p', 'sub', winner ? `${winner} wins` : 'Draw'));
+    ov.append(h('h1', '', won ? 'Victory' : 'Defeat'), h('p', 'sub', winner ? (winner === 'You' ? 'You win' : `${winner} wins`) : 'Draw'));
     const row = h('div', 'setup-actions');
     const menu = h('button', 'sub-btn wide', 'Main menu');
     menu.onclick = () => this.handlers.exitToMenu();
@@ -406,12 +545,88 @@ export class Hud {
     this.root.append(ov);
   }
 
+  private voteModal: { id: number; el: HTMLElement; timer: number } | null = null;
+
+  /**
+   * A restart vote: someone else's asks you to agree or keep playing; once you've agreed (or if you called it)
+   * it shows who has so far. A result closes it with a toast.
+   */
+  showVote(v: import('../protocol').VoteMsg): void {
+    const cur = this.voteModal;
+    if (v.result) {
+      if (cur && cur.id === v.id) this.closeVote();
+      this.toast(v.reason ?? (v.result === 'passed' ? 'Restarting the match…' : 'The game carries on.'), 'message');
+      return;
+    }
+    if (cur && cur.id !== v.id) this.closeVote();
+    let modal = this.voteModal?.el;
+    if (!modal) {
+      modal = h('div', 'modal vote');
+      const ends = Date.now() + v.seconds * 1000;
+      const timer = window.setInterval(() => {
+        const left = Math.max(0, Math.ceil((ends - Date.now()) / 1000));
+        const t = modal!.querySelector('.vote-time');
+        if (t) t.textContent = `${left}s left to answer`;
+      }, 250);
+      this.voteModal = { id: v.id, el: modal, timer };
+      this.root.append(modal);
+    }
+    modal.replaceChildren();
+    const panel = h('div', 'modal-panel');
+    panel.setAttribute('role', 'alertdialog');
+    panel.setAttribute('aria-label', 'Restart vote');
+    const mine = v.voted;
+    panel.append(
+      h('div', 'modal-title', mine ? 'Vote to restart' : `${v.by} wants to restart the match`),
+      h('div', 'modal-sub', mine
+        ? 'Waiting for everyone at the table. The match restarts with the same decks once all agree.'
+        : 'Same seats, same decks, a fresh deal. Everyone has to agree.'),
+    );
+    const list = h('div', 'vote-list');
+    for (const name of v.voters) {
+      const yes = v.agreed.includes(name);
+      const r = h('div', `vote-voter${yes ? ' yes' : ''}`);
+      r.append(h('span', 'vote-mark', yes ? '✓' : '…'), h('span', '', name), h('span', 'vote-state', yes ? 'Agreed' : 'Deciding'));
+      list.append(r);
+    }
+    panel.append(list, h('div', 'modal-sub vote-time', `${v.seconds}s left to answer`));
+    const row = h('div', 'modal-buttons');
+    if (mine) {
+      const withdraw = h('button', 'sub-btn wide', 'Call it off');
+      withdraw.onclick = () => this.handlers.vote(false);
+      row.append(withdraw);
+    } else {
+      const no = h('button', 'sub-btn wide', 'Keep playing');
+      no.onclick = () => this.handlers.vote(false);
+      const yes = h('button', 'main-btn wide', 'Restart');
+      yes.onclick = () => this.handlers.vote(true);
+      row.append(no, yes);
+    }
+    panel.append(row);
+    modal.append(panel);
+  }
+
+  closeVote(): void {
+    const cur = this.voteModal;
+    if (!cur) return;
+    clearInterval(cur.timer);
+    cur.el.classList.add('out');
+    setTimeout(() => cur.el.remove(), 160);
+    this.voteModal = null;
+  }
+
   /** The Concede chip: concede and keep watching, leave for the main menu, or carry on. */
   private leaveMenu(): void {
     if (document.querySelector('.modal.leave')) return;
     const modal = h('div', 'modal leave');
     const panel = h('div', 'modal-panel');
-    panel.append(h('div', 'modal-title', 'Leave this game?'), h('div', 'modal-sub', 'Conceding lets the others play on; you can watch. Exiting ends the game.'));
+    const solo = this.handlers.soloTable();
+    panel.append(
+      h('div', 'modal-title', 'Leave this game?'),
+      h('div', 'modal-sub', solo
+        ? 'Conceding lets the others play on; you can watch. Restarting deals a new game with the same decks. Exiting ends the game.'
+        : 'Conceding lets the others play on; you can watch. A restart needs everyone at the table to agree. Exiting ends the game.'),
+    );
     const row = h('div', 'modal-buttons');
     const close = () => {
       modal.classList.add('out');
@@ -436,7 +651,12 @@ export class Hud {
       close();
       this.handlers.exitToMenu();
     };
-    row.append(stay, concede, exit);
+    const restart = h('button', 'sub-btn wide', solo ? 'Restart Match' : 'Vote to Restart');
+    restart.onclick = () => {
+      close();
+      this.handlers.restart();
+    };
+    row.append(stay, concede, restart, exit);
     panel.append(row);
     modal.append(panel);
     modal.onclick = (e) => {
@@ -479,7 +699,7 @@ export class Hud {
     // stale presses and unseen opponent spells), so it isn't offered, and OK, which passes priority once, says so
     const priority = prompt.input === 'InputPassPriority';
     const cancel = priority && /^end turn$/i.test(prompt.cancel?.label ?? '') ? undefined : prompt.cancel;
-    const okLabel = priority && /^OK$/i.test(ok?.label ?? '') ? 'Pass Priority' : ok?.label || 'OK';
+    const okLabel = this.okLabel(prompt, state, localId);
     // "up to one target" and other choices where nothing is allowed: until something is picked, OK means
     // choosing nothing. Say so, drop the "your move" glow, and keep Space/Enter from doing it by accident
     // (passing through a pile of triggers would otherwise skip Summon: Bahamut's destroy).
@@ -489,13 +709,19 @@ export class Hud {
     this.okBtn.classList.toggle('glow', !!ok?.enabled && !waiting && !this.skipping);
     this.okBtn.classList.toggle('skip', this.skipping);
     this.okBtn.classList.toggle('end-turn', /end turn|pass/i.test(ok?.label ?? '') || /^OK$/i.test(ok?.label ?? ''));
-    this.cancelBtn.textContent = cancel?.label || 'Cancel';
+    const myBlocks = prompt.input === 'InputBlock' && state ? this.myBlockers(state, localId).length : 0;
+    this.clearing = myBlocks > 0 && !cancel?.enabled;
+    this.cancelBtn.textContent = this.clearing ? 'Clear blocks' : /^alpha strike$/i.test(cancel?.label ?? '') ? 'Attack with all' : cancel?.label || 'Cancel';
+    this.passing = !!prompt.passing;
+    this.passBtn.textContent = this.passing ? 'Resume turn' : 'Pass Turn';
+    this.passBtn.classList.toggle('resuming', this.passing);
     // "Alpha Strike" wears the purple-and-gold Attack style from the design sheet
     this.cancelBtn.classList.toggle('attack-btn', /alpha strike/i.test(cancel?.label ?? ''));
     // Forge sometimes offers Undo itself (your spell just went on the stack): don't show it twice
     this.undoBtn.style.visibility = /^undo$/i.test(cancel?.label ?? '') && cancel?.enabled ? 'hidden' : 'visible';
-    this.cancelBtn.style.visibility = cancel?.enabled && !waiting ? 'visible' : 'hidden';
-    this.cancelBtn.disabled = !cancel?.enabled || waiting;
+    const canCancel = (!!cancel?.enabled || this.clearing) && !waiting;
+    this.cancelBtn.style.visibility = canCancel ? 'visible' : 'hidden';
+    this.cancelBtn.disabled = !canCancel;
     this.promptBox.classList.toggle('waiting', waiting);
     // Phyrexian mana (and K'rrik's {B}): life pays a symbol at a time, alongside whatever mana you tap
     const lp = prompt.lifePay;
@@ -509,6 +735,31 @@ export class Hud {
     this.floatingBtn.style.display = paying && floating > 0 ? '' : 'none';
     if (paying && floating > 0) this.floatingBtn.textContent = `Use floating mana (${floating})`;
     if (lp && canPayLife) this.lifeBtn.textContent = lp.shards > 1 ? `Pay ${lp.each} life · ${lp.shards} left` : `Pay ${lp.each} life`;
+  }
+
+  private myBlockers(state: GameState, localId: number): number[] {
+    return Object.values(state.cards).filter((c) => c.zone === 'Battlefield' && c.controller === localId && c.blocking).map((c) => c.id);
+  }
+
+  /** What OK does right now, in words. */
+  private okLabel(prompt: Prompt, state: GameState | null, localId: number): string {
+    const label = prompt.ok?.label ?? '';
+    if (!/^OK$/i.test(label)) return label || 'OK';
+    if (prompt.input === 'InputAttack' && state) {
+      const n = Object.values(state.cards).filter((c) => c.zone === 'Battlefield' && c.controller === localId && c.attacking).length;
+      return n ? `Attack with ${n}` : 'No attack';
+    }
+    if (prompt.input === 'InputBlock' && state) {
+      const n = this.myBlockers(state, localId).length;
+      return n ? `Block with ${n}` : 'No blocks';
+    }
+    if (prompt.input !== 'InputPassPriority') return 'OK';
+    // your turn with nothing waiting: passing moves the turn on
+    if (state && state.activePlayer === localId && state.stack.length === 0) {
+      const next = NEXT_STEP[state.phase ?? ''];
+      if (next) return next;
+    }
+    return 'Pass Priority';
   }
 
   /** The "OK to all" button: offered with several things on the stack, or showing how many are left while it runs. */
@@ -716,6 +967,132 @@ export class Hud {
       el.onmouseleave = () => this.showZoom(null);
     }
     return el;
+  }
+
+  // ---- stops ---------------------------------------------------------------------------------------
+
+  /** The marks on the phase bar (your turns' stops above, opponents' below) and the full-control chip. */
+  private showStops(): void {
+    const stops = stopsNow();
+    this.phaseBar.querySelectorAll<HTMLElement>('.phase').forEach((pip) => {
+      const key = pip.dataset.phase!;
+      const steps = key === 'COMBAT_DECLARE_ATTACKERS' ? ['COMBAT_BEGIN', key] : key === 'COMBAT_DAMAGE' ? [key, 'COMBAT_END'] : [key];
+      for (const side of ['mine', 'theirs']) {
+        const mark = pip.querySelector(`.stop-mark.${side}`)!;
+        const set = steps.map((k) => stops[`${side}:${k}`]);
+        mark.classList.toggle('on', set.includes('on'));
+        mark.classList.toggle('once', set.includes('once'));
+      }
+    });
+    const full = fullControl();
+    this.fullChip.classList.toggle('show', full !== 'off');
+    this.fullChip.textContent = full === 'held' ? 'Full control, held · F to release' : 'Full control this turn · F to release';
+    this.syncStops?.();
+  }
+
+  private syncStops: (() => void) | null = null;
+
+  /** The stops, by step: for your turns and for opponents'. Each goes off → on → once. */
+  toggleStops(): void {
+    const open = document.querySelector('.stops');
+    if (open) {
+      (open as HTMLElement & { close?: () => void }).close?.();
+      return;
+    }
+    const pop = h('div', 'stops');
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'Stops');
+    const grid = h('div', 'stops-grid');
+    grid.append(h('span', 'stops-head', ''), h('span', 'stops-head', 'Your turn'), h('span', 'stops-head', 'Opponents'));
+    const cells: { key: string; b: HTMLButtonElement; what: string }[] = [];
+    for (const [step, name] of STEPS) {
+      grid.append(h('span', 'stops-step', name));
+      for (const side of ['mine', 'theirs']) {
+        const b = h('button', 'stop-cell');
+        const key = `${side}:${step}`;
+        b.onclick = () => {
+          const now = stopsNow()[key];
+          setStop(key, now === 'on' ? 'once' : now === 'once' ? null : 'on');
+        };
+        cells.push({ key, b, what: `${name}, ${side === 'mine' ? 'your turn' : "opponents' turns"}` });
+        grid.append(b);
+      }
+    }
+    const full = h('button', 'sub-btn wide', '');
+    full.onclick = () => setFullControl(fullControl() === 'off' ? 'turn' : 'off');
+    const reset = h('button', 'sub-btn wide', 'Reset stops');
+    reset.onclick = () => resetStops();
+    const row = h('div', 'modal-buttons');
+    row.append(full, reset);
+    pop.append(
+      h('div', 'stops-note', 'The game waits for you at these steps when you could do something. A stop set to Once waits the next time whatever you could do, then comes off.'),
+      grid,
+      row,
+      h('div', 'stops-note', 'Full control stops at every chance to act: F until the turn ends, Shift+F to hold it.'),
+    );
+    this.syncStops = () => {
+      for (const c of cells) {
+        const v = stopsNow()[c.key];
+        c.b.textContent = v === 'on' ? 'Stop' : v === 'once' ? 'Once' : '·';
+        c.b.classList.toggle('on', v === 'on');
+        c.b.classList.toggle('once', v === 'once');
+        c.b.setAttribute('aria-label', `${c.what}: ${v === 'on' ? 'stop' : v === 'once' ? 'stop once' : 'no stop'}`);
+      }
+      full.textContent = fullControl() === 'off' ? 'Full control this turn' : 'Release full control';
+    };
+    this.syncStops();
+    const outside = (e: Event) => {
+      if (!pop.contains(e.target as Node) && !this.phaseBar.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      close();
+    };
+    const close = () => {
+      this.syncStops = null;
+      pop.remove();
+      document.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('keydown', onKey, true);
+    };
+    (pop as HTMLElement & { close?: () => void }).close = close;
+    document.addEventListener('pointerdown', outside, true);
+    window.addEventListener('keydown', onKey, true);
+    this.root.append(pop);
+  }
+
+  /** Ask before something that's probably a mistake. */
+  confirmChoice(title: string, text: string, yes: string, onYes: () => void, card?: CardState): void {
+    if (document.querySelector('.modal.sure')) return;
+    const modal = h('div', 'modal sure');
+    const panel = h('div', 'modal-panel');
+    panel.setAttribute('role', 'alertdialog');
+    panel.append(h('div', 'modal-title', title), h('div', 'modal-sub', text));
+    if (card) panel.append(this.cardThumb(card));
+    const row = h('div', 'modal-buttons');
+    const close = () => {
+      window.removeEventListener('keydown', onKey, true);
+      this.showZoom(null);
+      modal.remove();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      close();
+    };
+    const no = h('button', 'sub-btn wide', 'Cancel');
+    no.onclick = close;
+    const ok = h('button', 'main-btn wide', yes);
+    ok.onclick = () => {
+      close();
+      onYes();
+    };
+    window.addEventListener('keydown', onKey, true);
+    row.append(no, ok);
+    panel.append(row);
+    modal.append(panel);
+    this.root.append(modal);
+    no.focus();
   }
 
   setPhase(state: GameState, localId: number): void {
@@ -1156,10 +1533,22 @@ export class Hud {
   // ---- requests -----------------------------------------------------------------------------------
 
   request(req: RequestMsg, state: GameState | null): Promise<unknown> {
+    if (req.kind === 'distribute' && !req.combat) {
+      const onTable = this.distributeOnTable(req, state);
+      if (onTable) return onTable;
+    }
     return new Promise((resolve) => {
       const modal = h('div', 'modal');
       const panel = h('div', 'modal-panel');
       modal.append(panel);
+      // look at the table without answering: the dialog steps aside until you come back to it
+      const peek = h('button', 'peek-btn', 'View battlefield');
+      peek.onclick = () => {
+        const on = modal.classList.toggle('peek');
+        peek.textContent = on ? 'Back to the choice' : 'View battlefield';
+        this.showZoom(null);
+      };
+      modal.append(peek);
       if (req.source) panel.append(this.sourceHeader(req.source, state));
       const title = h('div', 'modal-title', tidyMessage(req.message ?? ''));
       panel.append(title);
@@ -1183,10 +1572,18 @@ export class Hud {
           row.append(b);
         });
         panel.append(row);
-      } else if (req.kind === 'distribute') {
-        this.buildDistribute(req, state, panel, done);
       } else if (req.kind === 'piles') {
         this.buildPiles(req, state, panel, done);
+      } else if (req.kind === 'place') {
+        this.buildPlace(req, state, panel, done);
+      } else if (req.kind === 'modes') {
+        this.buildModes(req, state, panel, done);
+      } else if (req.kind === 'number') {
+        this.buildNumber(req, panel, done);
+      } else if (req.kind === 'distribute' && req.combat) {
+        this.buildDamage(req, state, panel, done);
+      } else if (req.kind === 'distribute') {
+        this.buildDistribute(req, state, panel, done);
       } else if (req.kind === 'input') {
         const input = h('input', 'modal-input');
         input.type = req.numeric ? 'number' : 'text';
@@ -1222,6 +1619,8 @@ export class Hud {
       if (minRem === 0 && maxRem === 0) min = max = n;
     }
     const picked: number[] = [];
+    const off = new Set(req.disabled ?? []);
+    let remember = false;
     // the table's copy of a card when it shows the card, else the face the bridge sent with the option (a card
     // in a hidden hand is on the table face down, but a reveal shows it)
     const cardOf = (o: ChoiceOption): CardState | undefined => {
@@ -1264,9 +1663,17 @@ export class Hud {
         el = h('button', 'choice-item', choiceLabel(o.label));
       }
       el.append(h('span', 'order-badge'));
-      if (!reveal) {
+      if (off.has(i)) {
+        el.classList.add('off');
+        (el as HTMLButtonElement).setAttribute('aria-disabled', 'true');
+      }
+      if (!reveal && !off.has(i)) {
         el.onclick = () => {
           const at = picked.indexOf(i);
+          if (at < 0 && req.distinct) {
+            const same = picked.findIndex((k) => options[k].label === o.label);
+            if (same >= 0) picked.splice(same, 1);
+          }
           if (at >= 0) picked.splice(at, 1);
           else {
             if (max === 1) picked.length = 0;
@@ -1286,6 +1693,7 @@ export class Hud {
     });
     panel.append(list);
 
+    const answered = (order: number[]): unknown => (req.canRemember ? { order, remember } : order);
     const row = h('div', 'modal-buttons');
     if (!reveal && min === 0 && max >= 1) {
       const skip = h('button', 'sub-btn wide', 'None');
@@ -1295,11 +1703,19 @@ export class Hud {
     if (ordering && min === n) {
       const all = h('button', 'sub-btn wide', 'Keep as shown');
       all.title = 'Resolve them left to right';
-      all.onclick = () => done(options.map((_, i) => i));
+      all.onclick = () => done(answered(options.map((_, i) => i)));
       row.append(all);
     }
-    confirm.onclick = () => done(reveal ? [] : [...answer()]);
+    confirm.onclick = () => done(reveal ? [] : answered([...answer()]));
     row.append(confirm);
+    if (req.canRemember) {
+      const keep = h('label', 'keep-order');
+      const box = h('input');
+      box.type = 'checkbox';
+      box.onchange = () => (remember = box.checked);
+      keep.append(box, h('span', '', 'Keep this order the next time these come together this game'));
+      panel.append(keep);
+    }
     panel.append(row);
     refresh();
   }
@@ -1337,6 +1753,469 @@ export class Hud {
       row.append(col);
     });
     panel.append(row);
+  }
+
+  /** A card as a thumbnail: the table's copy when it shows the card, else the face sent with the option. */
+  private optionThumb(o: ChoiceOption, state: GameState | null): { el: HTMLElement; name: string; card?: CardState } {
+    const known = o.card != null ? state?.cards[o.card] : undefined;
+    const card = known?.visible ? known : o.cardData ?? known;
+    return { el: card ? this.cardThumb(card) : h('button', 'choice-item', choiceLabel(o.label)), name: card?.name ?? o.label, card };
+  }
+
+  /**
+   * Cards divided among named places (scry, surveil, explore, "one into your hand, the rest on the bottom"): each
+   * sits under the place it's going. With two places a click sends a card to the other; with three, buttons under
+   * it name them. Where order matters the cards are numbered as they'll be drawn, and arrows change it. A place
+   * that's full gives up its earliest card to a new one. Confirm waits until every place has what it needs.
+   */
+  private buildPlace(req: RequestMsg, state: GameState | null, panel: HTMLElement, done: (v: unknown) => void): void {
+    const options = req.options ?? [];
+    const places = req.places ?? [];
+    const start = req.start ?? 0;
+    const verb = req.verb ?? '';
+    const remaining = req.remaining ?? 0;
+    const inPlace: number[][] = places.map((_, k) => (k === start ? options.map((_, i) => i) : []));
+    const may = (i: number, k: number) => !places[k].allowed || places[k].allowed!.includes(i);
+    const at = (i: number) => inPlace.findIndex((p) => p.includes(i));
+    const hint = h('div', 'modal-sub', '');
+    panel.append(hint);
+
+    const lanes = h('div', options.length > 3 ? 'lanes many' : 'lanes');
+    lanes.style.setProperty('--n', String(options.length));
+    const laneEls = places.map((p) => {
+      const el = h('div', `pile-option lane ${p.kind}`);
+      const head = h('div', 'pile-head');
+      const note = h('span', 'pile-count');
+      head.append(h('span', 'pile-name', p.label), note);
+      const cards = h('div', 'pile-cards');
+      el.append(head, cards);
+      lanes.append(el);
+      return { el, cards, note };
+    });
+    const send = (i: number, k: number): void => {
+      const from = at(i);
+      if (from === k || !may(i, k)) return;
+      if (inPlace[k].length >= places[k].max) {
+        // full: its earliest card goes back where this one came from, if it may
+        const out = inPlace[k].find((x) => may(x, from));
+        if (out === undefined) return;
+        inPlace[k] = inPlace[k].filter((x) => x !== out);
+        inPlace[from].push(out);
+      }
+      inPlace[from] = inPlace[from].filter((x) => x !== i);
+      inPlace[k].push(i);
+      this.showZoom(null);
+      refresh();
+    };
+    const slots = options.map((o, i) => {
+      const { el: thumb, name } = this.optionThumb(o, state);
+      const slot = h('div', 'lane-card');
+      thumb.onclick = () => {
+        if (places.length < 2) return;
+        const from = at(i);
+        const next = places.map((_, d) => (from + 1 + d) % places.length).find((k) => k !== from && may(i, k) && (places.length === 2 || inPlace[k].length < places[k].max));
+        if (next !== undefined) send(i, next);
+        thumb.focus();
+      };
+      const badge = h('span', 'order-badge');
+      thumb.append(badge);
+      const foot = h('div', 'lane-foot');
+      const step = (d: number) => {
+        const p = inPlace[at(i)];
+        const k = p.indexOf(i);
+        [p[k], p[k + d]] = [p[k + d], p[k]];
+        refresh();
+      };
+      const left = h('button', 'sub-btn icon', '‹');
+      left.title = 'Draw it sooner';
+      left.setAttribute('aria-label', `Draw ${name} sooner`);
+      left.onclick = () => step(-1);
+      const right = h('button', 'sub-btn icon', '›');
+      right.title = 'Draw it later';
+      right.setAttribute('aria-label', `Draw ${name} later`);
+      right.onclick = () => step(1);
+      foot.append(left, right);
+      const to = h('div', 'lane-to');
+      const toBtns = places.length > 2 ? places.map((p, k) => {
+        const b = h('button', 'lane-to-btn', p.label.replace(' of library', ''));
+        b.title = p.label;
+        b.onclick = () => send(i, k);
+        to.append(b);
+        return b;
+      }) : [];
+      slot.append(thumb, foot, to);
+      return { slot, thumb, badge, foot, left, right, name, toBtns };
+    });
+
+    const confirm = h('button', 'main-btn wide', 'Confirm');
+    const skip = h('button', 'sub-btn wide', '');
+    const count = (n: number) => (n === 1 ? '1 card' : `${n} cards`);
+    const refresh = () => {
+      places.forEach((p, k) => {
+        const ids = inPlace[k];
+        laneEls[k].cards.replaceChildren(...(ids.length ? ids.map((i) => slots[i].slot) : [h('div', 'pile-empty', 'None')]));
+        const limits = p.min === p.max && p.max < options.length ? `${ids.length} of ${p.max}` : p.max < options.length ? `${ids.length}, up to ${p.max}` : count(ids.length);
+        laneEls[k].note.textContent = p.ordered && ids.length > 1 ? `${limits} · 1 is drawn first` : limits;
+        laneEls[k].el.classList.toggle('short', ids.length < p.min);
+      });
+      slots.forEach((s, i) => {
+        const k = at(i);
+        const p = inPlace[k];
+        const n = p.indexOf(i);
+        const ordering = places[k].ordered && p.length > 1;
+        s.badge.textContent = ordering ? String(n + 1) : '';
+        s.foot.classList.toggle('hidden', !ordering);
+        s.left.disabled = n <= 0;
+        s.right.disabled = n === p.length - 1;
+        s.thumb.classList.toggle('fixed', places.length > 1 && !places.some((_, j) => j !== k && may(i, j)));
+        s.thumb.setAttribute('aria-label', `${s.name}: ${places[k].label.toLowerCase()}`);
+        s.toBtns.forEach((b, j) => {
+          b.classList.toggle('on', j === k);
+          b.disabled = j !== k && !may(i, j);
+        });
+      });
+      const short = places.findIndex((p, k) => inPlace[k].length < p.min);
+      confirm.disabled = short >= 0;
+      hint.textContent = short >= 0
+        ? `${places[short].label} needs ${places[short].min - inPlace[short].length} more.`
+        : places.length === 1 ? 'Use the arrows to change the order they’ll be drawn in.'
+          : places.length === 2 ? `Click a card to move it between ${places[0].label.toLowerCase()} and ${places[1].label.toLowerCase()}.`
+            : 'Use the buttons under each card to say where it goes.';
+      const [keep, away] = [inPlace[0].length, (inPlace[1] ?? []).length];
+      const gone = places[1]?.kind === 'graveyard' ? 'graveyard' : 'bottom';
+      confirm.textContent = !verb ? (places.length === 1 ? 'Confirm order' : 'Confirm')
+        : away === 0 ? (keep > 1 ? 'Keep all on top' : 'Keep on top')
+          : keep === 0 ? (gone === 'graveyard' ? 'Put in graveyard' : 'Put on bottom')
+            : `Keep ${keep}, ${away} to ${gone}`;
+      skip.disabled = keep === 0;
+    };
+    const answer = (skipRest: boolean) => done({ places: inPlace, skip: skipRest });
+    confirm.onclick = () => answer(false);
+    const row = h('div', 'modal-buttons');
+    if (verb && remaining > 0) {
+      const plural = verb === 'Scry' ? 'scries' : `${verb.toLowerCase()}s`;
+      skip.textContent = remaining === 1 ? `Confirm & skip the next ${verb.toLowerCase()}` : `Confirm & skip ${remaining} more ${plural}`;
+      skip.title = `Do this and keep the top as it is through the ${plural} still on the stack. You'll be asked again if one would show you a new card.`;
+      skip.onclick = () => answer(true);
+      row.append(skip);
+    }
+    row.append(confirm);
+    panel.append(lanes, row);
+    refresh();
+  }
+
+  /** Modes, all chosen here: click to take one or give it back; a repeatable one has its own − and +. */
+  private buildModes(req: RequestMsg, state: GameState | null, panel: HTMLElement, done: (v: unknown) => void): void {
+    const options = req.options ?? [];
+    const min = req.min ?? 1;
+    const max = req.max ?? 1;
+    const counts = options.map(() => 0);
+    const total = () => counts.reduce((a, b) => a + b, 0);
+    const sub = h('div', 'modal-sub', min === max ? `Choose ${min}` : min === 0 ? `Choose up to ${max}` : `Choose ${min} to ${max}`);
+    panel.append(sub);
+    const body = h('div', 'modes');
+    const host = (req.card != null ? state?.cards[req.card] : undefined);
+    const card = host?.visible ? host : req.cardData ?? host;
+    if (card) body.append(this.cardThumb(card));
+    const list = h('div', 'choice-list');
+    const confirm = h('button', 'main-btn wide', 'Confirm');
+    const items = options.map((o, i) => {
+      const row = h('div', 'mode-row');
+      const b = h('button', 'choice-item', choiceLabel(o.label));
+      b.append(h('span', 'order-badge'));
+      b.onclick = () => {
+        if (req.repeat) {
+          if (total() < max) counts[i]++;
+        } else if (counts[i]) counts[i] = 0;
+        else {
+          if (total() >= max) {
+            // one to choose: the new pick replaces the old
+            if (max !== 1) return;
+            counts.fill(0);
+          }
+          counts[i] = 1;
+        }
+        refresh();
+      };
+      row.append(b);
+      if (req.repeat) {
+        const less = h('button', 'sub-btn icon', '−');
+        less.setAttribute('aria-label', 'One fewer');
+        less.onclick = () => {
+          if (counts[i] > 0) counts[i]--;
+          refresh();
+        };
+        row.append(less);
+      }
+      list.append(row);
+      return b;
+    });
+    const refresh = () => {
+      items.forEach((b, i) => {
+        b.classList.toggle('picked', counts[i] > 0);
+        b.setAttribute('aria-pressed', String(counts[i] > 0));
+        b.querySelector('.order-badge')!.textContent = req.repeat && counts[i] > 0 ? `×${counts[i]}` : '';
+        b.classList.toggle('spent', counts[i] === 0 && total() >= max && max > 1);
+      });
+      const n = total();
+      confirm.disabled = n < min || n > max;
+      confirm.textContent = max > 1 ? `Confirm (${n}/${max})` : 'Confirm';
+    };
+    body.append(list);
+    const row = h('div', 'modal-buttons');
+    confirm.onclick = () => done(counts.flatMap((n, i) => Array<number>(n).fill(i)));
+    row.append(confirm);
+    panel.append(body, row);
+    refresh();
+  }
+
+  /** A number on a stepper: one at a time, five at a time, or typed. Zero for X asks twice. */
+  private buildNumber(req: RequestMsg, panel: HTMLElement, done: (v: unknown) => void): void {
+    const min = req.min ?? 0;
+    const max = req.max ?? Infinity;
+    const isX = /\bX\b/.test(req.message ?? '');
+    let value = min;
+    let sure = false;
+    const box = h('input', 'modal-input number-value');
+    box.type = 'number';
+    box.min = String(min);
+    if (Number.isFinite(max)) box.max = String(max);
+    box.setAttribute('aria-label', req.message ?? 'Number');
+    const confirm = h('button', 'main-btn wide', '');
+    const steps: [HTMLButtonElement, number][] = ([[-5, '−5'], [-1, '−'], [1, '+'], [5, '+5']] as [number, string][]).map(([d, t]) => {
+      const b = h('button', 'sub-btn icon', t);
+      b.onclick = () => set(value + d);
+      return [b, d];
+    });
+    const set = (v: number, typed = false) => {
+      value = Math.max(min, Math.min(max, Math.floor(Number.isFinite(v) ? v : min)));
+      sure = false;
+      if (!typed) box.value = String(value);
+      steps.forEach(([b, d]) => (b.disabled = d < 0 ? value <= min : value >= max));
+      confirm.textContent = isX ? `X = ${value}` : `Confirm ${value}`;
+    };
+    box.oninput = () => set(Number(box.value), true);
+    box.onkeydown = (e) => {
+      if (e.key === 'Enter') confirm.click();
+    };
+    confirm.onclick = () => {
+      if (isX && value === 0 && !sure) {
+        sure = true;
+        confirm.textContent = 'Really X = 0?';
+        return;
+      }
+      done(value);
+    };
+    const row = h('div', 'number-row');
+    row.append(steps[0][0], steps[1][0], box, steps[2][0], steps[3][0]);
+    const buttons = h('div', 'modal-buttons');
+    if (req.cancel) {
+      const no = h('button', 'sub-btn wide', 'Cancel');
+      no.onclick = () => done(null);
+      buttons.append(no);
+    }
+    buttons.append(confirm);
+    panel.append(row, h('div', 'modal-sub', Number.isFinite(max) ? `${min} to ${max}` : `${min} or more`), buttons);
+    set(min);
+    setTimeout(() => box.select(), 50);
+  }
+
+  /**
+   * Combat damage: the attacker, its blockers and whoever it's attacking, as cards, with a stepper under each.
+   * Starts lethal to each in turn; the arrows change that order and "Lethal in order" deals it out again. A point
+   * added with none left comes off another. With trample nothing goes over until every blocker has lethal.
+   */
+  private buildDamage(req: RequestMsg, state: GameState | null, panel: HTMLElement, done: (v: unknown) => void): void {
+    const options = req.options ?? [];
+    const total = req.amount ?? 0;
+    const shares = options.map((o) => o.initial ?? 0);
+    const blockers = options.map((_, i) => i).filter((i) => !options[i].defender);
+    const defender = options.findIndex((o) => o.defender);
+    let order = [...blockers];
+    const left = () => total - shares.reduce((a, b) => a + b, 0);
+    const lethal = (i: number) => options[i].lethal ?? 0;
+    const allLethal = () => blockers.every((i) => shares[i] >= lethal(i));
+    const locked = () => defender >= 0 && !req.freeDefender && !allLethal();
+    const note = h('div', 'modal-sub');
+    const board = h('div', 'damage-board');
+    const attacker = h('div', 'damage-side');
+    const host = req.card != null ? state?.cards[req.card] : undefined;
+    const src = host?.visible ? host : req.cardData ?? host;
+    if (src) attacker.append(this.cardThumb(src));
+    const pool = h('div', 'damage-pool');
+    attacker.append(pool);
+    const row = h('div', 'damage-row');
+    const confirm = h('button', 'main-btn wide', 'Deal damage');
+    const slots = options.map((o, i) => {
+      const slot = h('div', `damage-slot${o.defender ? ' defender' : ''}`);
+      const player = o.player != null ? state?.players.find((p) => p.id === o.player) : undefined;
+      if (player) {
+        const face = h('div', 'damage-player');
+        face.append(h('div', 'damage-life', String(player.life)), h('div', '', player.name));
+        slot.append(face);
+      } else slot.append(this.optionThumb(o, state).el);
+      const label = h('div', 'damage-note');
+      const name = player?.name ?? o.label;
+      const minus = h('button', 'sub-btn icon', '−');
+      minus.setAttribute('aria-label', `One less to ${name}`);
+      const plus = h('button', 'sub-btn icon', '+');
+      plus.setAttribute('aria-label', `One more to ${name}`);
+      const value = h('div', 'share');
+      const steps = h('div', 'damage-steps');
+      steps.append(minus, value, plus);
+      minus.onclick = () => {
+        if (shares[i] > 0) shares[i]--;
+        refresh();
+      };
+      plus.onclick = () => {
+        if (i === defender && locked()) return;
+        if (left() <= 0) {
+          const from = [...order, defender].reverse().find((j) => j >= 0 && j !== i && shares[j] > 0);
+          if (from === undefined) return;
+          shares[from]--;
+        }
+        shares[i]++;
+        refresh();
+      };
+      const move = h('div', 'damage-move');
+      const swap = (d: number) => {
+        const k = order.indexOf(i);
+        [order[k], order[k + d]] = [order[k + d], order[k]];
+        refresh();
+      };
+      const l = h('button', 'lane-to-btn', '‹ sooner');
+      l.onclick = () => swap(-1);
+      const r = h('button', 'lane-to-btn', 'later ›');
+      r.onclick = () => swap(1);
+      if (!o.defender && blockers.length > 1) move.append(l, r);
+      slot.append(steps, label, move);
+      return { slot, value, label, minus, plus, l, r };
+    });
+    const refresh = () => {
+      row.replaceChildren(...order.map((i) => slots[i].slot), ...(defender >= 0 ? [slots[defender].slot] : []));
+      const n = left();
+      const early = defender >= 0 && shares[defender] > 0 && locked();
+      options.forEach((o, i) => {
+        const s = slots[i];
+        s.value.textContent = String(shares[i]);
+        s.minus.disabled = shares[i] <= 0;
+        s.plus.disabled = shares[i] >= total || (i === defender && locked());
+        const kills = !o.defender && shares[i] >= lethal(i);
+        s.slot.classList.toggle('lethal', kills);
+        s.slot.classList.toggle('hurt', !o.defender && !kills && shares[i] > 0);
+        s.slot.classList.toggle('locked', i === defender && locked());
+        s.label.textContent = o.defender ? (locked() ? 'after lethal to every blocker' : 'the rest') : lethal(i) === 0 ? 'already lethal' : kills ? `lethal (${lethal(i)})` : `lethal is ${lethal(i)}`;
+        s.l.disabled = order.indexOf(i) <= 0;
+        s.r.disabled = order.indexOf(i) === order.length - 1;
+      });
+      pool.textContent = `${total} damage`;
+      note.textContent = early ? 'Every blocker needs lethal damage before any can go over.' : n > 0 ? `${n} left to assign` : 'All assigned';
+      note.classList.toggle('warn', early);
+      confirm.disabled = n !== 0 || early;
+    };
+    const auto = h('button', 'sub-btn wide', 'Lethal in order');
+    auto.title = 'Deal lethal to each blocker, left to right, and the rest after';
+    auto.onclick = () => {
+      let rest = total;
+      shares.fill(0);
+      for (const i of order) {
+        shares[i] = Math.min(rest, lethal(i));
+        rest -= shares[i];
+      }
+      if (rest > 0) shares[defender >= 0 ? defender : order[order.length - 1]] += rest;
+      refresh();
+    };
+    confirm.onclick = () => done([...shares]);
+    board.append(attacker, row);
+    const buttons = h('div', 'modal-buttons');
+    buttons.append(auto, confirm);
+    panel.append(board, note, buttons);
+    refresh();
+  }
+
+  /**
+   * Dividing damage, counters or shields among targets that are on the table: the steppers sit on the targets
+   * themselves, with a small bar to confirm. Null when something can't be pointed at (colours of mana, a card off
+   * the table): the dialog does it instead.
+   */
+  private distributeOnTable(req: RequestMsg, state: GameState | null): Promise<unknown> | null {
+    const options = req.options ?? [];
+    const place = (o: ChoiceOption) => this.handlers.anchor({ card: o.card, player: o.player });
+    if (!options.length || !options.every((o) => !o.color && place(o))) return null;
+    const total = req.amount ?? 0;
+    const min = req.atLeastOne ? 1 : 0;
+    const cap = (i: number) => options[i].max ?? total;
+    const shares = options.map((): number => min);
+    const left = () => total - shares.reduce((a, b) => a + b, 0);
+    for (let i = 0, guard = 0; left() > 0 && guard < total * options.length + options.length; i = (i + 1) % options.length, guard++) if (shares[i] < cap(i)) shares[i]++;
+    return new Promise((resolve) => {
+      // "modal" so the prompt's keys stay quiet meanwhile; it covers nothing
+      const layer = h('div', 'modal on-table');
+      const bar = h('div', 'on-table-bar');
+      const note = h('span', 'on-table-note');
+      const confirm = h('button', 'main-btn wide', 'Confirm');
+      bar.append(h('span', 'on-table-title', tidyMessage(req.message ?? 'Divide')), note, confirm);
+      layer.append(bar);
+      const els = options.map((o, i) => {
+        const el = h('div', 'on-table-step');
+        const name = (o.card != null ? state?.cards[o.card]?.name : undefined) ?? o.label;
+        const minus = h('button', 'sub-btn icon', '−');
+        minus.setAttribute('aria-label', `One less to ${name}`);
+        const plus = h('button', 'sub-btn icon', '+');
+        plus.setAttribute('aria-label', `One more to ${name}`);
+        const value = h('div', 'share');
+        minus.onclick = () => {
+          if (shares[i] > min) shares[i]--;
+          refresh();
+        };
+        plus.onclick = () => {
+          if (shares[i] >= cap(i)) return;
+          if (left() <= 0) {
+            const from = options.map((_, j) => j).reverse().find((j) => j !== i && shares[j] > min);
+            if (from === undefined) return;
+            shares[from]--;
+          }
+          shares[i]++;
+          refresh();
+        };
+        el.append(minus, value, plus);
+        layer.append(el);
+        return { el, value, minus, plus };
+      });
+      const refresh = () => {
+        els.forEach((e, i) => {
+          e.value.textContent = String(shares[i]);
+          e.minus.disabled = shares[i] <= min;
+          e.plus.disabled = shares[i] >= cap(i);
+        });
+        note.textContent = left() > 0 ? `${left()} left` : 'All assigned';
+        confirm.disabled = left() !== 0;
+      };
+      let frame = 0;
+      const follow = () => {
+        if (!layer.isConnected) return; // the game was left
+        // steppers on neighbouring cards are kept from covering each other
+        const taken: { x: number; y: number }[] = [];
+        options.forEach((o, i) => {
+          const p = place(o);
+          if (!p) return;
+          const at = { x: Math.max(80, Math.min(window.innerWidth - 80, p.x)), y: Math.max(40, Math.min(window.innerHeight - 120, p.y)) };
+          while (taken.some((t) => Math.abs(t.x - at.x) < 140 && Math.abs(t.y - at.y) < 46)) at.y += 48;
+          taken.push(at);
+          els[i].el.style.transform = `translate(${Math.round(at.x)}px, ${Math.round(at.y)}px) translate(-50%, -50%)`;
+        });
+        frame = requestAnimationFrame(follow);
+      };
+      confirm.onclick = () => {
+        cancelAnimationFrame(frame);
+        layer.remove();
+        resolve([...shares]);
+      };
+      refresh();
+      this.root.append(layer);
+      follow();
+      confirm.focus();
+    });
   }
 
   /** Split an amount among targets: +/− per row, confirm once the whole amount is placed. */

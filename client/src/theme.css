@@ -1481,7 +1481,8 @@ body:not(.in-game) .plate {
 .overlay.start .menu-card:nth-child(3) { animation-delay: 0.61s; }
 .overlay.start .menu-card:nth-child(4) { animation-delay: 0.69s; }
 
-.overlay.start .menu-settings {
+.overlay.start .menu-settings,
+.overlay.start .menu-links {
   animation: start-fade 0.45s ease-out 0.85s backwards;
 }
 
@@ -1513,7 +1514,8 @@ body:not(.in-game) .plate {
 .overlay.start.leaving .menu-logo,
 .overlay.start.leaving .tagline,
 .overlay.start.leaving .menu-card,
-.overlay.start.leaving .menu-settings {
+.overlay.start.leaving .menu-settings,
+.overlay.start.leaving .menu-links {
   animation: start-out 0.2s cubic-bezier(0.55, 0, 1, 0.45) forwards;
 }
 

@@ -77,6 +77,14 @@ public class SocketGuiGame extends AbstractGuiGame {
         }
     }
 
+    /** An event the bridge works out itself (a spell countered), sent like Forge's own. */
+    void onExtraEvent(final JsonObject json) {
+        synchronized (snapshotLock) {
+            pendingEvents.add(json);
+            flushLocked();
+        }
+    }
+
     private final java.util.concurrent.ScheduledExecutorService flushTimer =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
                 final Thread t = new Thread(r, "bridge-flush-timer");
@@ -172,6 +180,13 @@ public class SocketGuiGame extends AbstractGuiGame {
         promptOut.add("source", resolvingSource());
         // always the input Forge holds right now, so the client can never be stuck answering an old one
         promptOut.addProperty("inputId", currentInputId());
+        if (getGameController() instanceof forge.player.PlayerControllerHuman pch) {
+            // Pass Turn is in effect (the button offers to take it back), and whether what's being aimed would hurt
+            promptOut.addProperty("passing", pch.getYieldController().isYieldActive());
+            if (pch.getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputSelectTargets t && harmful(t)) {
+                promptOut.addProperty("harmful", true);
+            }
+        }
         final JsonObject selection = Serializer.selection(getSelection());
         // abilities Forge's scan misses because their targets depend on X: highlight them as playable too
         if ("InputPassPriority".equals(currentInputName()) && getGameController() instanceof forge.player.PlayerControllerHuman pch) {
@@ -216,7 +231,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         msg.add("prompt", promptOut);
         msg.add("selection", selection);
         if (TRACE_INPUTS) System.out.println("[sent] prompt " + promptOut.get("inputId") + " " + promptOut.get("input") + " on " + Thread.currentThread().getName());
-        session.send(msg);
+        send(msg);
     }
 
     /** Events the client draws nothing for; on their own they don't justify an update. */
@@ -267,8 +282,25 @@ public class SocketGuiGame extends AbstractGuiGame {
 
     /** A request to the player, tagged with the spell or ability that's asking (if one is resolving). */
     private JsonElement ask(final String kind, final JsonObject req) {
+        if (detached) return null;
         req.add("source", resolvingSource());
         return session.request(kind, req);
+    }
+
+    /**
+     * Set once this view's game has been left or replaced. Its game can still be winding down on its own
+     * thread (with you conceded, the AIs played the old game on), and the player's connection now belongs to
+     * the next game: an old update there drew the new game with your seat lost, since player ids repeat.
+     */
+    private volatile boolean detached;
+
+    /** This view's game is over for its player: nothing more from it reaches them. */
+    void detach() {
+        detached = true;
+    }
+
+    private void send(final JsonObject msg) {
+        if (!detached) session.send(msg);
     }
 
     /**
@@ -325,7 +357,7 @@ public class SocketGuiGame extends AbstractGuiGame {
         final JsonObject msg = new JsonObject();
         msg.addProperty("type", "gameStarted");
         msg.add("you", myPlayers.deepCopy());
-        session.send(msg);
+        send(msg);
     }
 
     /** The player reconnected: their seat again, then the whole table (not just what changed). */
@@ -617,10 +649,7 @@ public class SocketGuiGame extends AbstractGuiGame {
             return false;
         }
         final boolean myTurn = isLocalPlayer(playerTurn);
-        final boolean stop = myTurn
-                ? phase == PhaseType.MAIN1 || phase == PhaseType.MAIN2 || phase == PhaseType.COMBAT_DECLARE_BLOCKERS
-                : phase == PhaseType.COMBAT_DECLARE_ATTACKERS || phase == PhaseType.COMBAT_DECLARE_BLOCKERS || phase == PhaseType.END_OF_TURN;
-        return !stop;
+        return !fullControl() && stopAt(myTurn, phase) == null && !(getGameView().getTurn() + "|" + phase).equals(heldStop);
     }
 
     private void notice(final String kind, final String text) {
@@ -628,10 +657,26 @@ public class SocketGuiGame extends AbstractGuiGame {
         msg.addProperty("type", "notice");
         msg.addProperty("kind", kind);
         msg.addProperty("text", text);
-        session.send(msg);
+        send(msg);
     }
 
     // ---- questions for the player ------------------------------------------------------------
+
+    private static final java.util.Set<forge.game.ability.ApiType> HARMFUL = java.util.Set.of(
+            forge.game.ability.ApiType.DealDamage, forge.game.ability.ApiType.LoseLife, forge.game.ability.ApiType.Discard,
+            forge.game.ability.ApiType.Poison, forge.game.ability.ApiType.Sacrifice, forge.game.ability.ApiType.LosesGame);
+
+    /** Whether the spell or ability being aimed is bad for the player it's aimed at. */
+    private static boolean harmful(final forge.gamemodes.match.input.InputSelectTargets input) {
+        try {
+            final java.lang.reflect.Field f = forge.gamemodes.match.input.InputSelectTargets.class.getDeclaredField("sa");
+            f.setAccessible(true);
+            final forge.game.spellability.SpellAbility sa = (forge.game.spellability.SpellAbility) f.get(input);
+            return sa != null && sa.getApi() != null && (HARMFUL.contains(sa.getApi()) || sa.isCurse());
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
 
     private static <T> JsonObject option(final T item, final FSerializableFunction<T, String> display) {
         return option(item, display, false);
@@ -691,6 +736,207 @@ public class SocketGuiGame extends AbstractGuiGame {
         req.add("piles", piles);
         final JsonElement answer = ask("piles", req);
         return !(answer != null && answer.isJsonPrimitive() && answer.getAsInt() == 1);
+    }
+
+    /**
+     * A named place cards can be put in {@link #place}: how many it takes, whether its order matters (the first
+     * card is the one drawn first), and which cards may go there (null: any).
+     * kind is only for how it looks: top, bottom, graveyard, hand, other.
+     */
+    record Place(String label, String kind, int min, int max, boolean ordered, java.util.Set<CardView> allowed) { }
+
+    /** Where each card went, by place in the order asked, and whether to skip the rest (scry, surveil). */
+    record Placed(List<List<CardView>> places, boolean skip) { }
+
+    /**
+     * Cards divided among named places (scry, surveil, explore, "one in your hand and the rest on the bottom"):
+     * one dialog that names every place, where Forge asks in separate, unlabelled steps. Cards start in
+     * places[start]. {@code remaining} is how many more like it wait on the stack (offered to be skipped).
+     * An answer that breaks the limits falls back to the first legal arrangement.
+     */
+    Placed place(final String message, final List<CardView> cards, final List<Place> places, final int start, final String verb, final int remaining) {
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", message);
+        req.addProperty("verb", verb);
+        req.addProperty("remaining", remaining);
+        req.addProperty("start", start);
+        req.add("options", options(cards, null, true));
+        final JsonArray ps = new JsonArray();
+        for (final Place p : places) {
+            final JsonObject o = new JsonObject();
+            o.addProperty("label", p.label());
+            o.addProperty("kind", p.kind());
+            o.addProperty("min", p.min());
+            o.addProperty("max", p.max());
+            o.addProperty("ordered", p.ordered());
+            if (p.allowed() != null) {
+                final JsonArray ok = new JsonArray();
+                for (int i = 0; i < cards.size(); i++) {
+                    if (p.allowed().contains(cards.get(i))) { ok.add(i); }
+                }
+                o.add("allowed", ok);
+            }
+            ps.add(o);
+        }
+        req.add("places", ps);
+        final JsonElement answer = ask("place", req);
+        if (answer != null && answer.isJsonObject() && answer.getAsJsonObject().has("places") && answer.getAsJsonObject().get("places").isJsonArray()) {
+            final JsonArray given = answer.getAsJsonObject().getAsJsonArray("places");
+            final List<List<CardView>> out = new ArrayList<>();
+            final java.util.Set<Integer> used = new java.util.HashSet<>();
+            boolean legal = given.size() == places.size();
+            for (int i = 0; legal && i < places.size(); i++) {
+                final Place p = places.get(i);
+                final List<CardView> in = new ArrayList<>();
+                for (final int k : indices(given.get(i))) {
+                    if (k < 0 || k >= cards.size() || !used.add(k) || (p.allowed() != null && !p.allowed().contains(cards.get(k)))) {
+                        legal = false;
+                        break;
+                    }
+                    in.add(cards.get(k));
+                }
+                legal = legal && in.size() >= p.min() && in.size() <= p.max();
+                out.add(in);
+            }
+            if (legal && used.size() == cards.size()) {
+                return new Placed(out, answer.getAsJsonObject().has("skip") && answer.getAsJsonObject().get("skip").getAsBoolean());
+            }
+        }
+        // no usable answer (they left): every place gets its minimum, the rest go where they started or wherever fits
+        final List<List<CardView>> out = new ArrayList<>();
+        places.forEach(p -> out.add(new ArrayList<>()));
+        final List<CardView> left = new ArrayList<>(cards);
+        for (int i = 0; i < places.size(); i++) {
+            for (final java.util.Iterator<CardView> it = left.iterator(); it.hasNext() && out.get(i).size() < places.get(i).min(); ) {
+                final CardView c = it.next();
+                if (places.get(i).allowed() == null || places.get(i).allowed().contains(c)) {
+                    out.get(i).add(c);
+                    it.remove();
+                }
+            }
+        }
+        for (final CardView c : left) {
+            int to = start;
+            for (int k = 0; k < places.size() && !fits(places.get(to), out.get(to), c); k++) { to = k; }
+            out.get(to).add(c);
+        }
+        return new Placed(out, false);
+    }
+
+    private static boolean fits(final Place p, final List<CardView> in, final CardView c) {
+        return in.size() < p.max() && (p.allowed() == null || p.allowed().contains(c));
+    }
+
+    /** Choose among some of the cards shown (an opponent's hand): the ones that can't be chosen are there to see. */
+    List<CardView> pickAmong(final String message, final List<CardView> shown, final java.util.Collection<CardView> legal, final int min, final int max) {
+        return pickAmong(message, shown, legal, min, max, false);
+    }
+
+    /** distinctNames: no two with the same name (Gifts Ungiven). */
+    List<CardView> pickAmong(final String message, final List<CardView> shown, final java.util.Collection<CardView> legal, final int min, final int max, final boolean distinctNames) {
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", message);
+        req.addProperty("min", min);
+        req.addProperty("max", max);
+        if (distinctNames) { req.addProperty("distinct", true); }
+        req.add("options", options(shown, null, true));
+        final JsonArray off = new JsonArray();
+        for (int i = 0; i < shown.size(); i++) {
+            if (!legal.contains(shown.get(i))) { off.add(i); }
+        }
+        req.add("disabled", off);
+        final List<CardView> out = new ArrayList<>();
+        for (final int i : indices(ask("choose", req))) {
+            if (i >= 0 && i < shown.size() && legal.contains(shown.get(i)) && !out.contains(shown.get(i)) && out.size() < max) { out.add(shown.get(i)); }
+        }
+        for (final CardView c : shown) {
+            if (out.size() >= min) { break; }
+            if (legal.contains(c) && !out.contains(c)) { out.add(c); }
+        }
+        return out;
+    }
+
+    /** Modes of a spell or ability, chosen together. Indices into texts, with repeats when allowed. */
+    List<Integer> modes(final CardView host, final String message, final List<String> texts, final int min, final int max, final boolean repeat) {
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", message);
+        req.addProperty("card", host == null ? null : host.getId());
+        if (host != null) { req.add("cardData", Serializer.card(host, true)); }
+        req.addProperty("min", min);
+        req.addProperty("max", max);
+        req.addProperty("repeat", repeat);
+        req.add("options", options(texts, null));
+        final List<Integer> out = new ArrayList<>();
+        for (final int i : indices(ask("modes", req))) {
+            if (i >= 0 && i < texts.size() && out.size() < max && (repeat || !out.contains(i))) { out.add(i); }
+        }
+        return out;
+    }
+
+    /** A number, set on a stepper (X, how many times to pay...); null when the player backs out. */
+    @Override
+    public Integer getInteger(final String message, final int min, final int max, final boolean sortDesc) {
+        return number(message, min, max, true);
+    }
+
+    @Override
+    public Integer getInteger(final String message, final int min, final int max, final int cutoff) {
+        return number(message, min, max, true);
+    }
+
+    private Integer number(final String message, final int min, final int max, final boolean cancel) {
+        if (max <= min) { return min; }
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", message);
+        req.addProperty("min", min);
+        if (max < 100000) { req.addProperty("max", max); }
+        req.addProperty("cancel", cancel);
+        final JsonElement answer = ask("number", req);
+        if (answer == null || !answer.isJsonPrimitive()) { return cancel ? null : min; }
+        return Math.max(min, Math.min(max, answer.getAsInt()));
+    }
+
+    /** One of the player's on/off choices, as their client last sent it. */
+    boolean option(final String name, final boolean byDefault) {
+        final JsonObject o = session.options;
+        return o.has(name) && o.get(name).isJsonPrimitive() ? o.get(name).getAsBoolean() : byDefault;
+    }
+
+    /** Full control: stop at every chance to act, whatever the stops say. */
+    boolean fullControl() {
+        return option("fullControl", false);
+    }
+
+    /** The player's stop for a step: "on", "once" (the next time, whatever they could do there) or null. */
+    String stopAt(final boolean myTurn, final PhaseType phase) {
+        final JsonObject o = session.options;
+        if (!o.has("stops") || !o.get("stops").isJsonObject()) {
+            return defaultStop(myTurn, phase) ? "on" : null;
+        }
+        final JsonElement e = o.getAsJsonObject("stops").get((myTurn ? "mine:" : "theirs:") + phase.name());
+        return e == null || !e.isJsonPrimitive() ? null : e.getAsString();
+    }
+
+    private static boolean defaultStop(final boolean myTurn, final PhaseType phase) {
+        return myTurn
+                ? phase == PhaseType.MAIN1 || phase == PhaseType.MAIN2 || phase == PhaseType.COMBAT_DECLARE_BLOCKERS
+                : phase == PhaseType.COMBAT_DECLARE_ATTACKERS || phase == PhaseType.COMBAT_DECLARE_BLOCKERS || phase == PhaseType.END_OF_TURN;
+    }
+
+    /** the turn and step ("3|UPKEEP") a one-time stop is holding now */
+    volatile String heldStop = "";
+
+    /** A one-time stop has done its job: the client takes it off. */
+    void stopUsed(final boolean myTurn, final PhaseType phase) {
+        final JsonObject msg = new JsonObject();
+        msg.addProperty("type", "stopUsed");
+        msg.addProperty("key", (myTurn ? "mine:" : "theirs:") + phase.name());
+        send(msg);
+    }
+
+    /** The player changed their options: a pass that's waiting for nothing is looked at again. */
+    void optionsChanged() {
+        flush();
     }
 
     /** the running game, for looking up what a view stands for */
@@ -754,6 +1000,12 @@ public class SocketGuiGame extends AbstractGuiGame {
     }
 
     private <T> List<T> pick(final String message, final int min, final int max, final List<T> choices, final FSerializableFunction<T, String> display, final CardView card) {
+        // a run of whole numbers is set on a stepper rather than picked from a list
+        if (max == 1 && min == 1 && choices.size() > 3 && choices.get(0) instanceof Integer lo && choices.get(choices.size() - 1) instanceof Integer hi
+                && hi - lo == choices.size() - 1 && new java.util.HashSet<>(choices).size() == choices.size()) {
+            final int at = number(message, lo, hi, false) - lo;
+            return new ArrayList<>(List.of(choices.get(at)));
+        }
         final JsonObject req = new JsonObject();
         req.addProperty("message", message);
         req.addProperty("min", min);
@@ -796,15 +1048,29 @@ public class SocketGuiGame extends AbstractGuiGame {
         req.addProperty("caption", top);
         req.addProperty("minRemaining", remainingObjectsMin);
         req.addProperty("maxRemaining", remainingObjectsMax);
+        // (the checkbox comes with triggers and replacement effects: what may be remembered, or ordered for you)
+        final boolean replacements = title != null && title.toLowerCase().contains("replacement");
+        if (showRememberCheckbox) {
+            req.addProperty("canRemember", true);
+        }
         // Forge can pre-place items: re-ordering triggers it has ordered before (same abilities again) comes
         // with every item already in destChoices and nothing left in sourceChoices. Offer them all, in the
         // order they were placed, or an empty answer would drop the triggers entirely
         final List<T> all = new ArrayList<>();
         if (destChoices != null) all.addAll(destChoices);
         if (sourceChoices != null) all.addAll(sourceChoices);
+        if (showRememberCheckbox && option(replacements ? "autoReplacements" : "autoTriggers", false)) {
+            return new OrderResult<>(all, false);
+        }
         req.add("options", options(all, null));
         final List<T> ordered = new ArrayList<>();
-        for (final int i : indices(ask("order", req))) {
+        JsonElement answer = ask("order", req);
+        boolean remember = false;
+        if (answer != null && answer.isJsonObject()) {
+            remember = answer.getAsJsonObject().has("remember") && answer.getAsJsonObject().get("remember").getAsBoolean();
+            answer = answer.getAsJsonObject().get("order");
+        }
+        for (final int i : indices(answer)) {
             if (i >= 0 && i < all.size() && !ordered.contains(all.get(i))) {
                 ordered.add(all.get(i));
             }
@@ -813,7 +1079,7 @@ public class SocketGuiGame extends AbstractGuiGame {
             // everything has to be placed: whatever the answer left out keeps its offered order
             for (final T t : all) if (!ordered.contains(t)) ordered.add(t);
         }
-        return new OrderResult<>(ordered, false);
+        return new OrderResult<>(ordered, remember);
     }
 
     @Override
@@ -854,6 +1120,9 @@ public class SocketGuiGame extends AbstractGuiGame {
         final boolean free = dividesAsChoose(attacker);
         final boolean toDefender = defender != null && (trample || free || blockers.isEmpty());
         final Map<CardView, Integer> auto = autoAssign(attacker, blockers, damage, defender, toDefender, deathtouch);
+        if (option("autoDamage", false) && !free) {
+            return auto;
+        }
         // nothing to decide: all of it to the one blocker, or all of it past an empty block
         if (blockers.isEmpty() || damage <= 0 || (blockers.size() == 1 && !toDefender)
                 || (blockers.size() == 1 && !free && damage <= lethal(blockers.get(0), deathtouch))) {
@@ -866,6 +1135,8 @@ public class SocketGuiGame extends AbstractGuiGame {
         req.addProperty("card", attacker.getId());
         req.addProperty("combat", true);
         req.addProperty("freeDefender", free);
+        req.addProperty("deathtouch", deathtouch);
+        req.add("cardData", Serializer.card(attacker, true));
         final JsonArray opts = new JsonArray();
         for (final CardView b : blockers) {
             final JsonObject o = option(b, null);
@@ -915,8 +1186,17 @@ public class SocketGuiGame extends AbstractGuiGame {
 
     /** Damage that kills this blocker: any at all with deathtouch. */
     private static int lethal(final CardView blocker, final boolean deathtouch) {
-        final int l = Math.max(1, blocker.getLethalDamage());
-        return deathtouch ? 1 : l;
+        // a planeswalker among the "blockers" (trample over planeswalkers): its loyalty
+        if (blocker.getCurrentState().isPlaneswalker() && !blocker.getCurrentState().isCreature()) {
+            try {
+                return Integer.parseInt(blocker.getCurrentState().getLoyalty());
+            } catch (final NumberFormatException e) {
+                return 1;
+            }
+        }
+        // none is needed when it already has lethal (damage marked on it, or assigned by another creature)
+        final int l = Math.max(0, blocker.getLethalDamage());
+        return deathtouch ? Math.min(1, l) : l;
     }
 
     /** Lethal to each blocker in order, the rest tramples over (or piles on the last blocker). */

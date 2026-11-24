@@ -12,15 +12,26 @@ export type Resolution = 'high' | 'standard';
 /** the least time (seconds) a spell or ability stays on the Stack before the table shows it resolving */
 export type StackHold = '0' | '1' | '2' | '3';
 
+export type OnOff = 'on' | 'off';
+
 export interface Settings {
   frameRate: FrameRate;
   particles: ParticleLevel;
   floorDetail: FloorDetail;
   resolution: Resolution;
   stackHold: StackHold;
+  /** pass priority for you when what resolves next is your own */
+  autoPassOwn: OnOff;
+  /** put your triggers, and competing replacement effects, in the order the engine offers them */
+  autoTriggers: OnOff;
+  autoReplacements: OnOff;
+  /** divide combat damage for you: lethal to each blocker in turn */
+  autoDamage: OnOff;
+  /** ask before a choice that's probably a mistake */
+  warnings: OnOff;
 }
 
-export const DEFAULT_SETTINGS: Settings = { frameRate: 'auto', particles: 'full', floorDetail: 'high', resolution: 'high', stackHold: '0' };
+export const DEFAULT_SETTINGS: Settings = { frameRate: 'auto', particles: 'full', floorDetail: 'high', resolution: 'high', stackHold: '0', autoPassOwn: 'off', autoTriggers: 'off', autoReplacements: 'off', autoDamage: 'off', warnings: 'on' };
 
 const STORE_KEY = 'mtgclownfish.settings';
 const CHOICES: { [K in keyof Settings]: readonly Settings[K][] } = {
@@ -29,6 +40,11 @@ const CHOICES: { [K in keyof Settings]: readonly Settings[K][] } = {
   floorDetail: ['high', 'low'],
   resolution: ['high', 'standard'],
   stackHold: ['0', '1', '2', '3'],
+  autoPassOwn: ['off', 'on'],
+  autoTriggers: ['off', 'on'],
+  autoReplacements: ['off', 'on'],
+  autoDamage: ['off', 'on'],
+  warnings: ['off', 'on'],
 };
 
 function load(): Settings {

@@ -1,7 +1,8 @@
 /**
  * Sound: an original, fully synthesized set (WebAudio, no sample files). Every effect is built from
  * oscillators and filtered noise at play time, so spells can be tinted by colour and impacts scaled
- * by size. Effects go through a shared reverb; a quiet ambient bed sits underneath.
+ * by size. Effects go through a shared reverb; a quiet ambient bed sits underneath. During a game, licensed
+ * music tracks (public/music) take over from the ambient bed: one per game, drawn without replacement.
  */
 
 type Color = 'W' | 'U' | 'B' | 'R' | 'G' | 'M' | 'C';
@@ -40,6 +41,31 @@ const CHORDS: Record<Color, number[]> = {
 };
 
 const STORE_KEY = 'tabletop.audio';
+const MUSIC_KEY = 'tabletop.music';
+/** the tracks' share of the master volume (they're mastered far louder than the effects) */
+const MUSIC_LEVEL = 0.35;
+/** punch recordings for damage, trimmed so the hit lands at the start (credited on the start screen's Credits) */
+const PUNCHES = ['/sfx/punch-1.mp3', '/sfx/punch-2.mp3', '/sfx/punch-3.mp3'];
+/** per-recording gain, evening out their loudness */
+const PUNCH_TRIM = [1, 1.07, 1.2];
+const PUNCH_LEVEL = 0.5;
+/** seconds of overlap when one track runs into the next */
+const XFADE_END = 6;
+/** ms to blend over when the track is switched by hand */
+const XFADE_SWITCH = 2500;
+
+export interface Track {
+  id: string;
+  artist: string;
+  src: string;
+}
+
+/** Background music for games, licensed from Pixabay (credited on the start screen's Credits). */
+export const TRACKS: Track[] = [
+  { id: 'leberch', artist: 'leberch', src: '/music/leberch.mp3' },
+  { id: 'delosound', artist: 'delosound', src: '/music/delosound.mp3' },
+  { id: 'sonican', artist: 'sonican', src: '/music/sonican.mp3' },
+];
 
 function colorOf(colors: string | undefined): Color {
   const cs = (colors ?? '').replace(/[^WUBRG]/g, '');
@@ -65,6 +91,20 @@ class AudioEngine {
   /** the ambient music bed on/off */
   music = true;
   volume = 0.8;
+  /** the music element (streamed, not decoded into memory) and the track it holds */
+  private musicEls: (HTMLAudioElement | undefined)[] = [];
+  /** which of the two players holds the current track */
+  private activeEl = 0;
+  private musicFades = new Map<HTMLAudioElement, number>();
+  private trackIdx = -1;
+  /** a game is on, so its music should be playing (when music is on) */
+  private gameMusic = false;
+  /** play() was refused (no gesture yet): retried on the next one */
+  private musicPending = false;
+  private trackListeners = new Set<() => void>();
+  /** the damage recordings (public/sfx), decoded once the context exists */
+  private punches: (AudioBuffer | undefined)[] = [];
+  private lastPunch = -1;
 
   constructor() {
     try {
@@ -87,6 +127,7 @@ class AudioEngine {
   }
 
   private unlock(): void {
+    if (this.musicPending) this.applyMusic();
     if (this.ctx && this.ctx.state !== 'closed') {
       // suspended (no qualifying gesture yet), or interrupted (output device changed, machine slept): wake it
       if (this.ctx.state !== 'running') {
@@ -110,7 +151,7 @@ class AudioEngine {
     this.sfxBus.gain.value = this.fx ? 1 : 0;
     this.sfxBus.connect(this.master);
     this.ambBus = ctx.createGain();
-    this.ambBus.gain.value = this.music ? 0.55 : 0;
+    this.ambBus.gain.value = this.ambLevel();
     this.ambBus.connect(this.master);
 
     this.reverb = ctx.createConvolver();
@@ -129,8 +170,20 @@ class AudioEngine {
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     this.startAmbient();
+    this.loadPunches(ctx);
     if (ctx.state !== 'running') void ctx.resume().catch(() => undefined);
     this.kick();
+  }
+
+  private loadPunches(ctx: AudioContext): void {
+    PUNCHES.forEach((url, i) => {
+      fetch(url)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+        .then((data) => ctx.decodeAudioData(data))
+        .then((buf) => (this.punches[i] = buf))
+        .catch(() => undefined); // missing or undecodable: that one stays synthesized
+    });
+    this.punches.length = PUNCHES.length;
   }
 
   /** WebKit unlocks a context when a source starts inside a gesture: play one silent sample. */
@@ -163,6 +216,7 @@ class AudioEngine {
   setMuted(on: boolean): void {
     this.muted = on;
     if (this.ctx) this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.ctx.currentTime, 0.05);
+    this.applyMusic();
     this.save();
   }
 
@@ -178,16 +232,182 @@ class AudioEngine {
   setMusic(on: boolean): void {
     this.music = on;
     if (this.ctx) {
-      this.ambBus.gain.setTargetAtTime(on ? 0.55 : 0, this.ctx.currentTime, 0.3);
+      this.ambBus.gain.setTargetAtTime(this.ambLevel(), this.ctx.currentTime, 0.3);
       this.ambSend.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.3);
     }
+    this.applyMusic();
     this.save();
   }
 
   setVolume(v: number): void {
     this.volume = Math.max(0, Math.min(1, v));
     if (this.ctx && !this.muted) this.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.05);
+    this.applyMusic(0);
     this.save();
+  }
+
+  // ---- game music ---------------------------------------------------------------------------------
+
+  /** The track playing (or picked for this game), if any. */
+  get track(): Track | null {
+    return this.gameMusic && this.trackIdx >= 0 ? TRACKS[this.trackIdx] : null;
+  }
+
+  /** Called whenever the track changes (or music starts or stops); returns an unsubscribe. */
+  onTrack(fn: () => void): () => void {
+    this.trackListeners.add(fn);
+    return () => this.trackListeners.delete(fn);
+  }
+
+  /** A game began: the next track from the rotation. */
+  startMusic(): void {
+    this.gameMusic = true;
+    this.duckAmbient();
+    this.playTrack(this.nextFromBag());
+  }
+
+  /** The game is over or left: the music fades out and the ambient bed comes back. */
+  stopMusic(): void {
+    if (!this.gameMusic) return;
+    this.gameMusic = false;
+    this.duckAmbient();
+    this.applyMusic();
+    this.trackListeners.forEach((f) => f());
+  }
+
+  /** Switch to the previous (-1) or next (+1) track in the list. */
+  stepTrack(dir: 1 | -1): void {
+    if (!this.gameMusic) return;
+    const n = TRACKS.length;
+    const idx = ((this.trackIdx < 0 ? 0 : this.trackIdx) + dir + n) % n;
+    // a track picked by hand counts as played in the rotation, so the next game won't repeat it
+    const st = this.loadBag();
+    this.saveBag(st.bag.filter((id) => id !== TRACKS[idx].id), TRACKS[idx].id);
+    this.playTrack(idx);
+  }
+
+  private ambLevel(): number {
+    return this.music && !this.gameMusic ? 0.55 : 0;
+  }
+
+  private duckAmbient(): void {
+    if (this.ctx) this.ambBus.gain.setTargetAtTime(this.ambLevel(), this.ctx.currentTime, 0.6);
+  }
+
+  private loadBag(): { bag: string[]; last: string | null } {
+    try {
+      const saved = JSON.parse(localStorage.getItem(MUSIC_KEY) ?? '{}');
+      const ids = new Set(TRACKS.map((t) => t.id));
+      const bag = Array.isArray(saved.bag) ? (saved.bag as unknown[]).filter((id): id is string => typeof id === 'string' && ids.has(id)) : [];
+      return { bag, last: typeof saved.last === 'string' ? saved.last : null };
+    } catch {
+      return { bag: [], last: null };
+    }
+  }
+
+  private saveBag(bag: string[], last: string | null): void {
+    try {
+      localStorage.setItem(MUSIC_KEY, JSON.stringify({ bag, last }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Sampling without replacement: every track plays once before any repeats, and a fresh round never opens
+   *  with the track that closed the last one. Kept on this device, so it carries across sessions. */
+  private nextFromBag(): number {
+    let { bag, last } = this.loadBag();
+    if (bag.length === 0) {
+      bag = TRACKS.map((t) => t.id);
+      for (let i = bag.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [bag[i], bag[j]] = [bag[j], bag[i]];
+      }
+      if (bag.length > 1 && bag[0] === last) [bag[0], bag[1]] = [bag[1], bag[0]];
+    }
+    const id = bag.shift()!;
+    this.saveBag(bag, id);
+    return TRACKS.findIndex((t) => t.id === id);
+  }
+
+  private musicTarget(): number {
+    return this.gameMusic && this.music && !this.muted ? this.volume * MUSIC_LEVEL : 0;
+  }
+
+  /** Ramp one element's volume (an HTML media element has no automation of its own). An equal-power curve,
+   *  so two crossfading tracks hold a steady loudness through the middle of the blend. */
+  private fadeEl(el: HTMLAudioElement, to: number, ms: number, done?: () => void): void {
+    clearInterval(this.musicFades.get(el));
+    const from = el.volume;
+    const t0 = performance.now();
+    const step = () => {
+      const k = ms <= 0 ? 1 : Math.min(1, (performance.now() - t0) / ms);
+      const curve = to > from ? Math.sin((k * Math.PI) / 2) : 1 - Math.cos((k * Math.PI) / 2);
+      el.volume = Math.max(0, Math.min(1, from + (to - from) * curve));
+      if (k >= 1) {
+        clearInterval(this.musicFades.get(el));
+        this.musicFades.delete(el);
+        done?.();
+      }
+    };
+    step();
+    if (ms > 0) this.musicFades.set(el, window.setInterval(step, 30));
+  }
+
+  /** Two players taking turns, so the next track can come in while the last one goes out. */
+  private player(i: number): HTMLAudioElement {
+    let el = this.musicEls[i];
+    if (!el) {
+      el = new Audio();
+      el.preload = 'auto';
+      el.volume = 0;
+      const self = el;
+      // a few seconds before a track ends, the next one in the rotation starts blending in, so a long
+      // game isn't one song on repeat and there's no silent gap between songs
+      self.addEventListener('timeupdate', () => {
+        if (self !== this.musicEls[this.activeEl] || !this.gameMusic || !this.music) return;
+        const d = self.duration;
+        if (Number.isFinite(d) && d > XFADE_END * 2 && d - self.currentTime <= XFADE_END) this.playTrack(this.nextFromBag(), XFADE_END * 1000);
+      });
+      self.addEventListener('ended', () => {
+        if (self === this.musicEls[this.activeEl] && this.gameMusic) this.playTrack(this.nextFromBag(), 600);
+      });
+      this.musicEls[i] = el;
+    }
+    return el;
+  }
+
+  /** Start a track on the idle player and crossfade over to it (ms: how long the blend takes). */
+  private playTrack(idx: number, ms = XFADE_SWITCH): void {
+    if (idx < 0) return;
+    const old = this.musicEls[this.activeEl];
+    this.activeEl = 1 - this.activeEl;
+    const el = this.player(this.activeEl);
+    this.trackIdx = idx;
+    clearInterval(this.musicFades.get(el));
+    el.pause();
+    el.src = TRACKS[idx].src;
+    el.volume = 0;
+    if (old && !old.paused) this.fadeEl(old, 0, ms, () => old.pause());
+    this.trackListeners.forEach((f) => f());
+    this.applyMusic(ms);
+  }
+
+  /** Bring the active player in line with the settings: playing at the music level, or faded out and paused.
+   *  The idle one is only ever on its way out. */
+  private applyMusic(ms = 1200): void {
+    const el = this.musicEls[this.activeEl];
+    if (!el || !el.src) return;
+    if (this.gameMusic && this.music) {
+      if (el.paused) {
+        this.musicPending = false;
+        el.play().catch(() => (this.musicPending = true));
+      }
+      this.fadeEl(el, this.musicTarget(), ms);
+    } else {
+      this.musicPending = false;
+      for (const p of this.musicEls) if (p && !p.paused) this.fadeEl(p, 0, 1500, () => p.pause());
+    }
   }
 
   // ---- building blocks ----------------------------------------------------------------------------
@@ -440,6 +660,21 @@ class AudioEngine {
     [800, 1200, 1800].forEach((f, i) => this.tone(f, t + i * 0.06, 0.6, 0.03, { glide: f * 2.2, pan, wet: 0.7 }));
   }
 
+  /** A spell countered: an airy rush in, a deep slap as the palm lands, and a glassy ring as the ripple runs out. */
+  counterspell(): void {
+    const t = this.begin('counterspell', 0.4);
+    if (t == null) return;
+    const land = t + 0.16;
+    this.noise(t, 0.2, 0.12, { from: 400, to: 3800, q: 0.9, attack: 0.17, wet: 0.4 });
+    this.tone(110, land, 0.55, 0.42, { glide: 38, wet: 0.25 });
+    this.noise(land, 0.18, 0.2, { filter: 'lowpass', from: 1800, to: 200, wet: 0.3 });
+    // the ripple: a cool, slightly detuned chord bending down as it spreads
+    [587.33, 880, 1318.5, 1760].forEach((f, i) =>
+      this.tone(f, land + 0.02 + i * 0.025, 1.3, 0.05 / (1 + i * 0.4), { type: 'sine', glide: f * 0.94, vibrato: 0.004, pan: (i % 2 ? 0.35 : -0.35), wet: 0.85 }),
+    );
+    this.noise(land + 0.05, 0.9, 0.05, { filter: 'highpass', from: 5000, to: 2400, attack: 0.08, wet: 0.8 });
+  }
+
   // ---- combat and damage --------------------------------------------------------------------------
 
   attack(): void {
@@ -464,9 +699,44 @@ class AudioEngine {
     this.noise(t, 0.22, 0.07, { from: 500, to: 2200, q: 1, attack: 0.12, pan, wet: 0.1 });
   }
 
+  /**
+   * A blow landing (combat, burn, a sweeper): one of the punch recordings, a different one from the last, its
+   * pitch nudged a little so repeats don't sound identical, louder for bigger hits. Falls back to the
+   * synthesized thump until the recordings have loaded.
+   */
   hit(amount: number, onPlayer: boolean, pan = 0): void {
     const t = this.begin('hit', 0.04);
     if (t == null) return;
+    const loaded = this.punches.filter((b): b is AudioBuffer => !!b);
+    if (loaded.length) {
+      const ctx = this.ctx!;
+      let i = Math.floor(Math.random() * this.punches.length);
+      if (loaded.length > 1 && i === this.lastPunch) i = (i + 1 + Math.floor(Math.random() * (this.punches.length - 1))) % this.punches.length;
+      if (!this.punches[i]) i = this.punches.indexOf(loaded[0]);
+      this.lastPunch = i;
+      const src = ctx.createBufferSource();
+      src.buffer = this.punches[i]!;
+      src.playbackRate.value = (onPlayer ? 0.94 : 1) * (0.95 + Math.random() * 0.1) * (amount >= 6 ? 0.93 : 1);
+      const g = ctx.createGain();
+      g.gain.value = PUNCH_LEVEL * PUNCH_TRIM[i] * (0.62 + 0.38 * Math.min(1, amount / 6));
+      src.connect(g);
+      this.out(g, pan, 0.12);
+      src.start(t);
+      // a heavy blow keeps a little low end under the recording
+      if (amount >= 5) this.tone(onPlayer ? 70 : 90, t, 0.35, 0.18, { glide: 34, pan, wet: 0.1 });
+      return;
+    }
+    this.thump(t, amount, onPlayer, pan);
+  }
+
+  /** Life lost without a blow (drain, paying life): the synthesized thump, not a punch. */
+  lifeLoss(amount: number, pan = 0): void {
+    const t = this.begin('hit', 0.04);
+    if (t == null) return;
+    this.thump(t, amount, true, pan);
+  }
+
+  private thump(t: number, amount: number, onPlayer: boolean, pan: number): void {
     const s = Math.min(1, amount / 8);
     this.tone(onPlayer ? 100 : 140, t, 0.25 + s * 0.25, 0.25 + s * 0.3, { glide: 38, pan, wet: 0.2 });
     this.noise(t, 0.12 + s * 0.1, 0.14 + s * 0.12, { filter: 'lowpass', from: 1800, to: 300, pan, wet: 0.2 });

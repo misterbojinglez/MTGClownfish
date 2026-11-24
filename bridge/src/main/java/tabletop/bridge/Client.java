@@ -35,6 +35,8 @@ public final class Client {
     final String token;
     volatile String name;
     private volatile Pipe pipe;
+    /** how this player wants the table to behave (stops, full control, automation), as their client last sent it */
+    volatile JsonObject options = new JsonObject();
     /** the player's game view, while they're in a game */
     volatile SocketGuiGame gui;
 
