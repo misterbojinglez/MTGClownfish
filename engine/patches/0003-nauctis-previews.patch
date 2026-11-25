@@ -1,0 +1,53 @@
+diff --git a/forge-gui/res/cardsfolder/upcoming/abyssal_lotus.txt b/forge-gui/res/cardsfolder/upcoming/abyssal_lotus.txt
+index bbec88bbc6d..d8061906b8e 100644
+--- a/forge-gui/res/cardsfolder/upcoming/abyssal_lotus.txt
++++ b/forge-gui/res/cardsfolder/upcoming/abyssal_lotus.txt
+@@ -3,5 +3,5 @@ ManaCost:0
+ Types:Artifact
+ R:Event$ Moved | ValidCard$ Card.Self | Destination$ Battlefield | ReplacementResult$ Updated | ReplaceWith$ ETBTapped | Description$ This artifact enters tapped.
+ SVar:ETBTapped:DB$ Tap | Defined$ Self | ETB$ True
+-A:AB$ Mana | PrecostDesc$ Descend 8 — | Cost$ T Exile<1/CARDNAME/this artifact> | Produced$ Any | Amount$ 3 | AILogic$ BlackLotus | IsPresent$ Permanent.YouOwn | PresentZone$ Graveyard | SpellDescription$ Add three mana of any one color. Activate only if there are eight or more permanent cards in your graveyard.
++A:AB$ Mana | PrecostDesc$ Descend 8 — | Cost$ T Exile<1/CARDNAME/this artifact> | Produced$ Any | Amount$ 3 | AILogic$ BlackLotus | IsPresent$ Permanent.YouOwn | PresentZone$ Graveyard | PresentCompare$ GE8 | SpellDescription$ Add three mana of any one color. Activate only if there are eight or more permanent cards in your graveyard.
+ Oracle:This artifact enters tapped.\nDescend 8 — {T}, Exile this artifact: Add three mana of any one color. Activate only if there are eight or more permanent cards in your graveyard.
+diff --git a/forge-gui/res/cardsfolder/upcoming/goramou_the_coral_taken.txt b/forge-gui/res/cardsfolder/upcoming/goramou_the_coral_taken.txt
+index f639d4075d2..af94091b1f2 100644
+--- a/forge-gui/res/cardsfolder/upcoming/goramou_the_coral_taken.txt
++++ b/forge-gui/res/cardsfolder/upcoming/goramou_the_coral_taken.txt
+@@ -6,7 +6,7 @@ T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.S
+ SVar:TrigBlood:DB$ Token | TokenScript$ c_a_blood_draw | TokenOwner$ You
+ T:Mode$ DiscardedAll | ValidPlayer$ You | ValidCard$ Land | TriggerZones$ Battlefield | Execute$ TrigExile | OptionalDecider$ You | TriggerDescription$ Whenever you discard one or more land cards, you may exile one of them from your graveyard. If you do, put that card onto the battlefield tapped at the beginning of the next end step.
+ SVar:TrigExile:DB$ ChangeZone | Origin$ Graveyard | Destination$ Exile | ChangeType$ Card.TriggeredCards | ChangeNum$ 1 | Hidden$ True | RememberChanged$ True | SubAbility$ DBDelTrig
+-SVar:DBDelTrig:DB$ DelayedTrigger | Mode$ Phase | Phase$ End of Turn | Execute$ TrigReturn | RememberObjects$ RememberedLKI | TriggerDescription$ Return exiled card to the battlefield with a +1/+1 counter on it. | SubAbility$ DBCleanup
++SVar:DBDelTrig:DB$ DelayedTrigger | Mode$ Phase | Phase$ End of Turn | Execute$ TrigReturn | RememberObjects$ RememberedLKI | TriggerDescription$ Return the exiled card to the battlefield tapped. | SubAbility$ DBCleanup
+ SVar:TrigReturn:DB$ ChangeZone | Defined$ DelayTriggerRememberedLKI | Origin$ Exile | Destination$ Battlefield | Tapped$ True
+ SVar:DBCleanup:DB$ Cleanup | ClearRemembered$ True
+ DeckHas:Ability$Token|Sacrifice & Type$Blood
+diff --git a/forge-gui/res/cardsfolder/upcoming/the_ignoble_serpent.txt b/forge-gui/res/cardsfolder/upcoming/the_ignoble_serpent.txt
+new file mode 100644
+index 00000000000..8cdac196a5b
+--- /dev/null
++++ b/forge-gui/res/cardsfolder/upcoming/the_ignoble_serpent.txt
+@@ -0,0 +1,12 @@
++Name:The Ignoble Serpent
++ManaCost:5 B G U
++Types:Legendary Creature Serpent Noble
++PT:7/9
++T:Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You | FirstUpkeep$ True | TriggerZones$ Command | IsPresent$ Card.StrictlySelf | PresentZone$ Command | CheckSVar$ Turns | SVarCompare$ EQ1 | Execute$ TrigMill | TriggerDescription$ At the beginning of your first upkeep, if CARDNAME is in the command zone, mill four cards.
++SVar:TrigMill:DB$ Mill | NumCards$ 4 | Defined$ You
++SVar:Turns:Count$YourTurns
++T:Mode$ Phase | Phase$ End of Turn | ValidPlayer$ You | TriggerZones$ Battlefield | Execute$ TrigReturn | TriggerDescription$ At the beginning of your end step, return target sea monster creature card from your graveyard to the battlefield. (Krakens, Leviathans, Octopuses, Serpents, and Whales are sea monsters.)
++SVar:TrigReturn:DB$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | ValidTgts$ Creature.Kraken+YouOwn,Creature.Leviathan+YouOwn,Creature.Octopus+YouOwn,Creature.Serpent+YouOwn,Creature.Whale+YouOwn | TgtPrompt$ Select target sea monster creature card in your graveyard
++DeckHints:Type$Kraken|Leviathan|Octopus|Serpent|Whale
++DeckHas:Ability$Mill|Graveyard
++Oracle:At the beginning of your first upkeep, if The Ignoble Serpent is in your command zone, mill four cards.\nAt the beginning of your end step, return target sea monster creature card from your graveyard to the battlefield. (Krakens, Leviathans, Octopuses, Serpents, and Whales are sea monsters.)
+diff --git a/forge-gui/res/editions/Nauctis The Sunken Realm Commander.txt b/forge-gui/res/editions/Nauctis The Sunken Realm Commander.txt
+index 4f07972c5d4..7f46ae2cae8 100644
+--- a/forge-gui/res/editions/Nauctis The Sunken Realm Commander.txt	
++++ b/forge-gui/res/editions/Nauctis The Sunken Realm Commander.txt	
+@@ -6,5 +6,6 @@ Type=Commander
+ ScryfallCode=NAC
+ 
+ [cards]
++6 M The Ignoble Serpent @John Tedrick
+ 345 M Crucible of Worlds @Chris Seaman
+ 365 M Crucible of Worlds @Allen Panakal

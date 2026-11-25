@@ -737,6 +737,49 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             return pickCards(gui, "Delve: each card you exile pays for {1}", grave, most);
         }
 
+        /**
+         * Forge answers an illegal attack with "Attack declaration invalid" and asks again. Here the player is told
+         * which creature or effect is in the way, and can have what's missing added; either way they're back to
+         * declaring, with the attack as it stood. Creatures that must attack are marked meanwhile.
+         */
+        @Override
+        public void declareAttackers(final Player attackingPlayer, final forge.game.combat.Combat combat) {
+            final SocketGuiGame gui = socketGui();
+            if (gui == null || attackingPlayer.getSharedTeam().size() > 1) { // a team's attack is checked once all have declared
+                super.declareAttackers(attackingPlayer, combat);
+                return;
+            }
+            try {
+                while (true) {
+                    gui.setMustAttack(AttackAdvice.mustAttack(combat));
+                    super.declareAttackers(attackingPlayer, combat);
+                    gui.setMustAttack(java.util.Map.of());
+                    if (getGame().isGameOver() || !getPlayer().isInGame() || !attackingPlayer.isInGame()) {
+                        return;
+                    }
+                    combat.removeAbsentCombatants();
+                    if (forge.game.combat.CombatUtil.validateAttackers(combat)) {
+                        return;
+                    }
+                    final AttackAdvice advice = AttackAdvice.of(combat);
+                    final boolean fixable = !advice.fix.isEmpty();
+                    final int answer = gui.showOptionDialog("That attack isn't legal\n\n" + advice.message, null, null,
+                            fixable ? List.of(advice.button, "Change it myself") : List.of("Change attack"), fixable ? 1 : 0);
+                    if (getGame().isGameOver() || !getPlayer().isInGame() || !attackingPlayer.isInGame()) {
+                        return;
+                    }
+                    if (fixable && answer == 0) {
+                        advice.fix.forEach((c, defender) -> {
+                            combat.removeFromCombat(c);
+                            combat.addAttacker(c, defender);
+                        });
+                    }
+                }
+            } finally {
+                gui.setMustAttack(java.util.Map.of());
+            }
+        }
+
         @Override
         public List<forge.game.card.Card> exertAttackers(final List<forge.game.card.Card> attackers) {
             final SocketGuiGame gui = socketGui();
@@ -971,6 +1014,15 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 final String name = chosenSa.getHostCard() == null ? "That" : chosenSa.getHostCard().getName();
                 if (getGui() instanceof SocketGuiGame gui) {
                     gui.tell(name + ": can't pay \"" + blocked + "\" right now.");
+                }
+                return false;
+            }
+            // a click offers abilities that aren't legal right now too (Forge's own interfaces grey them out), and
+            // nothing after this checks their conditions: Temple of the False God made mana with one land
+            if (chosenSa != null && !chosenSa.canPlay(true)) {
+                final String name = chosenSa.getHostCard() == null ? "That" : chosenSa.getHostCard().getName();
+                if (getGui() instanceof SocketGuiGame gui) {
+                    gui.tell(name + ": can't do that right now.");
                 }
                 return false;
             }

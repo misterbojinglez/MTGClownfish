@@ -146,6 +146,8 @@ export interface Prompt {
   samePlayer?: boolean;
   /** what's being aimed is bad for the player it's aimed at */
   harmful?: boolean;
+  /** declaring attackers: creatures that must attack (`at`: whom, when only some defenders will do) */
+  mustAttack?: { card: number; at?: string }[];
   message: string;
   card?: number | null;
   ok?: Button;

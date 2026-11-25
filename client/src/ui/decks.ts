@@ -1,6 +1,7 @@
 import type { DeckInfo, GameplanInfo, LobbyDeckInfo, PreconInfo, SeatDeckSpec } from '../protocol';
 import type { Bridge } from '../net';
 import { cardArtUrl } from '../scene/textures';
+import { BRACKETS, EdhrecDown, randomDeck, type Bracket, type EdhrecDeck } from './edhrec';
 import { askYes, buildIn, buildOut, closeModal } from './buildin';
 
 /**
@@ -92,6 +93,8 @@ function setGameplan(choice: string, text: string): void {
 export function claudeKey(): string {
   return load<string>(CLAUDE_KEY, '');
 }
+/** the bracket last asked for in a random EDHREC deck */
+const BRACKET_KEY = 'mtg-tabletop.edhrecBracket';
 const TALK_KEY = 'mtg-tabletop.tabletalk';
 export function tabletalkOn(): boolean {
   return load<boolean>(TALK_KEY, false);
@@ -726,6 +729,17 @@ export class DeckSetup {
           }
         };
         grid.append(browse);
+        if (format === 'commander') {
+          const pull = h('button', 'deck-tile add');
+          pull.append(h('div', 'deck-art plus', '⚄'), h('div', 'deck-body', 'Random deck from EDHREC…'));
+          pull.onclick = async () => {
+            modal.style.visibility = 'hidden';
+            const saved = await this.pullEdhrec();
+            modal.style.visibility = '';
+            if (saved) done(saved.id);
+          };
+          grid.append(pull);
+        }
         const add = h('button', 'deck-tile add');
         add.append(h('div', 'deck-art plus', '+'), h('div', 'deck-body', 'Paste a deck list…'));
         add.onclick = async () => {
@@ -825,6 +839,153 @@ export class DeckSetup {
         show();
       });
     });
+  }
+
+  /**
+   * A random top-500 commander's average deck from EDHREC, for a bracket; pulled again as often as you like.
+   * Nothing is saved until it's taken. Resolves with the saved deck, or null.
+   */
+  private pullEdhrec(): Promise<SavedDeck | null> {
+    return new Promise((resolve) => {
+      const modal = h('div', 'modal deck-modal');
+      const box = h('div', 'modal-panel deck-paste edhrec-panel');
+      let seq = 0;
+      const done = (v: SavedDeck | null) => {
+        seq++;
+        closeModal(modal);
+        resolve(v);
+      };
+      modal.onclick = (e) => {
+        if (e.target === modal) done(null);
+      };
+      const stored = load<number>(BRACKET_KEY, 0);
+      let bracket: Bracket = BRACKETS.find((b) => b.n === stored)?.n ?? 0;
+
+      box.append(
+        h('div', 'modal-title', 'Random deck from EDHREC'),
+        h('div', 'modal-sub', 'One of the 500 most played commanders, with the average of the decks people build around it.'),
+      );
+      const seg = h('div', 'seg edhrec-brackets');
+      seg.setAttribute('role', 'group');
+      seg.setAttribute('aria-label', 'Bracket');
+      const result = h('div', 'edhrec-result');
+      result.setAttribute('aria-live', 'polite');
+      const actions = h('div', 'modal-buttons');
+      const cancel = h('button', 'sub-btn', 'Cancel');
+      cancel.onclick = () => done(null);
+      const again = h('button', 'sub-btn', 'Try again');
+      const use = h('button', 'main-btn', 'Use this deck');
+      actions.append(cancel, again, use);
+      box.append(seg, result, actions);
+
+      let found: { deck: EdhrecDeck; info: DeckInfo } | null = null;
+      const seen = new Set<string>();
+
+      const pull = async () => {
+        const mine = ++seq;
+        found = null;
+        use.disabled = true;
+        again.disabled = true;
+        result.replaceChildren(h('div', 'paste-checking', 'Pulling a deck…'));
+        let problem = 'No deck turned up for that bracket. Try again, or try another bracket.';
+        try {
+          for (let tries = 0; tries < 5; tries++) {
+            let deck = await randomDeck(bracket, seen);
+            // been through a great many: start over
+            if (!deck && seen.size > 50) {
+              seen.clear();
+              deck = await randomDeck(bracket, seen);
+            }
+            if (mine !== seq) return;
+            if (!deck) break;
+            const info = await this.bridge.validateDeck(deck.list, 'commander');
+            if (mine !== seq) return;
+            // a commander the engine doesn't have (a very new card): pull another
+            if (!info.ok || info.needsCommander || !info.commanders?.length) {
+              if (/did not answer/.test(info.problem ?? '')) {
+                problem = 'The rules engine did not answer. Try again.';
+                break;
+              }
+              continue;
+            }
+            found = { deck, info };
+            break;
+          }
+        } catch (e) {
+          if (mine !== seq) return;
+          if (!(e instanceof EdhrecDown)) console.error(e);
+          problem = 'Couldn’t reach EDHREC. Check your connection and try again.';
+        }
+        again.disabled = false;
+        use.disabled = !found;
+        if (found) this.showPull(result, found.deck, found.info);
+        else result.replaceChildren(h('div', 'paste-bad', problem));
+      };
+
+      const paintBrackets = () => {
+        for (const [i, b] of [...seg.children].entries()) {
+          b.classList.toggle('on', BRACKETS[i].n === bracket);
+          b.setAttribute('aria-pressed', String(BRACKETS[i].n === bracket));
+        }
+      };
+      for (const b of BRACKETS) {
+        const btn = h('button', '', b.n ? `${b.n} · ${b.name}` : 'Any bracket');
+        btn.onclick = () => {
+          if (bracket === b.n) return;
+          bracket = b.n;
+          save(BRACKET_KEY, bracket);
+          seen.clear();
+          paintBrackets();
+          void pull();
+        };
+        seg.append(btn);
+      }
+      paintBrackets();
+      again.onclick = () => void pull();
+      use.onclick = () => {
+        if (!found) return;
+        const { deck, info } = found;
+        const label = deck.bracket ? BRACKETS[deck.bracket].name : 'Average';
+        // the same pull taken twice is one deck (a list edited since is left as it is)
+        const same = savedDecks().find((d) => d.format === 'commander' && d.list === deck.list);
+        const saved: SavedDeck = {
+          id: same?.id ?? `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+          name: same?.name ?? `${info.commanders!.join(' & ')} · ${label}`,
+          list: deck.list,
+          format: 'commander',
+          commanders: info.commanders!,
+          colors: info.colors ?? [],
+          count: info.count ?? 0,
+          face: info.face,
+          savedAt: Date.now(),
+        };
+        storeDeck(saved);
+        done(saved);
+      };
+      modal.append(box);
+      this.root.append(modal);
+      buildIn(box.children, 0.1, 0.05);
+      void pull();
+    });
+  }
+
+  /** What came of a pull: the deck, where it comes from, and its cards. */
+  private showPull(el: HTMLElement, deck: EdhrecDeck, info: DeckInfo): void {
+    // (a pair of commanders is no news here: the engine's note about it is for pasted lists)
+    this.showReport(el, { ...info, warnings: info.warnings.filter((w) => !/potential Commander/i.test(w)) }, 'commander');
+    const b = deck.bracket ? `bracket ${deck.bracket} (${BRACKETS[deck.bracket].name})` : 'all brackets';
+    const source = h('div', 'paste-note', `No. ${deck.commander.rank} on EDHREC · average of ${deck.sample.toLocaleString()} decks, ${b} · `);
+    const link = h('a', 'edhrec-link', 'See it on EDHREC');
+    link.href = deck.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    source.append(link);
+    const cards = h('details', 'edhrec-cards');
+    cards.append(h('summary', '', 'Decklist'));
+    const list = h('div', 'edhrec-list');
+    for (const line of deck.list.split('\nDeck\n')[1].split('\n')) list.append(h('div', '', line));
+    cards.append(list);
+    el.append(source, cards);
   }
 
   /** Paste (or edit) a list; the engine reads it as you type. Resolves with the saved deck. */

@@ -1543,6 +1543,43 @@ button {
   color: var(--red);
 }
 
+.edhrec-panel {
+  align-items: center !important;
+}
+
+.edhrec-brackets {
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.edhrec-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  flex: 0 1 auto !important;
+  min-height: 110px;
+  text-align: left;
+  font-size: 13px;
+  overflow-y: auto;
+}
+
+.edhrec-link {
+  color: var(--gold);
+}
+
+.edhrec-cards summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.edhrec-list {
+  columns: 190px;
+  column-gap: 16px;
+  padding-top: 6px;
+}
+
 /* ---- camera view bar (multiplayer) ---- */
 
 .view-bar {

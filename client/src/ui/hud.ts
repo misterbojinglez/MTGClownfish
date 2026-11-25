@@ -475,6 +475,7 @@ export class Hud {
     };
     group('Rules engine', 'Forge AI', 'The rules engine and AI that power the gameplay');
     group('Card images', 'Scryfall', 'The images that power the cards');
+    group('Random decks', 'EDHREC', 'Its commander rankings and average decks');
     group('Music', 'leberch · delosound · sonican', 'For their work, licensed from Pixabay');
     group('Sound effects', 'universfield · olivia_parker', 'Punch and impact sounds, licensed from Pixabay');
     panel.append(list);
@@ -766,6 +767,12 @@ export class Hud {
     else if (prompt.input === 'InputAttack' && state && state.players.filter((p) => !p.lost).length > 2) msg += '\n(Drag a creature onto an opponent or their planeswalker, or click your creatures and then who to attack. Drag a box on the table to select several, then drag one of them)';
     else if (prompt.input === 'InputAttack') msg += '\n(Click your creatures, or drag one onto a planeswalker to attack it. Drag a box on the table to select several)';
     else if (prompt.input === 'InputBlock') msg += '\n(Drag a creature onto an attacker to block it. Drag a box on the table to select several, then drag one of them)';
+    // creatures that must attack and aren't yet, or must attack somebody in particular
+    if (prompt.input === 'InputAttack') {
+      const due = (prompt.mustAttack ?? []).filter((m) => m.at || !state?.cards[m.card]?.attacking);
+      const lines = new Set(due.map((m) => `${state?.cards[m.card]?.name ?? 'A creature'} must attack${m.at ? ' ' + m.at : ''}`));
+      if (lines.size) msg = `${lines.size > 4 ? `${due.length} creatures must attack` : [...lines].join('\n')}\n${msg}`;
+    }
     setText(this.promptText, msg);
     this.placeStack();
     const ok = prompt.ok;

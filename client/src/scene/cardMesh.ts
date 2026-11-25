@@ -51,6 +51,7 @@ const TOKEN_TAG_W = CARD_W * 0.66;
 const PT_BOX = { x: 129, y: 4, w: 123, h: 88, cx: 190.5, baseline: 68, font: 53 };
 const TOKEN_TAG_H = TOKEN_TAG_W * (52 / 160);
 const TOKEN_TAG_GEO = new THREE.PlaneGeometry(TOKEN_TAG_W, TOKEN_TAG_H);
+const MUST_TAG_GEO = new THREE.PlaneGeometry(TOKEN_TAG_W * (220 / 160), TOKEN_TAG_H);
 /**
  * The Speed card (Aetherdrift's "Start Your Engines!", TDFT 14) prints a track of 1, 2, 3 down its middle:
  * each circle's centre in card units (from the card's centre, y up) and its radius, measured off the printing.
@@ -103,36 +104,43 @@ function speedDimTexture(): THREE.CanvasTexture {
   return speedDimTex;
 }
 
-let tokenTagTex: THREE.CanvasTexture | null = null;
-function tokenTagTexture(): THREE.CanvasTexture {
-  if (tokenTagTex) return tokenTagTex;
+/** The tags' colours: "Token" in slate and gilt, "Must attack" (while attackers are declared) in red. */
+const TAGS = {
+  Token: { w: 160, top: '#2b3341', bottom: '#10141c', rim: '#d9b45f', ink: '#f5dc9a' },
+  'Must attack': { w: 220, top: '#b3321f', bottom: '#6a150d', rim: '#ffb59a', ink: '#fff3e6' },
+};
+const tagTex: Partial<Record<keyof typeof TAGS, THREE.CanvasTexture>> = {};
+function tagTexture(label: keyof typeof TAGS): THREE.CanvasTexture {
+  const made = tagTex[label];
+  if (made) return made;
+  const { w, top, bottom, rim, ink } = TAGS[label];
   const c = document.createElement('canvas');
-  c.width = 160;
+  c.width = w;
   c.height = 52;
-  tokenTagTex = new THREE.CanvasTexture(c);
-  tokenTagTex.colorSpace = THREE.SRGBColorSpace;
+  const tex = (tagTex[label] = new THREE.CanvasTexture(c));
+  tex.colorSpace = THREE.SRGBColorSpace;
   const draw = () => {
     const g = c.getContext('2d')!;
-    g.clearRect(0, 0, 160, 52);
-    roundRect(g, 3, 3, 154, 46, 23);
+    g.clearRect(0, 0, w, 52);
+    roundRect(g, 3, 3, w - 6, 46, 23);
     const fill = g.createLinearGradient(0, 3, 0, 49);
-    fill.addColorStop(0, '#2b3341');
-    fill.addColorStop(1, '#10141c');
+    fill.addColorStop(0, top);
+    fill.addColorStop(1, bottom);
     g.fillStyle = fill;
     g.fill();
     g.lineWidth = 3.5;
-    g.strokeStyle = '#d9b45f';
+    g.strokeStyle = rim;
     g.stroke();
-    g.fillStyle = '#f5dc9a';
+    g.fillStyle = ink;
     g.font = `700 29px ${CANVAS_FONT}`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillText('Token', 80, 28);
-    tokenTagTex!.needsUpdate = true;
+    g.fillText(label, w / 2, 28);
+    tex.needsUpdate = true;
   };
   draw();
   if (document.fonts) void document.fonts.load(`700 29px Alegreya`).then(draw, () => {});
-  return tokenTagTex;
+  return tex;
 }
 
 let glowTex: THREE.Texture | null = null;
@@ -221,6 +229,8 @@ export class CardObject {
   private readonly glowMat: THREE.MeshBasicMaterial;
   private readonly badge: THREE.Mesh;
   private readonly tokenTag: THREE.Mesh;
+  /** made the first time this card must attack */
+  private mustTag: THREE.Mesh | null = null;
   /** on the Speed card: the ring around the current number on its track */
   private readonly speedMark: THREE.Mesh;
   /** and veils over the other numbers, so the current one stands out */
@@ -277,7 +287,7 @@ export class CardObject {
     this.badge.visible = false;
 
     // straddles the top edge, above the name bar rather than over it
-    this.tokenTag = new THREE.Mesh(TOKEN_TAG_GEO, new THREE.MeshBasicMaterial({ map: tokenTagTexture(), transparent: true, depthWrite: false }));
+    this.tokenTag = new THREE.Mesh(TOKEN_TAG_GEO, new THREE.MeshBasicMaterial({ map: tagTexture('Token'), transparent: true, depthWrite: false }));
     this.tokenTag.position.set(0, CARD_H / 2 + TOKEN_TAG_H * 0.18, 0.025);
     this.tokenTag.visible = false;
 
@@ -325,6 +335,18 @@ export class CardObject {
     }
     this.drawBadge();
     this.tokenTag.visible = !!state.token && state.zone === 'Battlefield' && state.visible;
+  }
+
+  /** Marks a creature that must attack this combat (across its art, clear of the Token tag and its name). */
+  setMustAttack(on: boolean): void {
+    if (!this.mustTag) {
+      if (!on) return;
+      this.mustTag = new THREE.Mesh(MUST_TAG_GEO, new THREE.MeshBasicMaterial({ map: tagTexture('Must attack'), transparent: true, depthWrite: false }));
+      this.mustTag.position.set(0, CARD_H * 0.3, 0.026);
+      this.mustTag.layers.mask = this.tokenTag.layers.mask;
+      this.lift.add(this.mustTag);
+    }
+    this.mustTag.visible = on;
   }
 
   /** P/T, loyalty, damage and counters, drawn along the bottom of battlefield cards. */
@@ -429,7 +451,7 @@ export class CardObject {
     this.onTable = onTable;
     for (const m of [this.front, this.back, this.edge]) m.castShadow = onTable;
     // screen-space cards draw in the overlay pass, after bloom/tone mapping, so their art keeps its true colour
-    for (const m of [this.front, this.back, this.edge, this.badge, this.tokenTag, this.speedMark, ...this.speedDims]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
+    for (const m of [this.front, this.back, this.edge, this.badge, this.tokenTag, ...(this.mustTag ? [this.mustTag] : []), this.speedMark, ...this.speedDims]) m.layers.set(onTable ? 0 : OVERLAY_LAYER);
     for (const mat of [this.frontMat, this.backMat]) {
       mat.color.setScalar(onTable ? 0.62 : 0);
       mat.emissiveIntensity = onTable ? 0.42 : 1;
@@ -530,6 +552,7 @@ export class CardObject {
     this.badgeTex.dispose();
     // the tag's texture and shape are shared by every token
     (this.tokenTag.material as THREE.Material).dispose();
+    (this.mustTag?.material as THREE.Material | undefined)?.dispose();
   }
 }
 

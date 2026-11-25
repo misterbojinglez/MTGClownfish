@@ -192,6 +192,9 @@ public class SocketGuiGame extends AbstractGuiGame {
                 if (tr != null && tr.isSameController()) promptOut.addProperty("samePlayer", true);
             }
         }
+        if ("InputAttack".equals(currentInputName())) {
+            promptOut.add("mustAttack", mustAttack);
+        }
         final JsonObject selection = Serializer.selection(getSelection());
         // abilities Forge's scan misses because their targets depend on X: highlight them as playable too
         if ("InputPassPriority".equals(currentInputName()) && getGameController() instanceof forge.player.PlayerControllerHuman pch) {
@@ -237,6 +240,22 @@ public class SocketGuiGame extends AbstractGuiGame {
         msg.add("selection", selection);
         if (TRACE_INPUTS) System.out.println("[sent] prompt " + promptOut.get("inputId") + " " + promptOut.get("input") + " on " + Thread.currentThread().getName());
         send(msg);
+    }
+
+    /** Creatures that must attack, while attackers are declared: [{card, at?}], `at` naming whom when only some will do. */
+    private volatile JsonArray mustAttack = new JsonArray();
+
+    void setMustAttack(final Map<forge.game.card.Card, List<forge.game.GameEntity>> must) {
+        final JsonArray out = new JsonArray();
+        must.forEach((c, wanted) -> {
+            final JsonObject o = new JsonObject();
+            o.addProperty("card", c.getId());
+            if (!wanted.isEmpty()) {
+                o.addProperty("at", AttackAdvice.names(wanted));
+            }
+            out.add(o);
+        });
+        mustAttack = out;
     }
 
     /** Events the client draws nothing for; on their own they don't justify an update. */
@@ -1126,7 +1145,10 @@ public class SocketGuiGame extends AbstractGuiGame {
             }
             return abilities.get(0);
         }
-        final List<SpellAbilityView> chosen = pick("Choose an ability", 0, 1, abilities, null, hostCard);
+        // a click's list includes what isn't legal right now: offer only what is (if nothing is, whichever is
+        // picked gets its reason from playChosenSpellAbility)
+        final List<SpellAbilityView> legal = triggerEvent == null ? abilities : abilities.stream().filter(SpellAbilityView::canPlay).toList();
+        final List<SpellAbilityView> chosen = pick("Choose an ability", 0, 1, legal.isEmpty() ? abilities : legal, null, hostCard);
         return chosen.isEmpty() ? null : chosen.get(0);
     }
 
