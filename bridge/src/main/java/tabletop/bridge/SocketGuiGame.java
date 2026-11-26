@@ -642,7 +642,16 @@ public class SocketGuiGame extends AbstractGuiGame {
     private String currentInputName() {
         if (getGameController() instanceof forge.player.PlayerControllerHuman pch) {
             final var input = pch.getInputQueue().getInput();
-            return input == null ? null : input.getClass().getSimpleName();
+            if (input == null) {
+                return null;
+            }
+            // Forge makes some inputs on the spot as anonymous subclasses (discarding down to hand size is an
+            // InputSelectCardsFromList of its own), whose simple name is empty: report the class they extend
+            Class<?> type = input.getClass();
+            while (type.getSimpleName().isEmpty() && type.getSuperclass() != null) {
+                type = type.getSuperclass();
+            }
+            return type.getSimpleName();
         }
         return null;
     }

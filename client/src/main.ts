@@ -267,11 +267,23 @@ function askLifeIfNoMana(): void {
  * Selectable cards that aren't on the table (library search etc.) get the browser overlay, and so do selectable
  * graveyard cards: the graveyard is a pile showing only its top card (Baron Helmut Zemo's boast picks several).
  */
+/** Above this many cards in hand, discarding down to hand size is done in the card browser, not the crowded fan. */
+const BIG_HAND = 12;
+
 function refreshBrowser(): void {
   const s = table.state!;
-  const offTable = table.selection.cards.filter((id) => s.cards[id] && (!table.cards.has(id) || s.cards[id].zone === 'Graveyard'));
+  let p = table.prompt;
+  // discarding down to your maximum hand size (Forge: "Cleanup Phase / Select 3 card(s) to discard to bring your
+  // hand down to the maximum of 7 cards.") from a hand too big to pick from comfortably: in the card browser
+  const hand = s.players.find((pl) => pl.id === table.localId)?.zones.Hand ?? [];
+  const cleanup = p.input === 'InputSelectCardsFromList' ? /^Cleanup Phase\s+Select (\d+) card\(s\) to discard to bring your hand down to the maximum of (\d+)/.exec(p.message ?? '') : null;
+  const bigDiscard = !!cleanup && hand.length > BIG_HAND;
+  if (cleanup && bigDiscard) {
+    const n = Number(cleanup[1]);
+    p = { ...p, message: `Discard ${n} card${n === 1 ? '' : 's'}: your hand can hold at most ${cleanup[2]}` };
+  }
+  const offTable = table.selection.cards.filter((id) => s.cards[id] && ((bigDiscard && hand.includes(id)) || !table.cards.has(id) || s.cards[id].zone === 'Graveyard'));
   const chosen = new Set(table.selection.chosen.map((r) => r?.card).filter((x): x is number => x != null));
-  const p = table.prompt;
   const cards = offTable.map((id) => s.cards[id]);
   // (the prompt's card, or the spell being cast, which is on its way to the stack)
   const name = /^(.+?)(?: \(\d+\))?(?: - |\n)/.exec(p.message ?? '')?.[1];
