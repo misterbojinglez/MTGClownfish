@@ -9,8 +9,8 @@ client/   Three.js 3D table + HTML HUD (TypeScript, Vite)
 bridge/   Java WebSocket bridge: runs Forge headless and speaks JSON to the client
 relay/    Cloudflare Worker for online lobbies
 desktop/  Electron shell that packages the bridge, a Java runtime and the client
-engine/   Forge (cloned by scripts/build-engine.sh, not committed), plus engine/patches/: our fixes to
-          Forge itself, applied by the build
+engine/   Forge (fetched by scripts/build-engine.sh at the commit in engine/FORGE_REV, not committed),
+          plus engine/patches/: our fixes to Forge itself, applied by the build
 scripts/  build + smoke-test helpers
 docs/     protocol and Arena reference notes
 ```

@@ -5,11 +5,28 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17}"
 export PATH="$JAVA_HOME/bin:/opt/homebrew/bin:$PATH"
 
+# the Forge commit the bridge and the patches are made against (engine/FORGE_REV); moving to a newer Forge
+# is changing that file, then fixing whatever patch or bridge code no longer fits
+FORGE_REV=$(tr -d '[:space:]' < "$ROOT/engine/FORGE_REV")
 if [ ! -d "$ROOT/engine/forge" ]; then
-  git clone --depth 1 https://github.com/Card-Forge/forge.git "$ROOT/engine/forge"
+  git init -q "$ROOT/engine/forge"
+  git -C "$ROOT/engine/forge" remote add origin https://github.com/Card-Forge/forge.git
 fi
 
 cd "$ROOT/engine/forge"
+if [ "$(git rev-parse -q --verify HEAD || true)" != "$FORGE_REV" ]; then
+  echo "checking out Forge ${FORGE_REV:0:11}"
+  # a checkout at another commit: take our patches back off first, so only Forge's own files change
+  for patch in $(ls -r "$ROOT"/engine/patches/*.patch 2>/dev/null); do
+    git apply --reverse --check "$patch" 2>/dev/null && git apply --reverse "$patch"
+  done
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "engine/forge has changes that aren't in engine/patches; save or discard them, then run this again" >&2
+    exit 1
+  fi
+  git fetch -q --depth 1 origin "$FORGE_REV"
+  git checkout -q --detach "$FORGE_REV"
+fi
 # our fixes to Forge itself (engine/patches/*.patch, in order), for bugs the bridge can't work around from
 # outside; each is applied once, so this can run again on the same checkout. A patch that no longer applies
 # (Forge changed under it, or fixed it upstream) stops the build rather than going missing
