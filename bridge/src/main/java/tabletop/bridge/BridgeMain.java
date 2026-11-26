@@ -748,6 +748,12 @@ public final class BridgeMain {
                 }
             }
             case "alphaStrike" -> controller.alphaStrike();
+            case "tapAll" -> {
+                final String why = BridgeHumanPlayer.tapAllMana(controller);
+                if (why != null) {
+                    gui.tell(why);
+                }
+            }
             case "undo" -> controller.undoLastAction();
             case "concede" -> controller.concede();
             // sets the end-of-turn yield and passes the priority currently held, like Forge's End Turn shortcut
@@ -829,7 +835,7 @@ public final class BridgeMain {
         }
     }
 
-    private static final java.util.Set<String> GUARDED_ACTIONS = java.util.Set.of("ok", "cancel", "card", "player", "stack", "mana", "floating", "alphaStrike");
+    private static final java.util.Set<String> GUARDED_ACTIONS = java.util.Set.of("ok", "cancel", "card", "player", "stack", "mana", "floating", "alphaStrike", "tapAll");
 
     private static List<DeckProxy> constructedPrecons() {
         return DeckProxy.getAllPreconstructedDecks(QuestController.getPrecons());

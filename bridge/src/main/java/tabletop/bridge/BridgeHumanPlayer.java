@@ -62,6 +62,11 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
         USABLE_READY.clear();
     }
 
+    /** Tap all (double Z) for this controller, when it's a human seat here; what to tell the player, or null. */
+    static String tapAllMana(final Object controller) {
+        return controller instanceof Controller c ? c.tapAllMana() : "Tap all isn't available here";
+    }
+
     BridgeHumanPlayer(final String name) {
         super(name);
     }
@@ -78,6 +83,250 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
             super(game, player, lobby);
         }
 
+        // ---- mana: the wheel, tapping everything at once, and costs that needn't be confirmed ----------------
+
+        /** "Tap all" (double Z): the mana abilities to play together; the prompt was handed the first of them */
+        private volatile List<SpellAbility> tapAll;
+        /** the colour each of those makes where it would ask (any colour, or one of a few), by ability */
+        private final java.util.Map<SpellAbility, Byte> presetColours = new java.util.concurrent.ConcurrentHashMap<>();
+
+        /**
+         * A source with several mana abilities you could use (a dual land's {G} and {U}): picked on the wheel at
+         * the source, not from a list. Anything else, or a mix with other abilities, is Forge's own choice.
+         */
+        @Override
+        public SpellAbility getAbilityToPlay(final forge.game.card.Card hostCard, final List<SpellAbility> abilities, final forge.util.ITriggerEvent triggerEvent) {
+            final SocketGuiGame gui = socketGui();
+            if (gui != null && abilities.size() > 1) {
+                final List<SpellAbility> legal = triggerEvent == null ? abilities : abilities.stream().filter(SpellAbility::canPlay).toList();
+                if (legal.size() > 1 && legal.stream().allMatch(SpellAbility::isManaAbility)) {
+                    final com.google.gson.JsonArray opts = new com.google.gson.JsonArray();
+                    for (final SpellAbility sa : legal) {
+                        opts.add(wheelOption(sa));
+                    }
+                    final int at = gui.manaWheel("Choose the mana to add", hostCard.getView(), opts, true);
+                    return at < 0 ? null : legal.get(at);
+                }
+            }
+            return super.getAbilityToPlay(hostCard, abilities, triggerEvent);
+        }
+
+        /** The colour a mana ability makes when it may make several: preset by "tap all", or on the wheel. */
+        @Override
+        public byte chooseColor(final String message, final SpellAbility sa, final forge.card.ColorSet colors) {
+            if (sa != null && colors.countColors() > 1 && isMana(sa)) {
+                final Byte preset = presetColours.get(sa.getRootAbility());
+                if (preset != null && colors.hasAnyColor(preset)) {
+                    return preset;
+                }
+                final SocketGuiGame gui = socketGui();
+                if (gui != null) {
+                    final List<forge.card.MagicColor.Color> list = new ArrayList<>(colors.getOrderedColors());
+                    final com.google.gson.JsonArray opts = new com.google.gson.JsonArray();
+                    for (final forge.card.MagicColor.Color c : list) {
+                        opts.add(SocketGuiGame.manaOption("{" + c.getShortName() + "}", c.getTranslatedName(), false));
+                    }
+                    final forge.game.card.Card host = sa.getHostCard();
+                    return list.get(gui.manaWheel("Choose the colour of mana to add", host == null ? null : host.getView(), opts, false)).getColorMask();
+                }
+            }
+            return super.chooseColor(message, sa, colors);
+        }
+
+        private static boolean isMana(final SpellAbility sa) {
+            return sa.isManaAbility() || sa.getRootAbility().isManaAbility();
+        }
+
+        /** How the wheel shows a mana ability: the mana it makes as symbols, and its text. */
+        private static com.google.gson.JsonObject wheelOption(final SpellAbility sa) {
+            final String text = sa.getDescription() == null || sa.getDescription().isBlank() ? sa.toUnsuppressedString() : sa.getDescription();
+            for (SpellAbility part = sa; part != null; part = part.getSubAbility()) {
+                final forge.game.spellability.AbilityManaPart mp = part.getManaPart();
+                if (mp == null) {
+                    continue;
+                }
+                try {
+                    if (mp.isAnyMana()) {
+                        return SocketGuiGame.manaOption("{W}{U}{B}{R}{G}", text, true);
+                    }
+                    if (mp.isComboMana()) {
+                        final StringBuilder sb = new StringBuilder();
+                        for (final String c : mp.getComboColors(part).trim().split("\\s+")) {
+                            if (!c.isEmpty()) {
+                                sb.append('{').append(forge.card.MagicColor.toShortString(forge.card.MagicColor.fromName(c))).append('}');
+                            }
+                        }
+                        return SocketGuiGame.manaOption(sb.toString(), text, true);
+                    }
+                    final StringBuilder one = new StringBuilder();
+                    for (final String token : mp.getOrigProduced().trim().split("\\s+")) {
+                        if (!token.matches("[WUBRGC]")) {
+                            return SocketGuiGame.manaOption(SocketGuiGame.producedIn(text), text, text.contains("} or {"));
+                        }
+                        one.append('{').append(token).append('}');
+                    }
+                    int amount = 1;
+                    try {
+                        amount = Math.max(1, Integer.parseInt(part.getParamOrDefault("Amount", "1").trim()));
+                    } catch (final NumberFormatException ignored) {
+                        // "X" and the like: shown once
+                    }
+                    return SocketGuiGame.manaOption(one.toString().repeat(Math.min(amount, 6)), text, false);
+                } catch (final RuntimeException e) {
+                    break;
+                }
+            }
+            return SocketGuiGame.manaOption(SocketGuiGame.producedIn(text), text, text.contains("} or {"));
+        }
+
+        /**
+         * Costs of an ability you activate yourself (a fetchland's life and sacrifice, a Horizon land's life) are
+         * paid without "Pay 1 life?" / "Sacrifice Polluted Delta?" first: clicking it was the decision, and Undo
+         * takes it back. Only the ability's own costs: a cost an effect asks of you ("unless you pay 2 life", an
+         * opponent's tax) is a real choice and still asks, as does everything with Confirm activation costs on.
+         */
+        @Override
+        public boolean confirmPayment(final forge.game.cost.CostPart costPart, final String question, final SpellAbility sa) {
+            final SocketGuiGame gui = socketGui();
+            if (gui != null && !gui.option("confirmCosts", false) && ownActivationCost(costPart, sa)) {
+                return true;
+            }
+            return super.confirmPayment(costPart, question, sa);
+        }
+
+        private boolean ownActivationCost(final forge.game.cost.CostPart part, final SpellAbility sa) {
+            if (part == null || sa == null || sa.isTrigger() || sa.getActivatingPlayer() != getPlayer()
+                    || !(sa.isActivatedAbility() || sa.isManaAbility()) || sa.getPayCosts() == null) {
+                return false;
+            }
+            // (what's paid is an adjusted copy of the ability's cost, so its parts are matched by kind and wording)
+            for (final forge.game.cost.CostPart own : sa.getPayCosts().getCostParts()) {
+                if (own == part || (own.getClass() == part.getClass() && String.valueOf(own).equals(String.valueOf(part)))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Tap all (double Z): every untapped land and non-creature mana source you control whose ability costs
+         * only {T} adds its mana, all as one action. A source that could make several colours makes the one your
+         * hand and commander need most that the rest hasn't covered; sources whose mana hurts (painlands' coloured
+         * mana) use a painless ability if they have one. Sacrifices, life and mana-costing abilities are left alone.
+         * Only while you hold priority. Returns what to tell the player when nothing happened, else null.
+         */
+        String tapAllMana() {
+            if (!(getInputQueue().getInput() instanceof forge.gamemodes.match.input.InputPassPriority input)) {
+                return "Tap all works while you have priority";
+            }
+            final Player me = getPlayer();
+            // what the cards you could cast want, one count per coloured symbol
+            final java.util.Map<Byte, Integer> want = new java.util.HashMap<>();
+            final List<forge.game.card.Card> wanting = new ArrayList<>(me.getCardsIn(forge.game.zone.ZoneType.Hand));
+            for (final forge.game.card.Card c : me.getCardsIn(forge.game.zone.ZoneType.Command)) {
+                if (c.isCommander()) {
+                    wanting.add(c);
+                }
+            }
+            for (final forge.game.card.Card c : wanting) {
+                for (final forge.card.mana.ManaCostShard shard : c.getManaCost()) {
+                    for (final byte colour : forge.card.MagicColor.WUBRG) {
+                        if ((shard.getColorMask() & colour) != 0) {
+                            want.merge(colour, 1, Integer::sum);
+                        }
+                    }
+                }
+            }
+            for (final forge.game.mana.Mana m : me.getManaPool()) {
+                want.merge((byte) m.getColor(), -1, Integer::sum);
+            }
+            // per source: its usable abilities that cost only {T}, painless ones first
+            final List<List<SpellAbility>> sources = new ArrayList<>();
+            for (final forge.game.card.Card c : me.getCardsIn(forge.game.zone.ZoneType.Battlefield)) {
+                if (c.isTapped() || (c.isCreature() && !c.isLand())) {
+                    continue;
+                }
+                final List<SpellAbility> usable = new ArrayList<>();
+                for (final SpellAbility ma : c.getManaAbilities()) {
+                    if (onlyTaps(ma) && ma.canPlay()) {
+                        usable.add(ma);
+                    }
+                }
+                if (usable.isEmpty()) {
+                    continue;
+                }
+                final List<SpellAbility> painless = usable.stream().filter(ma -> ma.getSubAbility() == null).toList();
+                sources.add(painless.isEmpty() ? usable : painless);
+            }
+            if (sources.isEmpty()) {
+                return "Nothing to tap for mana";
+            }
+            // single-colour sources first, so the flexible ones go where they're still needed
+            sources.sort(java.util.Comparator.comparingInt(list -> colourChoices(list).size()));
+            final List<SpellAbility> plan = new ArrayList<>();
+            final java.util.Map<SpellAbility, Byte> colours = new java.util.HashMap<>();
+            for (final List<SpellAbility> options : sources) {
+                SpellAbility best = options.get(0);
+                byte bestColour = 0;
+                int bestWant = Integer.MIN_VALUE;
+                for (final SpellAbility ma : options) {
+                    for (final byte colour : colourChoices(List.of(ma))) {
+                        final int w = want.getOrDefault(colour, 0);
+                        if (w > bestWant) {
+                            bestWant = w;
+                            best = ma;
+                            bestColour = colour;
+                        }
+                    }
+                }
+                plan.add(best);
+                if (bestColour != 0) {
+                    want.merge(bestColour, -1, Integer::sum);
+                    colours.put(best, bestColour);
+                }
+            }
+            presetColours.clear();
+            presetColours.putAll(colours);
+            tapAll = plan;
+            input.selectAbility(plan.get(0));
+            return null;
+        }
+
+        private static boolean onlyTaps(final SpellAbility ma) {
+            final forge.game.cost.Cost cost = ma.getPayCosts();
+            if (cost == null || !cost.hasTapCost()) {
+                return false;
+            }
+            for (final forge.game.cost.CostPart part : cost.getCostParts()) {
+                if (!(part instanceof forge.game.cost.CostTap)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** The colours these abilities could make (empty for colourless only). */
+        private static List<Byte> colourChoices(final List<SpellAbility> abilities) {
+            final List<Byte> out = new ArrayList<>();
+            for (final SpellAbility ma : abilities) {
+                for (SpellAbility part = ma; part != null; part = part.getSubAbility()) {
+                    if (part.getManaPart() == null) {
+                        continue;
+                    }
+                    for (final byte colour : forge.card.MagicColor.WUBRG) {
+                        try {
+                            if (!out.contains(colour) && part.getManaPart().canProduce(forge.card.MagicColor.toShortString(colour), part)) {
+                                out.add(colour);
+                            }
+                        } catch (final RuntimeException ignored) {
+                            // a source we can't read
+                        }
+                    }
+                }
+            }
+            return out;
+        }
+
         /**
          * Forge's "pass when there's nothing to do" ignores mana abilities, so a main phase whose only option
          * is a sacrifice outlet that makes mana (Soldevi Adnate, Ashnod's Altar) was passed straight through.
@@ -86,6 +335,9 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
          */
         @Override
         public List<SpellAbility> chooseSpellAbilityToPlay() {
+            // a "tap all" played since the last time here: its colours are spent
+            presetColours.clear();
+            tapAll = null;
             flushHeldReveal();
             digs.clear();
             eachPlayer = null;
@@ -140,7 +392,14 @@ final class BridgeHumanPlayer extends LobbyPlayerHuman {
                 yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "false");
             }
             try {
-                return super.chooseSpellAbilityToPlay();
+                final List<SpellAbility> chosen = super.chooseSpellAbilityToPlay();
+                // "tap all": the prompt was given the first of the abilities; play every one of them
+                final List<SpellAbility> all = tapAll;
+                tapAll = null;
+                if (all != null && chosen != null && chosen.size() == 1 && chosen.get(0) == all.get(0)) {
+                    return new ArrayList<>(all);
+                }
+                return chosen;
             } finally {
                 if (hold) {
                     yc.setPref(forge.localinstance.properties.ForgePreferences.FPref.YIELD_AUTO_PASS_NO_ACTIONS, "true");

@@ -285,7 +285,9 @@ public class SocketGuiGame extends AbstractGuiGame {
             }
             final forge.game.Game game = getGameView().getGame();
             final Card land = game == null ? null : game.findById(view.getId());
-            if (land == null) {
+            // a land already on the battlefield isn't being played: its one ability (a fetchland's) is the point,
+            // and asking "Use it instead?" there was a confirmation before every fetch after your land drop
+            if (land == null || land.isInZone(ZoneType.Battlefield)) {
                 return null;
             }
             final forge.game.player.Player p = land.getController();
@@ -1082,7 +1084,60 @@ public class SocketGuiGame extends AbstractGuiGame {
             ask("reveal", req);
             return new ArrayList<>();
         }
+        // paying, a source with several mana abilities that could all help (Forge has already narrowed them to
+        // the colours the cost needs): the wheel at the source rather than a list
+        if (min == 1 && max == 1 && choices.size() > 1 && choices.stream().allMatch(c -> c instanceof SpellAbilityView)
+                && message != null && message.equals(forge.util.Localizer.getInstance().getMessage("lblChooseManaAbility"))) {
+            final JsonArray opts = new JsonArray();
+            for (final T c : choices) {
+                final String text = ((SpellAbilityView) c).getDescription();
+                opts.add(manaOption(producedIn(text), text, text != null && text.contains("} or {")));
+            }
+            final int at = manaWheel("Choose the mana to add", ((SpellAbilityView) choices.get(0)).getHostCard(), opts, false);
+            return new ArrayList<>(List.of(choices.get(Math.max(0, Math.min(at, choices.size() - 1)))));
+        }
         return pick(message, min, max, choices, display, null);
+    }
+
+    // ---- the mana wheel ------------------------------------------------------------------------
+
+    /**
+     * A choice of mana from one source (which of a dual land's abilities, which colour "any colour" makes),
+     * asked as a wheel around the source rather than a dialog. Answers the option's index, or -1 when backed out
+     * of (only when cancellable) or there's nobody to ask.
+     */
+    int manaWheel(final String message, final CardView source, final JsonArray options, final boolean cancellable) {
+        final JsonObject req = new JsonObject();
+        req.addProperty("message", message);
+        req.addProperty("card", source == null ? null : source.getId());
+        req.addProperty("cancellable", cancellable);
+        req.add("options", options);
+        final JsonElement answer = ask("mana", req);
+        if (answer == null || !answer.isJsonPrimitive()) {
+            return cancellable ? -1 : 0;
+        }
+        final int at = answer.getAsInt();
+        return at >= 0 && at < options.size() ? at : cancellable ? -1 : 0;
+    }
+
+    /** symbols: the mana as symbols ("{G}", "{C}{C}"); oneOf: the symbols are alternatives, one of which is made */
+    static JsonObject manaOption(final String symbols, final String label, final boolean oneOf) {
+        final JsonObject o = new JsonObject();
+        o.addProperty("symbols", symbols);
+        o.addProperty("label", label);
+        if (oneOf) {
+            o.addProperty("oneOf", true);
+        }
+        return o;
+    }
+
+    /** The mana an ability's text says it adds: "{T}: Add {G}{G}." gives "{G}{G}" (empty for "one mana of any color"). */
+    static String producedIn(final String text) {
+        if (text == null) {
+            return "";
+        }
+        final java.util.regex.Matcher m = java.util.regex.Pattern.compile("[Aa]dd ((?:\\{[^}]+\\}\\s*(?:or\\s*|,\\s*)?)+)").matcher(text);
+        return m.find() ? m.group(1).replaceAll("[^{}A-Za-z0-9/]", "").replace("or", "") : "";
     }
 
     @Override

@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, onSettings, setSetting, type Settings } from '../sett
 import { cardArtUrl, cardImageUrl, cardZoomUrl } from '../scene/textures';
 import { STEPS, fullControl, onStops, resetStops, setFullControl, setStop, stopsNow } from '../stops';
 import { sfx } from '../audio';
+import { fullscreenSupported, isFullscreen, onFullscreen, setFullscreen } from '../fullscreen';
 import { startTour } from './tour';
 import type { RadialAction } from './radial';
 
@@ -139,6 +140,8 @@ export interface HudHandlers {
   concede(): void;
   /** undo the last undoable action (a mana tap, a declaration) */
   undo(): void;
+  /** add the mana of every land and mana rock that taps for it alone */
+  tapAll(): void;
   /** pay one Phyrexian (or K'rrik {B}) symbol of the cost being paid with life */
   payLife(): void;
   /** "OK to all": start passing until the stack is resolved, or stop doing so */
@@ -202,7 +205,7 @@ export class Hud {
     pass.title = 'Pass priority until end of turn (Shift+Enter)';
     pass.onclick = () => (this.passing ? this.handlers.resumeTurn() : this.handlers.passTurn());
     const undo = this.undoBtn;
-    undo.title = 'Undo the last thing you did, where the rules allow (Z)';
+    undo.title = `Undo the last thing you did, where the rules allow (${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}Z)`;
     undo.onclick = () => this.handlers.undo();
     const pair = h('div', 'actions');
     pair.append(this.cancelBtn, this.okBtn);
@@ -338,6 +341,14 @@ export class Hud {
     window.addEventListener('keydown', (e) => {
       // typing a deck name or list mustn't trigger shortcuts (an "m" used to mute everything)
       if ((e.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return;
+      // Cmd+Z (Ctrl+Z elsewhere) undoes, as everywhere else; with no undo to take, it backs out like Cancel
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        if (document.querySelector('.modal') || !document.body.classList.contains('in-game')) return;
+        e.preventDefault();
+        if (this.undoBtn.style.visibility !== 'hidden') this.handlers.undo();
+        else if (!this.cancelBtn.disabled) this.cancelBtn.click();
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === 'm' || e.key === 'M') {
         sfx.toggleMute();
@@ -353,9 +364,13 @@ export class Hud {
         if (!this.okBtn.disabled && !this.skipping) this.handlers.ok();
       } else if (e.key === 's' || e.key === 'S') {
         this.toggleStack();
-      } else if (e.key === 'z' || e.key === 'Z') {
-        if (this.undoBtn.style.visibility !== 'hidden') this.handlers.undo();
-        else if (!this.cancelBtn.disabled) this.cancelBtn.click();
+      } else if ((e.key === 'z' || e.key === 'Z') && !e.repeat) {
+        // tapped twice quickly (Arena's shortcut): add the mana of every land and mana rock you can tap
+        const now = performance.now();
+        if (now - this.lastZ < 400) {
+          this.lastZ = -Infinity;
+          if (document.body.classList.contains('in-game')) this.handlers.tapAll();
+        } else this.lastZ = now;
       } else if (e.key === 'f' || e.key === 'F') {
         if (document.body.classList.contains('in-game')) setFullControl(fullControl() === 'off' ? (e.shiftKey ? 'held' : 'turn') : 'off');
       } else if (e.key === 'Escape') {
@@ -546,6 +561,25 @@ export class Hud {
       ['high', 'High'],
       ['standard', 'Standard'],
     ]);
+    // fullscreen belongs to the window, not to saved settings: it shows whatever the window is doing
+    let stopFullscreen = () => {};
+    if (fullscreenSupported) {
+      const r = h('div', 'settings-row');
+      const text = h('div', 'settings-text');
+      text.append(h('div', 'settings-label', 'Fullscreen'), h('div', 'settings-hint', 'Fill the whole screen with the table.'));
+      const seg = h('div', 'seg');
+      const buttons = ([[false, 'Off'], [true, 'On']] as const).map(([on, name]) => {
+        const b = h('button', '', name);
+        b.onclick = () => setFullscreen(on);
+        seg.append(b);
+        return [on, b] as const;
+      });
+      const sync = (on: boolean) => buttons.forEach(([v, b]) => b.classList.toggle('on', v === on));
+      void isFullscreen().then(sync);
+      stopFullscreen = onFullscreen(sync);
+      r.append(text, seg);
+      rows.append(r);
+    }
     row('stackHold', 'Stack pace', 'The least time each spell or ability stays on The Stack before it resolves, so you can follow what happens when nobody stops to respond.', [
       ['0', 'Quick'],
       ['1', '1 s'],
@@ -559,6 +593,8 @@ export class Hud {
     row('autoTriggers', 'Order triggers for me', 'Your triggers go on the stack in the order the game lists them.', onOff);
     row('autoReplacements', 'Order replacements for me', 'When several effects would change the same event, the game picks the order.', onOff);
     row('autoDamage', 'Assign damage for me', 'Combat damage goes lethal to each blocker in turn, and the rest tramples over.', onOff);
+    row('confirmCosts', 'Confirm activation costs', 'Ask before paying life or sacrificing a card for an ability you activate, such as a fetchland. Costs an opponent’s card asks of you always ask.', onOff);
+    row('attackCount', 'Attack count for stacks', 'Clicking a stack of creatures while declaring attackers asks how many of them attack.', onOff);
     panel.append(rows);
     const unsubscribe = onSettings((st) => syncs.forEach((f) => f(st)));
     const buttons = h('div', 'modal-buttons');
@@ -567,6 +603,7 @@ export class Hud {
     const done = h('button', 'main-btn wide', 'Done');
     const close = () => {
       unsubscribe();
+      stopFullscreen();
       window.removeEventListener('keydown', onKey, true);
       modal.classList.add('out');
       setTimeout(() => modal.remove(), 160);
@@ -1689,6 +1726,8 @@ export class Hud {
 
   /** the local player, for whose cards are "yours" */
   private localId = -1;
+  /** when Z was last pressed, for the double tap */
+  private lastZ = -Infinity;
 
   request(req: RequestMsg, state: GameState | null, localId = this.localId): Promise<unknown> {
     this.localId = localId;

@@ -2449,6 +2449,177 @@ button {
   }
 }
 
+/* ---- the mana wheel: which mana a source makes, around the source ----------------------------------- */
+.mana-wheel {
+  z-index: 70;
+}
+
+.mana-wheel .radial-sweep {
+  background: conic-gradient(
+    from calc(var(--a, 0deg) - var(--w, 60deg) / 2),
+    rgba(240, 207, 124, 0.34),
+    rgba(240, 207, 124, 0.08) calc(var(--w, 60deg) / 2),
+    rgba(240, 207, 124, 0.34) var(--w, 60deg),
+    transparent var(--w, 60deg)
+  );
+}
+
+.mw-hub {
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.mw-hub:empty {
+  cursor: default;
+}
+
+.mw-item {
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.mw-symbols {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  max-width: 46px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+.mw-symbols img {
+  width: 30px;
+  height: 30px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
+.mw-symbols[data-n="2"] img {
+  width: 21px;
+  height: 21px;
+}
+
+.mw-symbols[data-n="3"] img,
+.mw-symbols[data-n="4"] img {
+  width: 18px;
+  height: 18px;
+}
+
+.mw-symbols[data-n="5"] img {
+  width: 14px;
+  height: 14px;
+}
+
+.mana-wheel .radial-tip .sym {
+  width: 15px;
+  height: 15px;
+  vertical-align: -2px;
+  margin: 0 1px;
+}
+
+.mw-caption {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: rgba(13, 11, 18, 0.78);
+  color: var(--gold);
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.radial.open .mw-caption {
+  opacity: 1;
+}
+
+/* ---- "how many?" for a stack of creatures attacking ------------------------------------------------- */
+.count-picker {
+  position: fixed;
+  z-index: 65;
+  padding: 10px 12px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--gold-dim);
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+  transition: opacity 0.12s ease-out, transform 0.16s cubic-bezier(0.2, 1.3, 0.4, 1);
+}
+
+.count-picker.in {
+  opacity: 1;
+  transform: none;
+}
+
+.count-title {
+  margin-bottom: 8px;
+  color: var(--gold);
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.count-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.count-btn,
+.count-step {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 18px;
+  border: 2px solid var(--gold-dim);
+  background: linear-gradient(180deg, rgba(42, 35, 64, 0.97), rgba(21, 17, 31, 0.97));
+  color: var(--text);
+  font-family: var(--display, Alegreya, Georgia, serif);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.count-btn:hover,
+.count-step:hover:not(:disabled) {
+  border-color: var(--gold);
+  color: #fff6dc;
+}
+
+.count-btn.all {
+  border-color: #f0cf7c;
+  background: linear-gradient(180deg, #f0cf7c, #c49a3f);
+  color: #1b1405;
+}
+
+.count-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .count-picker {
+    transition: opacity 0.1s;
+    transform: none;
+  }
+}
+
 /* ---- choosing between two piles (Make an Example, Fact or Fiction) ------------------------------------- */
 .piles {
   display: grid;

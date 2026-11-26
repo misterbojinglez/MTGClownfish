@@ -4,7 +4,7 @@
 // The game files sit in the app's resources under game/ (bridge jar, Forge's card data, the built client and a
 // trimmed Java runtime; see scripts/package.sh). Running unpackaged (npm start), CLOWNFISH_GAME points at such
 // a folder instead.
-const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const { spawn, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -23,6 +23,29 @@ function gameDir() {
 }
 
 const logsDir = () => path.join(app.getPath('userData'), 'logs');
+
+// the window's own preferences, kept between launches (fullscreen, for now)
+const windowPrefsFile = () => path.join(app.getPath('userData'), 'window.json');
+function windowPrefs() {
+  try {
+    return JSON.parse(fs.readFileSync(windowPrefsFile(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+function saveWindowPrefs(prefs) {
+  try {
+    fs.writeFileSync(windowPrefsFile(), JSON.stringify({ ...windowPrefs(), ...prefs }));
+  } catch {
+    // not remembered: it still applies now
+  }
+}
+
+ipcMain.on('fullscreen:set', (e, on) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w) w.setFullScreen(!!on);
+});
+ipcMain.handle('fullscreen:get', (e) => !!BrowserWindow.fromWebContents(e.sender)?.isFullScreen());
 const bridgeLog = () => path.join(app.getPath('userData'), 'engine.log');
 
 /** Answers with any HTTP status: something is serving the game page. */
@@ -200,9 +223,19 @@ async function createWindow() {
     icon: path.join(__dirname, 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: process.platform !== 'darwin',
     show: false,
-    webPreferences: { contextIsolation: true, sandbox: true, autoplayPolicy: 'no-user-gesture-required' },
+    webPreferences: { contextIsolation: true, sandbox: true, autoplayPolicy: 'no-user-gesture-required', preload: path.join(__dirname, 'preload.js') },
   });
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    win.show();
+    if (windowPrefs().fullscreen) win.setFullScreen(true);
+  });
+  // fullscreen however it was reached (Settings, the View menu, the green button): remembered, and told to the page
+  const fullscreenChanged = (on) => {
+    saveWindowPrefs({ fullscreen: on });
+    if (win && !win.isDestroyed()) win.webContents.send('fullscreen:changed', on);
+  };
+  win.on('enter-full-screen', () => fullscreenChanged(true));
+  win.on('leave-full-screen', () => fullscreenChanged(false));
   win.on('closed', () => {
     win = null;
   });

@@ -214,6 +214,9 @@ export interface ChoiceOption {
   /** distribute (combat): the defending player or planeswalker, reached by trample */
   defender?: boolean;
   ability?: number;
+  /** mana: what this choice adds, as symbols ("{G}", "{C}{C}"); oneOf: alternatives, one of which is made */
+  symbols?: string;
+  oneOf?: boolean;
   player?: number;
   entity?: number;
 }
@@ -221,7 +224,10 @@ export interface ChoiceOption {
 export interface RequestMsg {
   type: 'request';
   id: number;
-  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input' | 'distribute' | 'piles' | 'place' | 'modes' | 'number';
+  kind: 'choose' | 'reveal' | 'order' | 'confirm' | 'input' | 'distribute' | 'piles' | 'place' | 'modes' | 'number' | 'mana';
+  /** mana: a wheel of the mana one source can make, at that source (card); answered an option's index, or null
+   * when backed out of (only when cancellable) */
+  cancellable?: boolean;
   /** place: the named places cards go to, and the one they start in; answered { places: option indices per place
    * (in draw order where ordered), skip }. allowed: the options that may go there (all of them without it) */
   places?: { label: string; kind: string; min: number; max: number; ordered: boolean; allowed?: number[] }[];
@@ -400,6 +406,8 @@ export type Action =
   | { action: 'stack'; id: number }
   | { action: 'mana'; color: number }
   | { action: 'floating' }
+  /** add the mana of every untapped land and mana rock that taps for it alone (double Z) */
+  | { action: 'tapAll' }
   | { action: 'reorderHand'; id: number; index: number };
 
 /** what a lobby seat's deck looks like on the seat list */

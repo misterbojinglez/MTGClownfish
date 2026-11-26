@@ -51,9 +51,9 @@ Verdicts: **Same**; **Ours** (keep ours); **Adopt**; **Consider**; **Skip**.
 | Several ways to cast | Card picker, each card headed with its cost or form (S) | List labelled by how you'd pay | Same idea |
 | Modes | Full-size cards, one per mode, picked together; counts remaining (S) | One dialog per mode, each a copy of the same card with text below | **Adopt** |
 | X | Stepper (±1, ±5) at the card; button reads "X = n"; asks before 0 (N, S) | List of 0–9 and "Other", one click commits | **Adopt** |
-| Colour for mana | Wheel at the source; can tap a stack as a batch (N) | Dialog listing colours | Consider |
+| Colour for mana | Wheel at the source; can tap a stack as a batch (N) | Wheel at the source, for a dual's abilities and for "any colour" | Done |
 | Phyrexian mana | Picker (S) | Pay life button, plus asking when life is the only way left | Ours |
-| Undo | Undo button and Z (S); steps back through targets (N) | Undo button; Z presses Cancel instead | **Adopt** the key |
+| Undo | Undo button and Z (S); steps back through targets (N) | Undo button and Cmd/Ctrl+Z; double-tap Z taps all your mana, as in Arena | Done |
 | Can't play it | Says which card may not be played and why (S, N) | Says which cost can't be paid; otherwise silent for many cases | Consider |
 
 ### Targets and choices

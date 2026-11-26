@@ -29,9 +29,13 @@ export interface Settings {
   autoDamage: OnOff;
   /** ask before a choice that's probably a mistake */
   warnings: OnOff;
+  /** ask before paying the costs of an ability you activate yourself (a fetchland's life and sacrifice) */
+  confirmCosts: OnOff;
+  /** clicking a stack of creatures while declaring attackers asks how many of them attack */
+  attackCount: OnOff;
 }
 
-export const DEFAULT_SETTINGS: Settings = { frameRate: 'auto', particles: 'full', floorDetail: 'high', resolution: 'high', stackHold: '0', autoPassOwn: 'off', autoTriggers: 'off', autoReplacements: 'off', autoDamage: 'off', warnings: 'on' };
+export const DEFAULT_SETTINGS: Settings = { frameRate: 'auto', particles: 'full', floorDetail: 'high', resolution: 'high', stackHold: '0', autoPassOwn: 'off', autoTriggers: 'off', autoReplacements: 'off', autoDamage: 'off', warnings: 'on', confirmCosts: 'off', attackCount: 'on' };
 
 const STORE_KEY = 'mtgclownfish.settings';
 const CHOICES: { [K in keyof Settings]: readonly Settings[K][] } = {
@@ -45,6 +49,8 @@ const CHOICES: { [K in keyof Settings]: readonly Settings[K][] } = {
   autoReplacements: ['off', 'on'],
   autoDamage: ['off', 'on'],
   warnings: ['off', 'on'],
+  confirmCosts: ['off', 'on'],
+  attackCount: ['off', 'on'],
 };
 
 function load(): Settings {

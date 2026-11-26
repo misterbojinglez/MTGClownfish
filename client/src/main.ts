@@ -14,6 +14,8 @@ import { CameraDirector } from './game/camera';
 import { Hud } from './ui/hud';
 import { TableTalk } from './ui/talk';
 import { RadialMenu } from './ui/radial';
+import { manaWheel } from './ui/manaWheel';
+import { countPicker } from './ui/countPicker';
 import { sfx } from './audio';
 import { closeTour, maybeFirstGameTour } from './ui/tour';
 import { settings, onSettings } from './settings';
@@ -480,6 +482,13 @@ async function applyUpdate(msg: UpdateMsg): Promise<void> {
 }
 
 async function answer(req: RequestMsg): Promise<void> {
+  // which mana a source makes: the wheel at the source, not a dialog
+  if (req.kind === 'mana') {
+    const world = req.card != null ? table.cardWorld(req.card) : null;
+    const value = await manaWheel(req.options ?? [], { cancellable: !!req.cancellable, title: req.message ?? 'Choose the mana to add', near: world ? table.toScreen(world) : null });
+    bridge.respond(req.id, value);
+    return;
+  }
   if (req.kind !== 'reveal' || req.options?.length) sfx.chime();
   const value = await hud.request(req, table.state, table.localId);
   bridge.respond(req.id, value);
@@ -735,6 +744,7 @@ function sendOptions(): void {
     autoReplacements: on(settings.autoReplacements),
     autoDamage: on(settings.autoDamage),
     warnings: on(settings.warnings),
+    confirmCosts: on(settings.confirmCosts),
   });
 }
 onStops(sendOptions);
@@ -798,6 +808,7 @@ hud.bind({
   soloTable: () => (table.state?.players ?? []).filter((p) => !p.ai).length <= 1,
   resolveAll: () => startResolveAll(),
   useFloating: () => bridge.act({ action: 'floating' }),
+  tapAll: () => bridge.act({ action: 'tapAll' }),
 });
 
 const input = new Input(stage, table, {
@@ -864,6 +875,19 @@ const input = new Input(stage, table, {
       return;
     }
     if (table.isDeclaringAttack()) {
+      // a stack of identical creatures, several of which could attack: how many? (Arena's number row)
+      const mates = button === 1 && settings.attackCount === 'on' ? stackMates(id).filter((m) => declarable(m, true) === 'attack' && !table.state?.cards[m]?.attacking) : [];
+      if (mates.length >= 2 && mates.includes(id)) {
+        const name = table.state?.cards[id]?.name ?? 'creature';
+        countPicker(`How many ${/s$/i.test(name) ? name : `${name}s`} attack?`, mates.length, (n) => {
+          if (!table.isDeclaringAttack()) return;
+          for (const m of [id, ...mates.filter((x) => x !== id)].slice(0, n)) {
+            trackAttacker(m);
+            bridge.act({ action: 'card', id: m });
+          }
+        });
+        return;
+      }
       trackAttacker(id);
       bridge.act({ action: 'card', id, button });
       return;
@@ -1028,6 +1052,18 @@ function stackNotes(card: CardState): string[] {
     if (same.length > inStack) notes.push(`${same.length} ${card.name}${same.length > 1 && !/s$/.test(card.name ?? '') ? 's' : ''}, ${untapped} untapped`);
   }
   return notes;
+}
+
+/** The cards drawn in one battlefield stack with this one (itself included), when it's in a stack. */
+function stackMates(id: number): number[] {
+  const s = table.state;
+  const card = s?.cards[id];
+  if (!s || !card || card.zone !== 'Battlefield') return [];
+  const attached = (x: number) => Object.values(s.cards).filter((c) => c.attachedTo === x && c.zone === 'Battlefield').length;
+  const key = stackKey(card, attached(id));
+  if (key == null) return [];
+  const mine = s.players.find((p) => p.id === card.controller)?.zones.Battlefield ?? [];
+  return mine.filter((x) => s.cards[x] && stackKey(s.cards[x]!, attached(x)) === key);
 }
 
 function openPile(pid: number | null, zone: 'Graveyard' | 'Exile'): void {
