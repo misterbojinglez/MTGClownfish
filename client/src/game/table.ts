@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import gsap from 'gsap';
-import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, UpdateMsg, ZoneName } from '../protocol';
+import type { CardState, GameEvent, GameState, Prompt, Ref, Selection, StackItem, UpdateMsg, ZoneName } from '../protocol';
 import { CARD_H, CARD_W, CardObject, type Highlight } from '../scene/cardMesh';
 import { avatarAnchor, computeLayout, libraryAnchor, libraryHeight, nearestHandSlot, seatAt, seatFrames, seatRotation, seatsFor, tableMats, type Placement } from '../scene/layout';
 import { Arrows, colorFor, floatText, Fx, type LinkMark } from '../scene/fx';
@@ -144,6 +144,7 @@ export class Table {
 
   async apply(msg: UpdateMsg): Promise<void> {
     const prev = this.state;
+    this.stackBefore = prev?.stack ?? [];
     const snapshots = new Map<number, Snapshot>();
     for (const [id, obj] of this.cards) {
       obj.root.updateWorldMatrix(true, false);
@@ -283,8 +284,7 @@ export class Table {
     for (const item of prev.stack) {
       if (still.has(item.id) || item.source == null) continue;
       const colors = state.cards[item.source]?.colors ?? prev.cards[item.source]?.colors;
-      const snap = snaps.get(item.source);
-      const from = snap ? new THREE.Vector3().setFromMatrixPosition(snap.world) : this.cardWorld(item.source);
+      const from = this.effectOrigin(item.source, snaps.get(item.source));
       let aimed = false;
       for (const t of item.targets) {
         if (t?.card != null && !damaged.has(`c${t.card}`)) {
@@ -845,7 +845,7 @@ export class Table {
     }
     for (const group of bySource.values()) {
       if (group.length >= 3) jobs.push(this.sweep(group));
-      else for (const e of group) jobs.push(this.spellDamage(e));
+      else for (const e of group) jobs.push(this.spellDamage(e, snaps));
     }
     await Promise.all(jobs);
   }
@@ -1108,11 +1108,11 @@ export class Table {
     });
   }
 
-  private async spellDamage(e: GameEvent): Promise<void> {
+  private async spellDamage(e: GameEvent, snaps?: Map<number, Snapshot>): Promise<void> {
     const srcId = (e.source as Ref)?.card;
     const targetPlayer = (e.target as Ref)?.player;
     const targetCard = (e.card as Ref)?.card;
-    const from = srcId != null ? this.cardWorld(srcId) : null;
+    const from = srcId != null ? this.effectOrigin(srcId, snaps?.get(srcId)) : null;
     const to = targetPlayer != null ? this.playerArrowEnd(targetPlayer) : targetCard != null ? this.cardWorld(targetCard) : null;
     const amount = e.amount as number;
     if (from && to) sfx.zap(this.cards.get(srcId!)?.state.colors, this.panOf(from));
@@ -1162,6 +1162,30 @@ export class Table {
   }
 
   // ---- positions ----------------------------------------------------------------------------------
+
+  /** the Stack as it was before the update being applied: where a spell that has just resolved sat */
+  private stackBefore: StackItem[] = [];
+
+  /**
+   * Where a spell's or ability's effects start (its bolt to each target, its damage). A permanent or other card
+   * in sight: from the card. A spell on the Stack, or just off it: its own card is tucked away out of sight at
+   * the Stack's 3D spot, fixed to the camera low on the right (effects fired from there looked as if they came
+   * from under your hand), so from its card in the Stack panel, which still shows it while the update plays;
+   * with the panel closed, from its caster.
+   */
+  private effectOrigin(srcId: number, snap?: Snapshot): THREE.Vector3 | null {
+    const obj = this.cards.get(srcId);
+    const wasOnStack = snap?.zone === 'Stack' || obj?.state.zone === 'Stack' || this.tucked.has(srcId);
+    if (wasOnStack) {
+      const item = [...this.stackBefore, ...(this.state?.stack ?? [])].find((it) => it.source === srcId && !it.ability);
+      const fromPanel = item ? this.stackArrowEnd(item.id) : null;
+      if (fromPanel) return fromPanel;
+      const caster = item?.controller ?? obj?.state.controller ?? this.state?.cards[srcId]?.controller;
+      if (caster != null) return this.playerArrowEnd(caster);
+    }
+    if (snap) return new THREE.Vector3().setFromMatrixPosition(snap.world);
+    return this.cardWorld(srcId);
+  }
 
   cardWorld(id: number): THREE.Vector3 | null {
     const obj = this.cards.get(id);
