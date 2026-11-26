@@ -848,49 +848,97 @@ public final class Serializer {
         if (needed == 0) {
             return true;
         }
-        if (manaAvailable(player) < needed) {
+        final java.util.List<Byte> units = manaUnits(player);
+        if (units.size() < needed) {
             return false;
         }
-        final byte makes = coloursAvailable(player);
-        for (final byte need : colourNeeds) {
-            if ((need & makes) == 0) {
-                return false;
-            }
-        }
-        return true;
+        // each coloured symbol needs a mana of its own: {U}{U}{U} with two blue floating and nothing else blue
+        // can't be paid however much other mana there is
+        return everyColourMatched(colourNeeds, units);
     }
 
-    /** The colours this player could make right now: floating in the pool, or from a source they could tap. */
-    private static byte coloursAvailable(final forge.game.player.Player player) {
-        byte mask = 0;
-        for (final byte colour : forge.card.MagicColor.WUBRG) {
-            if (player.getManaPool().getAmountOfColor(colour) > 0) {
-                mask |= colour;
-            }
+    /**
+     * The mana this player could have right now, one entry per mana with the colours it could be: each floating
+     * mana, and for each untapped source its best mana ability that costs only {T} or nothing (counted as
+     * {@link #manaAvailable} does), each mana it makes able to be any colour the source's usable abilities make.
+     * A source we can't read counts as one mana of any colour.
+     */
+    private static java.util.List<Byte> manaUnits(final forge.game.player.Player player) {
+        final java.util.List<Byte> units = new java.util.ArrayList<>();
+        for (final forge.game.mana.Mana mana : player.getManaPool()) {
+            units.add((byte) (mana.getColor() & forge.card.MagicColor.ALL_COLORS));
         }
-        for (final forge.game.card.Card c : player.getCardsIn(ZoneType.Battlefield)) {
+        for (final forge.game.card.Card c : player.getCardsIn(ZoneType.Battlefield).threadSafeIterable()) {
+            int best = 0;
+            byte mask = 0;
             for (final forge.game.spellability.SpellAbility ma : c.getManaAbilities()) {
                 final forge.game.cost.Cost cost = ma.getPayCosts();
-                if (cost != null && cost.hasTapCost() && (c.isTapped() || (c.isCreature() && c.isSick()))) {
+                boolean ok = true;
+                boolean taps = false;
+                if (cost != null) {
+                    for (final forge.game.cost.CostPart part : cost.getCostParts()) {
+                        if (part instanceof forge.game.cost.CostTap) {
+                            taps = true;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                }
+                if (!ok || (taps && (c.isTapped() || (c.isCreature() && c.isSick())))) {
                     continue;
                 }
                 try {
+                    int made = 0;
                     for (forge.game.spellability.SpellAbility part = ma; part != null; part = part.getSubAbility()) {
                         if (part.getManaPart() == null) {
                             continue;
                         }
+                        final String produced = part.getParamOrDefault("Produced", "1").trim();
+                        final int symbols = produced.startsWith("Combo") || produced.startsWith("Any") ? 1 : Math.max(1, produced.split("\\s+").length);
+                        made += symbols * Math.max(1, parseAmount(part.getParamOrDefault("Amount", "1")));
                         for (final byte colour : forge.card.MagicColor.WUBRG) {
                             if (part.getManaPart().canProduce(forge.card.MagicColor.toShortString(colour), part)) {
                                 mask |= colour;
                             }
                         }
                     }
+                    best = Math.max(best, made);
                 } catch (final RuntimeException ignored) {
-                    // a source we can't read
+                    best = Math.max(best, 1);
+                    mask = forge.card.MagicColor.ALL_COLORS;
                 }
             }
+            for (int i = 0; i < best; i++) {
+                units.add(mask);
+            }
         }
-        return mask;
+        return units;
+    }
+
+    /** Whether each colour need (a mask: hybrid symbols have two) can be given a different mana that makes one of its colours. */
+    private static boolean everyColourMatched(final java.util.List<Byte> needs, final java.util.List<Byte> units) {
+        final int[] owner = new int[units.size()];
+        java.util.Arrays.fill(owner, -1);
+        for (int n = 0; n < needs.size(); n++) {
+            if (!augment(n, needs, units, owner, new boolean[units.size()])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean augment(final int n, final java.util.List<Byte> needs, final java.util.List<Byte> units, final int[] owner, final boolean[] seen) {
+        for (int u = 0; u < units.size(); u++) {
+            if (seen[u] || (needs.get(n) & units.get(u)) == 0) {
+                continue;
+            }
+            seen[u] = true;
+            if (owner[u] < 0 || augment(owner[u], needs, units, owner, seen)) {
+                owner[u] = n;
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Whether every mana ability of this card has a sacrifice in its cost (Lotus Petal, Treasure, Phyrexian Altar). */
