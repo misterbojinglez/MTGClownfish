@@ -912,6 +912,29 @@ export class Table {
       const src = srcId != null ? this.cards.get(srcId) : undefined;
       if (src && srcId != null && !struck.has(srcId) && !this.flying.has(srcId)) lunging.push(src);
     }
+    // what each blow costs in life: the engine's real loss (doubled by Bloodletter, say) shared out over the
+    // blows in proportion to their damage, so the plate and the number over the player agree with the total
+    const toPlayer = new Map<number, { damage: number; dealt: number; shown: number; held?: { value: number; base: number } }>();
+    for (const e of hits) {
+      const pid = (e.target as Ref)?.player;
+      if (pid == null) continue;
+      const t = toPlayer.get(pid) ?? { damage: 0, dealt: 0, shown: 0, held: this.lifeShown.get(pid) };
+      t.damage += e.amount as number;
+      toPlayer.set(pid, t);
+    }
+    const lostIn = new Map([...toPlayer].map(([pid, t]) => [pid, t.held && t.held.value > t.held.base ? t.held.value - t.held.base : null]));
+    const lifeLost = (pid: number, amount: number): number => {
+      const t = toPlayer.get(pid);
+      const lost = lostIn.get(pid);
+      // no held total (or no life lost, as with infect): the damage is all there is to show
+      if (!t || lost == null || t.damage <= 0) return amount;
+      t.dealt += amount;
+      const upTo = Math.round((lost * t.dealt) / t.damage);
+      const share = upTo - t.shown;
+      t.shown = upTo;
+      return share;
+    };
+
     // wind-up: everyone about to strike rears back together
     await Promise.all(lunging.map((o) => this.windUp(o, ts)));
 
@@ -939,10 +962,11 @@ export class Table {
         this.hitStop(0.1 + heavy * 0.12);
         if (amount >= 4) this.stage.punch(heavy);
         if (targetPlayer != null) {
-          this.showLifeLoss(targetPlayer, amount);
-          this.floatAtPlayer(targetPlayer, `−${amount}`, 'damage', true);
-          this.stage.addShake(Math.min(1.1, 0.25 + amount * 0.08));
-          this.playerHit(targetPlayer, amount, targetPos);
+          const lost = lifeLost(targetPlayer, amount);
+          this.showLifeLoss(targetPlayer, lost);
+          if (lost > 0) this.floatAtPlayer(targetPlayer, `−${lost}`, 'damage', true);
+          this.stage.addShake(Math.min(1.1, 0.25 + lost * 0.08));
+          this.playerHit(targetPlayer, lost, targetPos);
         } else if (targetCard != null) {
           this.floatAtCard(targetCard, `−${amount}`, true);
           const t = this.cards.get(targetCard);
@@ -964,6 +988,11 @@ export class Table {
       }
     }
     await Promise.all(strikes);
+    // every blow has landed: the plates show the engine's own totals again (unless a later combat
+    // damage step is already holding one back)
+    for (const [pid, t] of toPlayer) {
+      if (t.held && this.lifeShown.get(pid) === t.held) this.lifeShown.delete(pid);
+    }
     // let the damage sink in before anything dies
     await this.wait(0.55 / ts);
   }
